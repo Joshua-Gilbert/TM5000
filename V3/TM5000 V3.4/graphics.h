@@ -1,6 +1,6 @@
 /*
  * TM5000 GPIB Control System - Graphics and Display
- * Version 3.3
+ * Version 3.4
  * Header file for graphics and display functions
  */
 
