@@ -1,6 +1,6 @@
 /*
  * TM5000 GPIB Control System - Module Functions Header
- * Version 3.0
+ * Version 3.4
  */
 
 #ifndef MODULE_FUNCS_H
