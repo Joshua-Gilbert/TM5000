@@ -62,8 +62,8 @@ Building on the enhanced stability of v3.3, version 3.4 implements the planned 1
 
 ## 🚀 Installation
 
-1. Copy all files to your Gridcase 1520
-2. Ensure GPIB drivers are installed and configured
+1. Copy binary to DOS directory
+2. Ensure GPIB drivers are installed and configured (Currently supports Personal488)
 3. Run `TM5000.EXE` from DOS prompt
 
 ## 📁 Files Included
