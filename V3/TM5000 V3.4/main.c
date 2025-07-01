@@ -5,9 +5,6 @@
  *
  * Main program entry point and system initialization
  *
- * Version 3.3 - Development version (future changes)
- * Version 3.0 - Production release with all fixes below
- *
  * Recent Fixes and Improvements:
  * - Fixed graph display crashes with comprehensive divide-by-zero protection
  * - Implemented range-based unit switching (V/MV/UV) for proper zoom behavior
