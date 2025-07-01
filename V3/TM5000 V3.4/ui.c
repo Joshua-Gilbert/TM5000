@@ -1,6 +1,6 @@
 /*
  * TM5000 GPIB Control System - User Interface Module
- * Version 3.3
+ * Version 3.4
  * Complete implementation extracted from TM5000L.c
  * 
  * Version History:
