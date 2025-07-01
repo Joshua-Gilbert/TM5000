@@ -45,11 +45,6 @@
 - `TM5000_SERIES_README.md` - Series 3.0 overview
 - `README.md` - Current project status
 
-#### **Legacy Support**
-- `TM5000L.c` - Original monolithic code (reference only)
-- `graph_display_legacy.c` - Legacy graphics functions
-- `ieeeio_w.c` - Low-level GPIB driver interface
-
 ### 🔧 **Key Technical Improvements**
 
 #### **Buffer Management**
