@@ -1,6 +1,6 @@
 /*
  * TM5000 GPIB Control System - Mathematical Functions Header
- * Version 3.3
+ * Version 3.4
  */
 
 #ifndef MATH_FUNCTIONS_H
