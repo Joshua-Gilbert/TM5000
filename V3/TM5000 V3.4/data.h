@@ -1,6 +1,6 @@
 /*
  * TM5000 GPIB Control System - Data Management
- * Version 3.3
+ * Version 3.4
  * Header file for data management functions
  */
 
