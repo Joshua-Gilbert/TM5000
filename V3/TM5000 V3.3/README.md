@@ -49,7 +49,7 @@ Building on the enhanced stability of v3.2, version 3.3 resolves critical file I
 - **Memory**: 640KB RAM minimum
 - **Graphics**: CGA graphics adapter
 - **GPIB**: National Instruments GPIB card with DOS drivers
-- **DOS**: MS-DOS 5.0 or higher recommended
+- **DOS**: MS-DOS 3.3 or higher recommended
 - **Compiler**: OpenWatcom C/C++ 1.9 (for rebuilding)
 
 ## 🚀 Installation
