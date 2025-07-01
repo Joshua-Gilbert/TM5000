@@ -1,6 +1,6 @@
 /*
  * TM5000 GPIB Control System - Printing and Export
- * Version 3.3
+ * Version 3.4
  * Header file for printing and export functions
  */
 
