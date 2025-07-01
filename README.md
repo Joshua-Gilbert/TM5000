@@ -16,7 +16,7 @@ The TM5000 GPIB Control System Series 3.0 is a comprehensive instrument control 
 - **PS5010**: Dual-channel power supply with logic supply (0-40V, 0.5A)
 - **DC5009**: Universal counter/timer with advanced triggering
 - **DC5010**: Enhanced counter with rise/fall time measurement
-- **FG5010**: Function generator with arbitrary waveforms
+- **FG5010**: Function generator
 
 #### **Data Acquisition Features**
 - **Multi-Module Support**: Up to 10 instrument slots simultaneously
