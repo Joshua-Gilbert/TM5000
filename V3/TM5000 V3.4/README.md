@@ -72,13 +72,13 @@ Building on the enhanced stability of v3.3, version 3.4 implements the planned 1
 - `*.C` - Source code files
 - `*.H` - Header files  
 - `MAKEFILE` - Build configuration
-- `README_v3.3.md` - This file
-- `CHANGELOG_v3.3.md` - Detailed changes
+- `README.md` - This file
+- `CHANGELOG_v3.4.md` - Detailed changes
 
 ## 📖 Documentation
 
-- [CHANGELOG_v3.3.md](CHANGELOG_v3.3.md) - Complete version history
-- [TM5000_v3.3_Structure.md](TM5000_v3.3_Structure.md) - Architecture guide
+- [CHANGELOG_v3.4.md] - Complete version history
+- [TM5000_v3.4_Structure.md] - Architecture guide
 
 ## 🔄 Version History
 
