@@ -97,7 +97,7 @@ TM5000 Architecture
 - **Memory**: 640KB conventional RAM (1MB recommended)
 - **Graphics**: CGA-compatible graphics adapter
 - **Storage**: 770KB (fits on single high-density floppy disk)
-- **Operating System**: MS-DOS 5.0 or higher (DOS 6.22 recommended)
+- **Operating System**: MS-DOS 3.3 or higher
 - **GPIB Interface**: National Instruments GPIB card with DOS drivers
 
 #### **Recommended Configuration**
