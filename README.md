@@ -127,9 +127,9 @@ TM5000 Architecture
 ### 💾 **Installation and Usage**
 
 #### **Quick Start**
-1. **Prepare DOS System**: Ensure DOS 5.0+ with GPIB drivers installed
+1. **Prepare DOS System**: Ensure DOS 3.3+ with GPIB drivers installed
 2. **Copy Files**: Copy all TM5000 files to floppy disk or hard drive
-3. **Verify GPIB**: Test GPIB interface with `DRVR488.EXE` loaded
+3. **Verify GPIB**: Test GPIB interface with `DRVR488.EXE` loaded. (National Instruments Driver)
 4. **Launch Program**: Execute `TM5000.EXE` from DOS prompt
 5. **Configure Modules**: Use main menu to detect and configure instruments
 
