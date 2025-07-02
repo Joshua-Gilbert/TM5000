@@ -12,7 +12,7 @@ The TM5000 GPIB Control System Series 3.0 is a comprehensive instrument control 
 #### **Instrument Support**
 - **DM5010**: 4½ digit multimeter with high-speed acquisition
 - **DM5120**: 6½ digit precision multimeter with advanced math functions
-- **PS5004**: Single-channel precision power supply (0-20V, 305mA)
+- **PS5004**: Single-channel precision power supply (0-20V, 300mA)
 - **PS5010**: Dual-channel power supply with logic supply (0-40V, 0.5A)
 - **DC5009**: Universal counter/timer with advanced triggering
 - **DC5010**: Enhanced counter with rise/fall time measurement
