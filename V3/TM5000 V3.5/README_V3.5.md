@@ -16,6 +16,7 @@
 3. **DM5120 Non-Blocking Buffer Operations** - Async buffer fills without blocking other modules
 4. **Enhanced Math Trace Legends** - Descriptive legends for all math function types
 5. **Enhanced Math Trace Types** - New multi trace math!
+6. **Speed Enhancements** - New direct memory access CGA asm for higher draw rates
 
 ### Critical Fixes
 1. **FFT 287 Coprocessor Hangs** - Eliminated by switching to pure C implementation with 287-optimized math functions
