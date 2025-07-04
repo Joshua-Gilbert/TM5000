@@ -29,7 +29,7 @@ The TM5000 GPIB Control System Series 3.0 is a comprehensive instrument control 
 - **FFT Analysis**: Power-of-2 optimized Fast Fourier Transform (64-1024 points)
 - **Window Functions**: Rectangular, Hamming, Hanning, Blackman
 - **Statistical Functions**: Min, Max, Mean, Standard Deviation, RMS
-- **Waveform Math**: Differentiation, integration, scaling, offset
+- **Waveform Math**: Differentiation, integration, scaling, offset, digital filtering, dual trace operations, linear regression, and more!
 - **Peak Detection**: Automatic peak finding with centering options
 - **287 Math Coprocessor**: Optimized calculations when available
 
@@ -62,16 +62,33 @@ The Series 3.0 represents a complete architectural rewrite from the original mon
 
 ```
 TM5000 Architecture
-├── main.c          # System initialization and entry point
-├── gpib.c          # GPIB/IEEE-488 communication layer
-├── modules.c       # Instrument-specific protocol handlers
-├── graphics.c      # CGA display and rendering engine
-├── ui.c            # User interface and menu system
-├── data.c          # File I/O and data management
-├── print.c         # PostScript and printer output
-├── math_functions.c # FFT and mathematical operations
-├── module_funcs.c  # Advanced instrument functions
-└── ieeeio_w.c      # Low-level GPIB driver interface
+### Core System Files
+- `main.c` - Main program entry point
+- `tm5000.h` - Primary header with all structure definitions
+- `tm5000.exe` - Compiled executable (282KB)
+- `makefile` - OpenWatcom build configuration
+### Module Files
+- `modules.c/.h` - GPIB instrument module management
+- `module_funcs.c/.h` - Per-module function implementations
+- `gpib.c/.h` - GPIB communication layer
+- `data.c/.h` - Data buffer management
+### User Interface
+- `ui.c/.h` - Primary user interface
+- `ui_enhanced.c` - Enhanced v3.5 menus (stub)
+- `ui_math_menus.c` - Mathematical analysis menus
+- `graphics.c/.h` - CGA graphics and plotting
+- `print.c/.h` - Report generation and printing
+### Mathematical Functions
+- `math_functions.c/.h` - Core FFT and mathematical analysis
+- `math_enhanced.c` - Advanced math functions
+### New v3.5 Features
+- `config_profiles.c/.h` - Configuration save/load system
+- `export_enhanced.c` - Advanced CSV export with metadata
+### Assembly Optimizations
+- `cga_asm.asm` - CGA graphics acceleration
+- `mem286.asm` - 286 memory operations
+- `fixed286.asm` - Fixed-point arithmetic
+- `trig287_simple.asm` - Basic 287 trigonometry
 ```
 
 #### **Memory Management**
