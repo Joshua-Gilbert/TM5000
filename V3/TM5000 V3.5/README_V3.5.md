@@ -13,9 +13,9 @@
 ### Major New Features
 1. **Configuration Profiles System** - Save/load complete system configurations
 2. **Enhanced Data Export** - CSV with metadata, timestamps, custom formatting  
-3. **Enhanced FG5010 Function Generator Programs** - Advanced pulse programming with 5 configuration methods
-4. **DM5120 Non-Blocking Buffer Operations** - Async buffer fills without blocking other modules
-5. **Enhanced Math Trace Legends** - Descriptive legends for all math function types
+3. **DM5120 Non-Blocking Buffer Operations** - Async buffer fills without blocking other modules
+4. **Enhanced Math Trace Legends** - Descriptive legends for all math function types
+5. **Enhanced Math Trace Types** - New multi trace math!
 
 ### Critical Fixes
 1. **FFT 287 Coprocessor Hangs** - Eliminated by switching to pure C implementation with 287-optimized math functions
@@ -55,13 +55,10 @@
 - `fg5010_programs.c/.h` - Enhanced FG5010 pulse programming
 
 ### Assembly Optimizations
-- `cga_asm.asm` - CGA graphics acceleration (WORKING)
-- `mem286.asm` - 286 memory operations (WORKING)
-- `fixed286.asm` - Fixed-point arithmetic (WORKING)
-- `trig287_simple.asm` - Basic 287 trigonometry (WORKING)
-- `fft_286.asm` - Original FFT assembly (DISABLED - caused hangs)
-- `fft_286_simple.asm` - Simplified FFT assembly (DISABLED - still caused hangs)
-- `trig287.asm` - Complex 287 operations (DISABLED)
+- `cga_asm.asm` - CGA graphics acceleration 
+- `mem286.asm` - 286 memory operations 
+- `fixed286.asm` - Fixed-point arithmetic 
+- `trig287_simple.asm` - Basic 287 trigonometry
 
 ## Build Instructions
 
@@ -92,9 +89,10 @@ make
 - ✅ Math traces lacked descriptive legends (enhanced legend system)
 
 ### Current Limitations
-- File Browser: Stub implementation only
-- Advanced Math: Basic menu structure, functions not fully implemented
 - FFT 5Hz Issue: Minor display issue at low frequencies (under investigation)
+- Import measurement corruption
+- Ghost modules count in continous monitoring
+- DM5120 Buffer timeout issues
 
 ## Architecture Notes
 
@@ -145,10 +143,8 @@ make
 
 ---
 
-**Development Note**: Version 3.5 represents the definitive data management foundation for the TM5000 system. All core functionality is stable and tested. The pure C FFT implementation eliminates previous 287 coprocessor compatibility issues while maintaining performance through standard library optimizations.
-
+**Development Note**: Version 3.5 represents the definitive data management foundation for the TM5000 system. Most core functionality is stable and tested.
 **Archive Date**: July 2025
-**Status**: DEFINITIVE RELEASE - All known issues resolved
 
 ## Archive Notes
 
