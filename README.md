@@ -1,7 +1,7 @@
 # TM5000 GPIB Control System Series 3.0 
 ## Professional Instrument Control for DOS Systems
 
-![TM5000](https://img.shields.io/badge/Version-3.4-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
+![TM5000](https://img.shields.io/badge/Version-3.5-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
 
 ### 🎯 **Overview**
 
