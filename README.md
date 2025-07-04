@@ -106,6 +106,7 @@ TM5000 Architecture
 | **v3.2** | June 2025 | Enhanced stability, configuration persistence |
 | **v3.3** | June 2025 | File I/O reliability, symbol conflict resolution |
 | **v3.4** | July 2025 | 1024-sample buffers, memory optimization |
+| **v3.5** | July 2025 | Data Export and System State Configuration - Module Protocol Changes, Advanced Math Functions  |
 
 ### 🔨 **System Requirements**
 
