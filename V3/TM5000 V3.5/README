@@ -94,6 +94,7 @@ make
 - Import measurement corruption
 - Ghost modules count in continous monitoring
 - DM5120 Buffer timeout issues
+- Enhanced Stats needs unit detection
 
 ## Architecture Notes
 
