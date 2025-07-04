@@ -170,7 +170,7 @@ Main Menu → Configure Modules → [Select Instrument Type] → [Set Parameters
 TM5000 Documentation
 ├── README.md                    # Current overview document
 ├── TM5000_v3.4_Structure.md     # v3.4 architecture details
-├── CHANGELOG_v3.3.md            # Version history
+├── CHANGELOG_v3.5.md            # Version history
 ├── Installation_Guide.md        # Setup instructions
 └── User_Manual.md               # Complete operation guide
 ```
