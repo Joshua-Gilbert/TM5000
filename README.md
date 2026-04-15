@@ -2,6 +2,9 @@
 ## Professional Instrument Control for DOS Systems
 
 ![TM5000](https://img.shields.io/badge/Version-3.5-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
+<img src="IMG_0598.JPEG" width="1200" alt="Gridcase 1520 with Tektronix TM5006A GPIB measurement system — FFT analysis of precision voltage reference">
+
+**Figure:** Gridcase 1520 running Tektronix TM5006A modular measurement system via GPIB control — FFT spectral analysis of a precision voltage reference standard, displaying sub-ppm noise performance
 
 ### 🎯 **Overview**
 
