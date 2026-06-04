@@ -304,8 +304,8 @@ void curve_fitting_menu(void) {
         printf("Available fitting methods:\n");
         printf("--------------------------\n");
         printf("1. Linear Regression (y = a + bx)\n");
-        printf("2. Polynomial Fitting (coming in v3.6)\n");
-        printf("3. Exponential Fitting (coming in v3.6)\n");
+        printf("2. Polynomial Fitting (order 2-3)\n");
+        printf("3. Exponential Fitting (y = a*e^bx)\n");
         printf("0. Return to Math Menu\n\n");
         
         printf("Choice: ");
@@ -313,36 +313,54 @@ void curve_fitting_menu(void) {
         
         switch (choice) {
             case '1':
-                printf("\n\nLinear Regression\n");
+            case '2':
+            case '3': {
+                int method = choice - '0';   /* 1=linear, 2=polynomial, 3=exponential */
+                int order = 2;
+                printf("\n\n%s\n",
+                       (method == 1) ? "Linear Regression (y = a + bx)" :
+                       (method == 2) ? "Polynomial Fitting" : "Exponential Fitting (y = a*e^bx)");
                 printf("Enter trace slot for Y data (0-9): ");
                 scanf("%d", &trace_slot);
-                
-                if (trace_slot >= 0 && trace_slot < 10 && 
+                if (method == 2) {
+                    printf("Polynomial order (2-3): ");
+                    scanf("%d", &order);
+                    if (order < 2) order = 2;
+                    if (order > 3) order = 3;
+                }
+
+                if (trace_slot >= 0 && trace_slot < 10 &&
                     g_system->modules[trace_slot].enabled &&
                     g_system->modules[trace_slot].module_data &&
                     g_system->modules[trace_slot].module_data_count > 1) {
-                    
+
                     y_data = g_system->modules[trace_slot].module_data;
                     count = g_system->modules[trace_slot].module_data_count;
-                    
+
                     /* Generate X data as sample indices */
                     x_data = (float *)malloc(count * sizeof(float));
                     if (x_data) {
                         for (i = 0; i < count; i++) {
                             x_data[i] = (float)i;
                         }
-                        
-                        fit_result = fit_linear_regression(x_data, y_data, count, &result);
-                        
+
+                        if (method == 1) {
+                            fit_result = fit_linear_regression(x_data, y_data, count, &result);
+                        } else if (method == 2) {
+                            fit_result = fit_polynomial(x_data, y_data, count, order, &result);
+                        } else {
+                            fit_result = fit_exponential(x_data, y_data, count, &result);
+                        }
+
                         printf("\n");
                         if (fit_result == MATH_SUCCESS) {
-                            printf("Linear Regression Results:\n");
-                            printf("--------------------------\n");
+                            printf("Curve Fit Results:\n");
+                            printf("------------------\n");
                             printf("Equation: %s\n", get_equation_text(result.equation_index));
-                            printf("Correlation (R²): %.4f\n", result.correlation);
+                            printf("Correlation (R^2): %.4f\n", result.correlation);
                             printf("RMS Error: %.6f\n", result.rms_error);
                             printf("Points used: %d\n", result.points_used);
-                            
+
                             if (result.correlation > 0.9) {
                                 printf("Fit quality: Excellent\n");
                             } else if (result.correlation > 0.8) {
@@ -353,9 +371,14 @@ void curve_fitting_menu(void) {
                                 printf("Fit quality: Poor\n");
                             }
                         } else {
-                            printf("Error: Curve fitting failed\n");
+                            printf("Error: curve fitting failed\n");
+                            if (method == 3) {
+                                printf("(exponential fit needs all-positive Y values)\n");
+                            } else {
+                                printf("(need at least order+1 data points)\n");
+                            }
                         }
-                        
+
                         free(x_data);
                     } else {
                         printf("\nError: Insufficient memory\n");
@@ -363,19 +386,11 @@ void curve_fitting_menu(void) {
                 } else {
                     printf("\nError: Invalid trace or insufficient data\n");
                 }
-                
+
                 printf("\nPress any key to continue...");
                 getch();
                 break;
-                
-            case '2':
-            case '3':
-                printf("\n\nThis feature will be available in TM5000 v3.6\n");
-                printf("Advanced curve fitting requires additional memory\n");
-                printf("and will be included in the next release.\n");
-                printf("\nPress any key to continue...");
-                getch();
-                break;
+            }
                 
             case '0':
             case 27:  /* ESC */
@@ -400,8 +415,8 @@ void correlation_analysis_menu(void) {
         printf("Available analysis:\n");
         printf("-------------------\n");
         printf("1. Pearson Correlation Coefficient\n");
-        printf("2. Cross-correlation (coming in v3.6)\n");
-        printf("3. Phase Shift Analysis (coming in v3.6)\n");
+        printf("2. Cross-correlation (best alignment lag)\n");
+        printf("3. Phase Shift / Delay Analysis\n");
         printf("0. Return to Math Menu\n\n");
         
         printf("Choice: ");
@@ -453,14 +468,90 @@ void correlation_analysis_menu(void) {
                 getch();
                 break;
                 
-            case '2':
-            case '3':
-                printf("\n\nThis feature will be available in TM5000 v3.6\n");
-                printf("Advanced correlation analysis requires additional\n");
-                printf("memory and processing capabilities.\n");
+            case '2': {  /* Cross-correlation */
+                int count1, count2, count, lag, best_lag = 0;
+                float *d1, *d2, *corr, best = -2.0;
+                printf("\n\nCross-Correlation\n");
+                printf("Enter first trace slot (0-9): ");
+                scanf("%d", &trace1);
+                printf("Enter second trace slot (0-9): ");
+                scanf("%d", &trace2);
+
+                if (trace1 >= 0 && trace1 < 10 && trace2 >= 0 && trace2 < 10 &&
+                    g_system->modules[trace1].enabled && g_system->modules[trace2].enabled &&
+                    g_system->modules[trace1].module_data && g_system->modules[trace2].module_data) {
+
+                    d1 = g_system->modules[trace1].module_data;
+                    d2 = g_system->modules[trace2].module_data;
+                    count1 = g_system->modules[trace1].module_data_count;
+                    count2 = g_system->modules[trace2].module_data_count;
+                    count = (count1 < count2) ? count1 : count2;
+                    corr = (float *)malloc(count * sizeof(float));
+
+                    if (count >= 2 && corr) {
+                        if (calculate_cross_correlation(d1, d2, count, corr) == MATH_SUCCESS) {
+                            for (lag = 0; lag < count; lag++) {
+                                if (corr[lag] > best) { best = corr[lag]; best_lag = lag; }
+                            }
+                            printf("\nCross-Correlation Results:\n");
+                            printf("--------------------------\n");
+                            printf("Zero-lag correlation: %.4f\n", corr[0]);
+                            printf("Peak correlation:     %.4f\n", best);
+                            printf("Best alignment lag:   %d samples\n", best_lag);
+                            if (best_lag == 0) {
+                                printf("(traces are best aligned with no shift)\n");
+                            } else {
+                                printf("(trace %d leads trace %d by %d samples)\n", trace1, trace2, best_lag);
+                            }
+                        } else {
+                            printf("\nError: cross-correlation failed\n");
+                        }
+                    } else {
+                        printf("\nError: insufficient data or memory\n");
+                    }
+                    if (corr) free(corr);
+                } else {
+                    printf("\nError: Invalid trace slots\n");
+                }
+
                 printf("\nPress any key to continue...");
                 getch();
                 break;
+            }
+
+            case '3': {  /* Phase shift / delay */
+                float sample_rate;
+                int lag;
+                printf("\n\nPhase Shift / Delay Analysis\n");
+                printf("Enter first (reference) trace slot (0-9): ");
+                scanf("%d", &trace1);
+                printf("Enter second trace slot (0-9): ");
+                scanf("%d", &trace2);
+
+                sample_rate = (g_control_panel.sample_rate_ms > 0)
+                              ? (1000.0 / g_control_panel.sample_rate_ms) : 1.0;
+                lag = calculate_phase_shift(trace1, trace2, sample_rate);
+
+                printf("\n");
+                if (lag >= 0) {
+                    printf("Phase / Delay Results:\n");
+                    printf("----------------------\n");
+                    printf("Best alignment lag: %d samples\n", lag);
+                    printf("Sample rate:        %.2f Hz\n", sample_rate);
+                    printf("Time delay:         %.4f s\n", (sample_rate > 0.0) ? (lag / sample_rate) : 0.0);
+                    if (lag == 0) {
+                        printf("(no detectable delay between the traces)\n");
+                    } else {
+                        printf("(trace %d is delayed relative to trace %d)\n", trace2, trace1);
+                    }
+                } else {
+                    printf("Error: phase analysis failed (invalid traces or <2 samples)\n");
+                }
+
+                printf("\nPress any key to continue...");
+                getch();
+                break;
+            }
                 
             case '0':
             case 27:  /* ESC */

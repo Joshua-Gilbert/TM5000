@@ -8,9 +8,10 @@ v3.6 implements fixes for every issue catalogued in
 during the repo modernization. Each fix is tagged in the source with the matching
 `FINDINGS #n`. No new features; this is a correctness release.
 
-**Build:** compiles cleanly (0 errors, no new warnings) with OpenWatcom (verified
-with the OpenWatcom v2 successor toolchain; the canonical 1.9 flags in `src/makefile`
-are unchanged). `tm5000.exe` ≈ 283 KB.
+**Build:** compiles cleanly (0 errors, no new warnings) with OpenWatcom (verified with
+the OpenWatcom v2 successor toolchain). The makefile now enables linker dead-code
+elimination (`-zm` + `OPTION ELIMINATE`), so `tm5000.exe` is **≈ 269 KB (274,924 bytes)**
+— smaller than v3.5/v3.6-baseline (~283 KB) despite the added features.
 
 ---
 
@@ -80,8 +81,11 @@ partial line. `data.c`
 ---
 
 ### Notes
-- The four assembly modules remain dormant (assembled/linked but not called from C);
-  unchanged in v3.6. See [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and FINDINGS.
-- Additional code-reuse / dead-code / header-hygiene findings from the v3.6 review
-  pass are **not** included here (they are quality cleanups, not regressions) and are
-  tracked separately for a future cleanup release.
+- The four assembly modules remain dormant (not called from C); they are now **stripped
+  from the image** by `OPTION ELIMINATE` rather than linked dead-weight. See
+  [docs/ARCHITECTURE.md](../ARCHITECTURE.md) and FINDINGS.
+- The code-reuse / dead-code cleanup from the review pass and the enhanced-math wiring
+  (curve fit, cross-correlation, phase shift) are folded into this release; see the
+  "Added" and "Code cleanup" sections in the consolidated [CHANGELOG](../../CHANGELOG.md).
+  Header-hygiene items (god-header de-declaration, `MAX_MODULES`, `static`-ization)
+  remain for a future pass.

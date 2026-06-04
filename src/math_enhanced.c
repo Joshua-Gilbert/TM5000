@@ -844,8 +844,89 @@ int calculate_correlation(int trace1, int trace2, correlation_result *result) {
     
     /* Calculate covariance */
     result->covariance = num / (count - 1);
-    
+
     return MATH_SUCCESS;
+}
+
+/* Cross-correlation of data1 vs data2 over positive lags 0..count-1.
+   correlation[] (caller-allocated, count floats) receives the normalized value
+   r[lag] in roughly [-1,1]; r[0] equals the Pearson coefficient. O(count^2). (v3.6) */
+int calculate_cross_correlation(float *data1, float *data2, int count, float *correlation) {
+    int i, lag;
+    float mean1 = 0.0, mean2 = 0.0, var1 = 0.0, var2 = 0.0, norm, sum;
+
+    if (!data1 || !data2 || !correlation || count < 2) {
+        return MATH_ERROR_INVALID_PARAMS;
+    }
+
+    for (i = 0; i < count; i++) { mean1 += data1[i]; mean2 += data2[i]; }
+    mean1 /= count;
+    mean2 /= count;
+
+    for (i = 0; i < count; i++) {
+        var1 += (data1[i] - mean1) * (data1[i] - mean1);
+        var2 += (data2[i] - mean2) * (data2[i] - mean2);
+    }
+    norm = sqrt(var1 * var2);
+
+    if (norm < 1e-10) {                 /* a constant signal: correlation undefined */
+        for (lag = 0; lag < count; lag++) correlation[lag] = 0.0;
+        return MATH_SUCCESS;
+    }
+
+    for (lag = 0; lag < count; lag++) {
+        sum = 0.0;
+        for (i = 0; i + lag < count; i++) {
+            sum += (data1[i] - mean1) * (data2[i + lag] - mean2);
+        }
+        correlation[lag] = sum / norm;
+    }
+    return MATH_SUCCESS;
+}
+
+/* Phase/delay analysis: returns the lag (in samples, >= 0) at which trace2 best
+   aligns with trace1 (peak cross-correlation), or -1 on error. The caller converts
+   the lag to a time/phase using sample_rate. (v3.6) */
+int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
+    float *data1, *data2, *corr;
+    int count, count1, count2, lag, best_lag = 0;
+    float best = -2.0;
+
+    (void)sample_rate;  /* lag is returned in samples; caller scales by sample_rate */
+
+    if (validate_trace_data(trace1) != MATH_SUCCESS ||
+        validate_trace_data(trace2) != MATH_SUCCESS) {
+        return -1;
+    }
+
+    data1 = g_system->modules[trace1].module_data;
+    data2 = g_system->modules[trace2].module_data;
+    count1 = g_system->modules[trace1].module_data_count;
+    count2 = g_system->modules[trace2].module_data_count;
+    count = (count1 < count2) ? count1 : count2;
+    if (count < 2) {
+        return -1;
+    }
+
+    corr = (float *)malloc(count * sizeof(float));
+    if (!corr) {
+        return -1;
+    }
+
+    if (calculate_cross_correlation(data1, data2, count, corr) != MATH_SUCCESS) {
+        free(corr);
+        return -1;
+    }
+
+    for (lag = 0; lag < count; lag++) {
+        if (corr[lag] > best) {
+            best = corr[lag];
+            best_lag = lag;
+        }
+    }
+
+    free(corr);
+    return best_lag;
 }
 
 /* Validate trace data */

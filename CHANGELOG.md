@@ -39,6 +39,15 @@ clean (0 errors, no new warnings); verified with the OpenWatcom v2 toolchain.
 - **`.tm5` import** resynchronises to the `ModuleData:` marker, tolerating a global
   sample-count mismatch. *FINDINGS #5*
 
+### Added (enhanced math wired up)
+- **Polynomial & exponential curve fitting** — the `curve_fitting_menu` options that
+  previously read "coming in v3.6" now call the implemented `fit_polynomial`
+  (order 2–3) and `fit_exponential` routines.
+- **Cross-correlation & phase/delay analysis** — implemented the previously
+  declared-only `calculate_cross_correlation` and `calculate_phase_shift` and wired them
+  into `correlation_analysis_menu` (peak-alignment lag, zero-lag correlation, and a
+  sample-rate-scaled time delay).
+
 ### Repository / tooling (same date)
 - Restructured to a standard layout: source under [`src/`](src), history under
   [`archive/`](archive), docs under [`docs/`](docs); promoted v3.5 to `src/` and froze
@@ -62,9 +71,16 @@ behavior-preservation review. No runtime behavior change.
   `set_mouse_pos`), unreachable stub menus (`data_analysis_menu`, `unit_conversion_menu`,
   `calculator_menu`), and superseded/demo readers (`read_dm5120`, `read_ps5010`,
   `dm5120_buffer_example`).
-- **Binary: 283,388 → 280,348 bytes (−3,040, −1.1%)** (OpenWatcom v2). The OpenWatcom
-  linker does not fold/dead-strip, so the savings come from removing whole dead
-  functions; consolidating small duplicate functions is binary-neutral.
+- **Enabled linker dead-code elimination** — `wcc -zm` (one segment per function) +
+  `wlink OPTION ELIMINATE` now strip every unreferenced function and the dormant
+  assembly modules from the image. (OpenWatcom `wlink` has no identical-code *folding*
+  à la MSVC `/OPT:ICF`, so the DC5009/DC5010 twins still had to be forwarded by hand —
+  but it *can* eliminate unreferenced code.) `src/makefile` and the build are updated.
+- **Binary size (OpenWatcom v2):** 283,388 (v3.6) → 280,348 (reuse refactor + manual
+  dead-code removal) → **274,924 final** — **−8,464 bytes (−3.0%) smaller than v3.6
+  even after adding the curve-fit / cross-correlation / phase-shift features**, thanks
+  to the dead-strip build options. Lesson: consolidating *small* duplicate functions is
+  binary-neutral; eliminating/removing whole unused functions is the real lever.
 
 ---
 

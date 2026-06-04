@@ -11,8 +11,12 @@ WATCOM_BIN = /mnt/c/WATCOM/BINNT
 CC = $(WATCOM_BIN)/wcc.exe
 ASM = $(WATCOM_BIN)/wasm.exe
 LINKER = $(WATCOM_BIN)/wlink.exe
-CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100
-ASMFLAGS = -ml -2
+# -zm places each function in its own segment so the linker (OPTION ELIMINATE,
+# below) can discard unreferenced functions -> smaller binary, no source changes.
+CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100 -zm
+# The .asm modules self-declare `.MODEL SMALL`; do NOT force -ml here (OpenWatcom
+# 2.0's wasm rejects the mismatch). trig287 adds -fp2 in its own rule.
+ASMFLAGS = -2
 TARGET = tm5000.exe
 
 # Object files with assembly optimizations
@@ -21,9 +25,11 @@ OBJS = main.obj gpib.obj modules.obj graphics.obj ui.obj data.obj print.obj math
 # Default target
 all: $(TARGET)
 
-# Link executable with assembly optimizations
+# Link executable. OPTION ELIMINATE drops unreferenced segments (dead-code
+# elimination); combined with -zm it removes uncalled functions and the dormant
+# assembly modules from the image.
 $(TARGET): $(OBJS)
-	$(LINKER) system dos file main.obj,gpib.obj,modules.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET)
+	$(LINKER) option eliminate system dos file main.obj,gpib.obj,modules.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET)
 
 # Compile main program
 main.obj: main.c tm5000.h
