@@ -77,10 +77,29 @@ behavior-preservation review. No runtime behavior change.
   à la MSVC `/OPT:ICF`, so the DC5009/DC5010 twins still had to be forwarded by hand —
   but it *can* eliminate unreferenced code.) `src/makefile` and the build are updated.
 - **Binary size (OpenWatcom v2):** 283,388 (v3.6) → 280,348 (reuse refactor + manual
-  dead-code removal) → **274,924 final** — **−8,464 bytes (−3.0%) smaller than v3.6
+  dead-code removal) → **275,948 final** — **−7,440 bytes (−2.6%) smaller than v3.6
   even after adding the curve-fit / cross-correlation / phase-shift features**, thanks
   to the dead-strip build options. Lesson: consolidating *small* duplicate functions is
   binary-neutral; eliminating/removing whole unused functions is the real lever.
+
+### Review hardening
+Fixes from an extra-high-effort multi-agent code review of the above changes
+(adversarially verified, no behaviour regressions):
+- **Computed-trace persistence now actually works:** `module_is_result()` derives
+  "computed trace" from state (`MOD_NONE` + data) as well as the `is_result` flag, so
+  FFT/math traces survive a `.tm5`/`.cfg` reload (the flag isn't serialized); the
+  all-slots-full FFT/derivative/integral/smoothed *overwrite* branches now mark the
+  result too; and `sync_traces_with_modules` preserves units for *all* computed traces,
+  not just `"FFT Result"`.
+- **Cross-correlation** now normalizes per-lag by overlap energy (peak no longer biased
+  toward lag 0), uses `double` accumulators, builds the centred series once, and bounds
+  the search to the reliable lag range.
+- **fit_polynomial** centres/scales X so the normal equations stay conditioned (raw
+  sample indices up to ~1023 made the cubic fit garbage in single precision).
+- **Non-287 FFT** now applies the output format, fixes the frequency axis, and drops the
+  garbage tail (with an "approximate" notice) instead of storing mislabeled linear data.
+- Minor: shared `get_units_for_type()` helper (was duplicated across `ui.c`/`print.c`),
+  `.tm5` import warns if the data marker is missing, cross-correlation prints a progress note.
 
 ---
 

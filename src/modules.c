@@ -1724,13 +1724,24 @@ int fg5010_read_output_status(int address) {
     return 0;
 }
 
+/* True if slot holds a computed-result trace (FFT/math): either explicitly flagged,
+   or derived from state (enabled, no instrument type, but holds data). The derived
+   case lets such traces survive a .tm5/.cfg reload, which does not persist the
+   is_result bit. (review #1/#2/#10) */
+int module_is_result(int slot) {
+    return g_system->modules[slot].is_result ||
+           (g_system->modules[slot].module_type == MOD_NONE &&
+            g_system->modules[slot].module_data &&
+            g_system->modules[slot].module_data_count > 0);
+}
+
 /* Validate and cleanup phantom enabled modules */
 void validate_enabled_modules(void) {
     int i;
     for (i = 0; i < 10; i++) {
         /* Computed-result traces (FFT/math) are legitimately enabled with no GPIB
            address; never treat them as phantoms. */
-        if (g_system->modules[i].enabled && !g_system->modules[i].is_result) {
+        if (g_system->modules[i].enabled && !module_is_result(i)) {
             /* Check for valid configuration */
             if (g_system->modules[i].module_type == MOD_NONE ||
                 g_system->modules[i].gpib_address < 1 ||
@@ -2079,11 +2090,13 @@ void sync_traces_with_modules(void) {
                 g_traces[i].data = g_system->modules[i].module_data;
                 g_traces[i].data_count = g_system->modules[i].module_data_count;
                 
-                /* Set unit type based on module type */
-                /* Check if this is FFT data - preserve dB units */
-                if (strcmp(g_system->modules[i].description, "FFT Result") == 0) {
-                    /* FFT data - preserve existing unit_type (should be UNIT_DB) */
-                    /* Don't override unit_type, x_scale, or x_offset for FFT */
+                /* Set unit type based on module type.
+                   Preserve the unit_type/x_scale/x_offset of ALL computed traces
+                   (FFT/derivative/integral/smoothed/math) instead of only "FFT
+                   Result", and key off the computed-trace test rather than a
+                   description string. (review #3) */
+                if (module_is_result(i)) {
+                    /* Computed trace - keep the units/scale set at creation. */
                 } else {
                     /* Regular module data - set unit type based on module type */
                     switch (g_system->modules[i].module_type) {
@@ -5284,7 +5297,7 @@ void continuous_monitor(void) {
     for (i = 0; i < 10; i++) {
         /* Skip computed-result traces (FFT/math): they have no GPIB instrument to
            read, and clearing them here would erase the computed result. */
-        if (g_system->modules[i].enabled && !g_system->modules[i].is_result) {
+        if (g_system->modules[i].enabled && !module_is_result(i)) {
             active_modules++;
             if (!g_system->modules[i].module_data) {
                 if (!allocate_module_buffer(i, MAX_SAMPLES_PER_MODULE)) {

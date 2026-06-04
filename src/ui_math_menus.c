@@ -489,8 +489,10 @@ void correlation_analysis_menu(void) {
                     corr = (float *)malloc(count * sizeof(float));
 
                     if (count >= 2 && corr) {
+                        printf("Computing cross-correlation (%d points)...\n", count);  /* O(n^2) - can be slow (review #12) */
                         if (calculate_cross_correlation(d1, d2, count, corr) == MATH_SUCCESS) {
-                            for (lag = 0; lag < count; lag++) {
+                            /* scan only the reliable lag range (tail is zeroed) (review) */
+                            for (lag = 0; lag <= count / 2; lag++) {
                                 if (corr[lag] > best) { best = corr[lag]; best_lag = lag; }
                             }
                             printf("\nCross-Correlation Results:\n");
@@ -530,6 +532,7 @@ void correlation_analysis_menu(void) {
 
                 sample_rate = (g_control_panel.sample_rate_ms > 0)
                               ? (1000.0 / g_control_panel.sample_rate_ms) : 1.0;
+                printf("Computing phase/delay (cross-correlation)...\n");  /* O(n^2) - can be slow (review #12) */
                 lag = calculate_phase_shift(trace1, trace2, sample_rate);
 
                 printf("\n");

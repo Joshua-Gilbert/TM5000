@@ -74,29 +74,7 @@ void get_print_units(float range, char **unit_str, float *scale_factor, int *dec
 void get_trace_print_units(int trace_idx, float range, char **unit_str, float *scale_factor, int *decimal_places, char **postscript_unit) {
     /* Check trace unit type first */
     if (trace_idx >= 0 && trace_idx < 10 && g_traces[trace_idx].enabled) {
-        switch (g_traces[trace_idx].unit_type) {
-            case 1:  /* Frequency units */
-                get_frequency_units(range, unit_str, scale_factor, decimal_places);
-                break;
-            case 2:  /* dB units for FFT */
-                get_db_units(range, unit_str, scale_factor, decimal_places);
-                break;
-            case 3:  /* Derivative units (V/s) */
-                get_derivative_units(range, unit_str, scale_factor, decimal_places);
-                break;
-            case 4:  /* Current units (A/mA/µA) */
-                get_current_units(range, unit_str, scale_factor, decimal_places);
-                break;
-            case 5:  /* Resistance units (Ω/mΩ/µΩ) */
-                get_resistance_units(range, unit_str, scale_factor, decimal_places);
-                break;
-            case 6:  /* Power spectrum units (V²/Hz) */
-                get_power_units(range, unit_str, scale_factor, decimal_places);
-                break;
-            default: /* Voltage units */
-                get_graph_units(range, unit_str, scale_factor, decimal_places);
-                break;
-        }
+        get_units_for_type(g_traces[trace_idx].unit_type, range, unit_str, scale_factor, decimal_places);
     } else {
         /* Fallback to standard units */
         get_graph_units(range, unit_str, scale_factor, decimal_places);

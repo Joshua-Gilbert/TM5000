@@ -383,8 +383,15 @@ void load_data(void) {
        the global sample count didn't line up (off-by-one -> "failed to read sample"
        / corrupted import). Scanning forward to the marker tolerates a wrong or
        off-by-one global count and any leftover partial line. (v3.6, FINDINGS #5) */
-    while (fgets(line, sizeof(line), fp)) {
-        if (strncmp(line, "ModuleData", 10) == 0) break;
+    {
+        int found_marker = 0;
+        while (fgets(line, sizeof(line), fp)) {
+            if (strncmp(line, "ModuleData", 10) == 0) { found_marker = 1; break; }
+        }
+        if (!found_marker) {
+            /* Marker absent (truncated/corrupt file): don't claim success silently. (review #8) */
+            printf("Warning: 'ModuleData' section not found - per-module data not loaded\n");
+        }
     }
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "EndOfFile", 9) == 0) break;

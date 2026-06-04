@@ -940,16 +940,7 @@ void calculate_statistics(void) {
            Use the trace's unit type so dB / Hz / ohm / amp / power traces are
            labelled correctly instead of always as volts (v3.6, FINDINGS #4). */
         float range = result.max_value - result.min_value;
-        switch (g_traces[slot].unit_type) {
-            case UNIT_FREQUENCY:  get_frequency_units(range, &unit_str, &scale_factor, &decimal_places);  break;
-            case UNIT_DB:         get_db_units(range, &unit_str, &scale_factor, &decimal_places);         break;
-            case UNIT_DERIVATIVE: get_derivative_units(range, &unit_str, &scale_factor, &decimal_places); break;
-            case UNIT_CURRENT:    get_current_units(range, &unit_str, &scale_factor, &decimal_places);    break;
-            case UNIT_RESISTANCE: get_resistance_units(range, &unit_str, &scale_factor, &decimal_places); break;
-            case UNIT_POWER:      get_power_units(range, &unit_str, &scale_factor, &decimal_places);      break;
-            case UNIT_VOLTAGE:
-            default:              get_graph_units(range, &unit_str, &scale_factor, &decimal_places);      break;
-        }
+        get_units_for_type(g_traces[slot].unit_type, range, &unit_str, &scale_factor, &decimal_places);
 
         printf("Statistical Results:\n");
         printf("--------------------\n");

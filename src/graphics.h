@@ -70,6 +70,7 @@ void get_derivative_units(float range, char **unit_str, float *scale_factor, int
 void get_current_units(float range, char **unit_str, float *scale_factor, int *decimal_places);
 void get_resistance_units(float range, char **unit_str, float *scale_factor, int *decimal_places);
 void get_power_units(float range, char **unit_str, float *scale_factor, int *decimal_places);
+void get_units_for_type(int unit_type, float range, char **unit_str, float *scale_factor, int *decimal_places);
 void snap_graph_scale_to_clean_values(void);
 int get_module_color(int module_type);
 

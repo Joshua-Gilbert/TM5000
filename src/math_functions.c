@@ -585,7 +585,7 @@ void execute_fft_with_config(void) {
             mag_linear = 0.0;
             for (b = b0; b < b1; b++) {
                 m = sqrt(real_data[b] * real_data[b] +
-                         imag_data[b] * imag_data[b]) / (N/2);
+                         imag_data[b] * imag_data[b]) / half;   /* half == N/2, hoisted (review #15) */
                 if (m > mag_linear) mag_linear = m;  /* peak-preserving */
             }
 
@@ -620,8 +620,29 @@ void execute_fft_with_config(void) {
                     break;
             }
         }
+    } else {
+        /* No 80287: the software DFT above produced LINEAR magnitudes for the first
+           N/2 bins (N was reduced to dft_size) and left the rest of magnitude[]
+           unwritten. Apply the requested output format, zero the unused tail, set a
+           matching axis and find the peak, so non-287 machines get formatted output
+           instead of mislabeled garbage. The software DFT is a coarse approximation -
+           a coprocessor is recommended for accurate FFTs. (review #6) */
+        int valid = N / 2;
+        float best = -1e30;
+        out_bin_hz = (N > 0) ? (sample_rate / N) : freq_resolution;
+        printf("(no 287: FFT is approximate, %d-point)\n", N);
+        for (i = 0; i < g_fft_config.output_points; i++) {
+            float lin = (i < valid) ? (magnitude[i] / valid) : 0.0;
+            switch (g_fft_config.output_format) {
+                case 0:  magnitude[i] = (lin > 1e-12) ? (20.0 * log10(lin)) : -240.0; break;
+                case 2:  magnitude[i] = lin * lin; break;
+                default: magnitude[i] = lin; break;
+            }
+            if (i > 0 && i < valid && magnitude[i] > best) { best = magnitude[i]; peak_index = i; }
+        }
+        max_mag = best;
     }
-    
+
     /* Find available slot for results */
     for (i = 0; i < 10; i++) {
         if (!g_system->modules[i].enabled) {
@@ -635,12 +656,14 @@ void execute_fft_with_config(void) {
         printf("\nOverwriting source data with FFT results...\n");
     } else {
         printf("\nStoring FFT in slot %d...\n", target_slot);
-        g_system->modules[target_slot].enabled = 1;
-        g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
-        strcpy(g_system->modules[target_slot].description, "FFT Result");
-        g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
     }
+    /* Mark the target as a computed-result trace whether it is a fresh slot or an
+       overwritten source slot, so continuous monitoring won't re-read it. (review #2) */
+    g_system->modules[target_slot].enabled = 1;
+    g_system->modules[target_slot].module_type = MOD_NONE;
+    g_system->modules[target_slot].is_result = 1;
+    strcpy(g_system->modules[target_slot].description, "FFT Result");
+    g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
     
     /* Allocate buffer and store results */
     if (!g_system->modules[target_slot].module_data) {
@@ -778,12 +801,13 @@ void perform_differentiation(void) {
         printf("\nOverwriting source data...\n");
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
-        g_system->modules[target_slot].enabled = 1;
-        g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
-        strcpy(g_system->modules[target_slot].description, "Derivative");
-        g_system->modules[target_slot].gpib_address = 0;
     }
+    /* Mark target as a computed-result trace (fresh slot OR overwritten source). (review #2) */
+    g_system->modules[target_slot].enabled = 1;
+    g_system->modules[target_slot].module_type = MOD_NONE;
+    g_system->modules[target_slot].is_result = 1;
+    strcpy(g_system->modules[target_slot].description, "Derivative");
+    g_system->modules[target_slot].gpib_address = 0;
     
     if (!g_system->modules[target_slot].module_data) {
         allocate_module_buffer(target_slot, count);
@@ -884,12 +908,13 @@ void perform_integration(void) {
         printf("\nOverwriting source data...\n");
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
-        g_system->modules[target_slot].enabled = 1;
-        g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
-        strcpy(g_system->modules[target_slot].description, "Integral");
-        g_system->modules[target_slot].gpib_address = 0;
     }
+    /* Mark target as a computed-result trace (fresh slot OR overwritten source). (review #2) */
+    g_system->modules[target_slot].enabled = 1;
+    g_system->modules[target_slot].module_type = MOD_NONE;
+    g_system->modules[target_slot].is_result = 1;
+    strcpy(g_system->modules[target_slot].description, "Integral");
+    g_system->modules[target_slot].gpib_address = 0;
     
     if (!g_system->modules[target_slot].module_data) {
         allocate_module_buffer(target_slot, count);
@@ -986,12 +1011,13 @@ void perform_smoothing(void) {
         printf("\nOverwriting source data...\n");
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
-        g_system->modules[target_slot].enabled = 1;
-        g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
-        strcpy(g_system->modules[target_slot].description, "Smoothed");
-        g_system->modules[target_slot].gpib_address = 0;
     }
+    /* Mark target as a computed-result trace (fresh slot OR overwritten source). (review #2) */
+    g_system->modules[target_slot].enabled = 1;
+    g_system->modules[target_slot].module_type = MOD_NONE;
+    g_system->modules[target_slot].is_result = 1;
+    strcpy(g_system->modules[target_slot].description, "Smoothed");
+    g_system->modules[target_slot].gpib_address = 0;
     
     if (!g_system->modules[target_slot].module_data) {
         allocate_module_buffer(target_slot, count);

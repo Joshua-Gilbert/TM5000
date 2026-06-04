@@ -548,16 +548,34 @@ int fit_polynomial(float *x_data, float *y_data, int count, int order, curve_fit
     float matrix[4][5]; /* Max 3rd order (4x5 augmented matrix) for v3.5 */
     float temp;
     float coeffs[4];
-    
+    float x_mean, x_scale, inv_scale;   /* center+scale X for numerical conditioning (review #5) */
+
     if (!x_data || !y_data || !result || count < order + 1 || order > 3) {
         return MATH_ERROR_INVALID_PARAMS;
     }
-    
+
     /* Initialize result */
     memset(result, 0, sizeof(curve_fit_result));
     result->fit_type = FIT_TYPE_POLYNOMIAL;
     result->points_used = count;
-    
+
+    /* Center and scale X to [-1,1] before forming the normal equations. Fitting on
+       raw sample indices (0..count-1) makes sum(x^6) ~1e18 for count~1000, which
+       destroys the single-precision matrix; an affine transform of X leaves R^2/RMS
+       unchanged. (Coefficients are therefore in the normalized domain - they are not
+       displayed, only the equation form / R^2 / RMS are.) (review #5) */
+    {
+        float x_min = x_data[0], x_max = x_data[0];
+        for (k = 0; k < count; k++) {
+            if (x_data[k] < x_min) x_min = x_data[k];
+            if (x_data[k] > x_max) x_max = x_data[k];
+        }
+        x_mean = (x_min + x_max) * 0.5;
+        x_scale = (x_max - x_min) * 0.5;
+        if (x_scale < 1e-10) x_scale = 1.0;   /* all X equal: avoid divide-by-zero */
+        inv_scale = 1.0 / x_scale;
+    }
+
     /* Set up normal equations for polynomial fitting */
     /* For 2nd order: [sum(x^0) sum(x^1) sum(x^2)] [a0]   [sum(y*x^0)]
                      [sum(x^1) sum(x^2) sum(x^3)] [a1] = [sum(y*x^1)]
@@ -567,24 +585,26 @@ int fit_polynomial(float *x_data, float *y_data, int count, int order, curve_fit
         for (j = 0; j <= order; j++) {
             matrix[i][j] = 0.0;
             
-            /* Calculate sum of x^(i+j) */
+            /* Calculate sum of x^(i+j) on the scaled variable */
             for (k = 0; k < count; k++) {
+                float xk = (x_data[k] - x_mean) * inv_scale;
                 float x_power = 1.0;
                 int p;
                 for (p = 0; p < i + j; p++) {
-                    x_power *= x_data[k];
+                    x_power *= xk;
                 }
                 matrix[i][j] += x_power;
             }
         }
         
-        /* Right-hand side: sum of y*x^i */
+        /* Right-hand side: sum of y*x^i (scaled variable) */
         matrix[i][order + 1] = 0.0;
         for (k = 0; k < count; k++) {
+            float xk = (x_data[k] - x_mean) * inv_scale;
             float x_power = 1.0;
             int p;
             for (p = 0; p < i; p++) {
-                x_power *= x_data[k];
+                x_power *= xk;
             }
             matrix[i][order + 1] += y_data[k] * x_power;
         }
@@ -651,14 +671,15 @@ int fit_polynomial(float *x_data, float *y_data, int count, int order, curve_fit
         
         /* Calculate residual and total sum of squares */
         for (i = 0; i < count; i++) {
-            /* Calculate predicted value */
+            /* Calculate predicted value (same scaled variable as the fit) */
+            float xk = (x_data[i] - x_mean) * inv_scale;
             y_pred = 0.0;
             x_power = 1.0;
             for (j = 0; j <= order; j++) {
                 y_pred += coeffs[j] * x_power;
-                x_power *= x_data[i];
+                x_power *= xk;
             }
-            
+
             ss_res += (y_data[i] - y_pred) * (y_data[i] - y_pred);
             ss_tot += (y_data[i] - y_mean) * (y_data[i] - y_mean);
         }
@@ -848,39 +869,60 @@ int calculate_correlation(int trace1, int trace2, correlation_result *result) {
     return MATH_SUCCESS;
 }
 
-/* Cross-correlation of data1 vs data2 over positive lags 0..count-1.
-   correlation[] (caller-allocated, count floats) receives the normalized value
-   r[lag] in roughly [-1,1]; r[0] equals the Pearson coefficient. O(count^2). (v3.6) */
+/* Normalized cross-correlation of data1 vs data2 over lags 0..count/2.
+   Each lag is normalized by the energy of ITS OWN overlap window, so r[lag] stays in
+   [-1,1] and the detected peak is not biased toward small lags (review #4). Lags
+   beyond count/2 have too little overlap to estimate reliably and are set to 0.
+   Accumulators are double to avoid precision loss / overflow on long or large-valued
+   traces (review #7); the mean-centred series are built once rather than re-subtracted
+   on every lag (review #13). correlation[] (caller-allocated, count floats) receives
+   r[lag]; r[0] is the Pearson coefficient. O(count^2). (v3.6) */
 int calculate_cross_correlation(float *data1, float *data2, int count, float *correlation) {
-    int i, lag;
-    float mean1 = 0.0, mean2 = 0.0, var1 = 0.0, var2 = 0.0, norm, sum;
+    int i, lag, max_lag;
+    double mean1 = 0.0, mean2 = 0.0, sxy, sxx, syy;
+    float *c1, *c2;
 
     if (!data1 || !data2 || !correlation || count < 2) {
         return MATH_ERROR_INVALID_PARAMS;
     }
 
+    c1 = (float *)malloc(count * sizeof(float));
+    c2 = (float *)malloc(count * sizeof(float));
+    if (!c1 || !c2) {
+        if (c1) free(c1);
+        if (c2) free(c2);
+        return MATH_ERROR_INVALID_PARAMS;   /* out of memory */
+    }
+
     for (i = 0; i < count; i++) { mean1 += data1[i]; mean2 += data2[i]; }
     mean1 /= count;
     mean2 /= count;
-
     for (i = 0; i < count; i++) {
-        var1 += (data1[i] - mean1) * (data1[i] - mean1);
-        var2 += (data2[i] - mean2) * (data2[i] - mean2);
-    }
-    norm = sqrt(var1 * var2);
-
-    if (norm < 1e-10) {                 /* a constant signal: correlation undefined */
-        for (lag = 0; lag < count; lag++) correlation[lag] = 0.0;
-        return MATH_SUCCESS;
+        c1[i] = (float)(data1[i] - mean1);
+        c2[i] = (float)(data2[i] - mean2);
     }
 
+    max_lag = count / 2;   /* keep the overlap >= half the record for a reliable estimate */
     for (lag = 0; lag < count; lag++) {
-        sum = 0.0;
-        for (i = 0; i + lag < count; i++) {
-            sum += (data1[i] - mean1) * (data2[i + lag] - mean2);
+        if (lag > max_lag) {            /* too little overlap to be meaningful */
+            correlation[lag] = 0.0;
+            continue;
         }
-        correlation[lag] = sum / norm;
+        sxy = 0.0; sxx = 0.0; syy = 0.0;
+        for (i = 0; i + lag < count; i++) {
+            sxy += (double)c1[i] * c2[i + lag];
+            sxx += (double)c1[i] * c1[i];
+            syy += (double)c2[i + lag] * c2[i + lag];
+        }
+        if (sxx > 1e-20 && syy > 1e-20) {
+            correlation[lag] = (float)(sxy / sqrt(sxx * syy));
+        } else {
+            correlation[lag] = 0.0;     /* constant overlap window */
+        }
     }
+
+    free(c1);
+    free(c2);
     return MATH_SUCCESS;
 }
 
@@ -918,7 +960,9 @@ int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
         return -1;
     }
 
-    for (lag = 0; lag < count; lag++) {
+    /* Only the reliable lag range (<= count/2) is meaningful; the tail is zeroed,
+       so scanning past it could latch a 0.0 for fully anti-correlated inputs. (review) */
+    for (lag = 0; lag <= count / 2; lag++) {
         if (corr[lag] > best) {
             best = corr[lag];
             best_lag = lag;

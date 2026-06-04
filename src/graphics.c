@@ -543,6 +543,22 @@ void get_power_units(float range, char **unit_str, float *scale_factor, int *dec
     }
 }
 
+/* Select the engineering-unit helper for a trace's unit_type. Single source of truth
+   shared by the statistics and print paths so the dispatch isn't copy-pasted. (review #11) */
+void get_units_for_type(int unit_type, float range, char **unit_str,
+                        float *scale_factor, int *decimal_places) {
+    switch (unit_type) {
+        case UNIT_FREQUENCY:  get_frequency_units(range, unit_str, scale_factor, decimal_places);  break;
+        case UNIT_DB:         get_db_units(range, unit_str, scale_factor, decimal_places);         break;
+        case UNIT_DERIVATIVE: get_derivative_units(range, unit_str, scale_factor, decimal_places); break;
+        case UNIT_CURRENT:    get_current_units(range, unit_str, scale_factor, decimal_places);    break;
+        case UNIT_RESISTANCE: get_resistance_units(range, unit_str, scale_factor, decimal_places); break;
+        case UNIT_POWER:      get_power_units(range, unit_str, scale_factor, decimal_places);      break;
+        case UNIT_VOLTAGE:
+        default:              get_graph_units(range, unit_str, scale_factor, decimal_places);      break;
+    }
+}
+
 void draw_frequency_grid(int fft_samples, int selected_trace) {
     int i, x, y, j;
     int pos;
