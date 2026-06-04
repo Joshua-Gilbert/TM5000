@@ -127,7 +127,6 @@ int perform_dual_trace_operation(int trace1, int trace2, int operation, int resu
     g_system->modules[result_slot].module_data_count = count;
     g_system->modules[result_slot].enabled = 1;
     g_system->modules[result_slot].module_type = MOD_NONE;
-    g_system->modules[result_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
     
     /* Generate description based on operation */
     switch (operation) {

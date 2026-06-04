@@ -1811,19 +1811,16 @@ int fg5010_read_output_status(int address) {
 void validate_enabled_modules(void) {
     int i;
     for (i = 0; i < 10; i++) {
-        /* Computed-result traces (FFT/math) are legitimately enabled with no GPIB
-           address; never treat them as phantoms. */
-        if (g_system->modules[i].enabled && !g_system->modules[i].is_result) {
+        if (g_system->modules[i].enabled) {
             /* Check for valid configuration */
             if (g_system->modules[i].module_type == MOD_NONE ||
                 g_system->modules[i].gpib_address < 1 ||
                 g_system->modules[i].gpib_address > 30 ||
                 strlen(g_system->modules[i].description) == 0) {
-
+                
                 /* Disable phantom module and free resources */
                 g_system->modules[i].enabled = 0;
                 g_system->modules[i].module_type = MOD_NONE;
-                g_system->modules[i].is_result = 0;
                 g_system->modules[i].gpib_address = 0;
                 strcpy(g_system->modules[i].description, "");
                 free_module_buffer(i);
@@ -1887,7 +1884,6 @@ void configure_modules(void) {
                 /* Remove module */
                 g_system->modules[slot].enabled = 0;
                 g_system->modules[slot].module_type = MOD_NONE;
-                g_system->modules[slot].is_result = 0;
                 g_system->modules[slot].gpib_address = 0;
                 strcpy(g_system->modules[slot].description, "");
                 free_module_buffer(slot);
@@ -1915,7 +1911,6 @@ void configure_modules(void) {
                         /* Configure module */
                         g_system->modules[slot].enabled = 1;
                         g_system->modules[slot].module_type = module_type;
-                        g_system->modules[slot].is_result = 0;
                         g_system->modules[slot].slot_number = slot;
                         g_system->modules[slot].gpib_address = address;
                         g_system->modules[slot].last_reading = 0.0;
@@ -3223,12 +3218,8 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
     
     /* Step 0: CRITICAL - Set trigger for buffer auto-fill */
     if (cfg->buffer_enabled) {
-        /* Self-filling buffer: use the configured trigger source. Default TALK,CONT
-           lets the meter fill without external trigger hardware (matching the single-
-           measurement path below); EXT is opt-in via the DM5120 advanced config.
-           v3.5 hardcoded EXT,CONT, which stalled the buffer until an external trigger
-           arrived -> fill timeouts / manual front-panel intervention. (v3.6, FINDINGS #3) */
-        dm5120_set_trigger(address, cfg->trigger_source ? "EXT" : "TALK", "CONT");
+        /* For buffer auto-fill, use EXT,CONT with STOINT */
+        dm5120_set_trigger(address, "EXT", "CONT");
         
         /* Enable SRQ events for buffer monitoring */
         gpib_write_dm5120(address, "HALF ON");
@@ -3272,10 +3263,8 @@ void dm5120_start_buffer_async(int address, int slot) {
         return;  /* Already running */
     }
     
-    /* Configure for async buffer fill: default TALK,CONT (no external trigger
-       hardware required); EXT only when the user opted in. v3.5 hardcoded EXT,CONT,
-       which left the buffer empty until the 30s timeout fired. (v3.6, FINDINGS #3) */
-    dm5120_set_trigger(address, cfg->trigger_source ? "EXT" : "TALK", "CONT");
+    /* Configure for async buffer fill */
+    dm5120_set_trigger(address, "EXT", "CONT");
     delay(50);
     
     /* Set storage interval for automatic triggering */
@@ -5424,9 +5413,7 @@ void continuous_monitor(void) {
     
     /* Initialize active modules and allocate buffers */
     for (i = 0; i < 10; i++) {
-        /* Skip computed-result traces (FFT/math): they have no GPIB instrument to
-           read, and clearing them here would erase the computed result. */
-        if (g_system->modules[i].enabled && !g_system->modules[i].is_result) {
+        if (g_system->modules[i].enabled) {
             active_modules++;
             if (!g_system->modules[i].module_data) {
                 if (!allocate_module_buffer(i, MAX_SAMPLES_PER_MODULE)) {

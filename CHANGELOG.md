@@ -8,28 +8,46 @@ The project evolved through three eras:
 - **V2** — a single monolithic C source file
 - **V3** — the modular rewrite (current)
 
-> ⚠️ **Accuracy note:** some fixes recorded as "done" in the original v3.2/v3.5
-> changelogs are **not present in the shipped code**. See
-> [docs/FINDINGS.md](docs/FINDINGS.md) for the code-verified record.
+> ⚠️ **Accuracy note:** several fixes recorded as "done" in the original v3.2/v3.5
+> changelogs were **not actually present in the shipped code** (see
+> [docs/FINDINGS.md](docs/FINDINGS.md)). v3.6 applies them for real and verifies the
+> result against a build.
 
 ---
 
-## [Unreleased] — Repository modernization
+## [3.6] — 2026-06-04 — Regression fixes
 
-Housekeeping only; no change to program behavior.
+Detailed changelog: [docs/changelogs/CHANGELOG_v3.6.md](docs/changelogs/CHANGELOG_v3.6.md) ·
+Root-cause analysis: [docs/FINDINGS.md](docs/FINDINGS.md)
 
-- Restructured to a standard layout: current source under [`src/`](src), historical
-  versions under [`archive/`](archive), documentation under [`docs/`](docs).
-- Promoted v3.5 to `src/` as the canonical, buildable tree.
-- Vendored `ieeeio.h` into `src/` (v3.5 previously relied on picking it up from the
-  v3.0 folder; the build is now self-contained).
-- Added root `.gitignore`, `CONTRIBUTING.md`, `docs/BUILD.md`, and this consolidated
-  changelog; rewrote the root `README.md` for accuracy.
-- `src/makefile`: removed the dead `trig287.asm` rule, corrected the `help` text
-  (it advertised non-existent `fft_286.asm` / `trig287.asm`), made the toolchain path
-  overridable via `WATCOM_BIN`, and flagged the incomplete `wcl` target. No flag or
-  object-list changes — the produced binary is unchanged.
-- Recorded cross-version regression analysis in [docs/FINDINGS.md](docs/FINDINGS.md).
+Correctness release — implements a fix for every issue in `docs/FINDINGS.md`. Builds
+clean (0 errors, no new warnings); verified with the OpenWatcom v2 toolchain.
+
+### Fixed
+- **Computed FFT/math traces no longer wiped** on entering continuous monitoring
+  (added an `is_result` flag so they're exempt from phantom-module cleanup; also
+  resolves "ghost modules" in the monitor). *FINDINGS #1*
+- **FFT low-frequency dB sensitivity** — applied the long-documented-but-missing fix
+  (threshold `1e-8→1e-12`, floor `-160→-240 dB`). *FINDINGS #2*
+- **FFT spectrum no longer silently truncated** when `output_points < N/2` — now
+  peak-preserving decimation across the full spectrum with a correctly scaled
+  frequency axis. *FINDINGS #6*
+- **DM5120 buffer fill no longer stalls** waiting on an external trigger — defaults to
+  `TALK,CONT`, with `EXT` opt-in. *FINDINGS #3*
+- **Enhanced Statistics** labels dB/Hz/Ω/A/power traces correctly instead of always
+  volts. *FINDINGS #4*
+- **`.tm5` import** resynchronises to the `ModuleData:` marker, tolerating a global
+  sample-count mismatch. *FINDINGS #5*
+
+### Repository / tooling (same date)
+- Restructured to a standard layout: source under [`src/`](src), history under
+  [`archive/`](archive), docs under [`docs/`](docs); promoted v3.5 to `src/` and froze
+  it at [`archive/v3.5`](archive/v3.5).
+- Vendored `ieeeio.h` into `src/` so the build is self-contained.
+- Added root `.gitignore`, `CONTRIBUTING.md`, `docs/BUILD.md`, this consolidated
+  changelog, and the regression analysis in `docs/FINDINGS.md`; rewrote the root README.
+- `src/makefile`: overridable `WATCOM_BIN`, removed the dead `trig287.asm` rule, fixed
+  the stale `help` text, flagged the incomplete `wcl` target (object list/flags unchanged).
 
 ---
 

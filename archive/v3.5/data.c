@@ -238,7 +238,6 @@ void load_data(void) {
     for (i = 0; i < 10; i++) {
         clear_module_data(i);
         g_system->modules[i].enabled = 0;
-        g_system->modules[i].is_result = 0;  /* clear stale computed-trace flag before load (v3.6, FINDINGS #1) */
     }
     g_system->data_count = 0;
     
@@ -376,16 +375,8 @@ void load_data(void) {
         g_system->data_buffer[i] = value;
     }
     
-    /* Read per-module data.
-       Resync to the explicit "ModuleData:" marker rather than blindly skipping one
-       line. The global block above is read with fscanf, which leaves the stream
-       mid-line, so a single-line skip desynced the entire per-module read whenever
-       the global sample count didn't line up (off-by-one -> "failed to read sample"
-       / corrupted import). Scanning forward to the marker tolerates a wrong or
-       off-by-one global count and any leftover partial line. (v3.6, FINDINGS #5) */
-    while (fgets(line, sizeof(line), fp)) {
-        if (strncmp(line, "ModuleData", 10) == 0) break;
-    }
+    /* Read per-module data */
+    fgets(line, sizeof(line), fp);  /* Skip to ModuleData: */
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "EndOfFile", 9) == 0) break;
         
@@ -666,7 +657,6 @@ void load_settings(void) {
             /* Clear existing modules - match v2.9 behavior */
             for (slot = 0; slot < 10; slot++) {
                 g_system->modules[slot].enabled = 0;
-                g_system->modules[slot].is_result = 0;  /* clear stale computed-trace flag (v3.6, FINDINGS #1) */
             }
             
             /* Read module configuration */

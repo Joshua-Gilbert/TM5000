@@ -475,7 +475,6 @@ int apply_config_profile(config_profile *profile) {
         g_system->modules[i].enabled = profile->module_enabled[i];
         g_system->modules[i].module_type = profile->module_types[i];
         g_system->modules[i].gpib_address = profile->gpib_addresses[i];
-        g_system->modules[i].is_result = 0;  /* profiles store real modules; clear computed-trace flag (v3.6, FINDINGS #1) */
     }
     
     return PROFILE_SUCCESS;

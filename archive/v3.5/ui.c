@@ -936,21 +936,10 @@ void calculate_statistics(void) {
     
     /* Use enhanced statistics calculation from math_enhanced.c */
     if (calculate_basic_statistics(data, count, &result) == MATH_SUCCESS) {
-        /* Determine appropriate engineering units and scaling.
-           Use the trace's unit type so dB / Hz / ohm / amp / power traces are
-           labelled correctly instead of always as volts (v3.6, FINDINGS #4). */
+        /* Determine appropriate engineering units and scaling */
         float range = result.max_value - result.min_value;
-        switch (g_traces[slot].unit_type) {
-            case UNIT_FREQUENCY:  get_frequency_units(range, &unit_str, &scale_factor, &decimal_places);  break;
-            case UNIT_DB:         get_db_units(range, &unit_str, &scale_factor, &decimal_places);         break;
-            case UNIT_DERIVATIVE: get_derivative_units(range, &unit_str, &scale_factor, &decimal_places); break;
-            case UNIT_CURRENT:    get_current_units(range, &unit_str, &scale_factor, &decimal_places);    break;
-            case UNIT_RESISTANCE: get_resistance_units(range, &unit_str, &scale_factor, &decimal_places); break;
-            case UNIT_POWER:      get_power_units(range, &unit_str, &scale_factor, &decimal_places);      break;
-            case UNIT_VOLTAGE:
-            default:              get_graph_units(range, &unit_str, &scale_factor, &decimal_places);      break;
-        }
-
+        scale_factor = get_engineering_scale(range, NULL, &unit_str, &decimal_places);
+        
         printf("Statistical Results:\n");
         printf("--------------------\n");
         printf("Sample count:    %d\n", result.sample_count);

@@ -1,5 +1,5 @@
 # TM5000 GPIB Control System Makefile
-# Version 3.6 - Assembly Optimized for 286/287/CGA
+# Version 3.5 - Assembly Optimized for 286/287/CGA
 # OpenWatcom C/C++ 16-bit DOS compilation with assembly optimizations
 
 # Compiler settings

@@ -1,7 +1,6 @@
 /*
  * TM5000 GPIB Control System for Gridcase 1520
- * Version 3.6 - Regression fixes: computed-trace persistence, FFT spectrum/dB,
- *               DM5120 buffer triggering, statistics units, .tm5 import
+ * Version 3.5 - Data Management Foundation with Configuration Profiles
  * Main header file with common definitions
  * C89 compliant
  *
@@ -41,9 +40,9 @@
 #include <errno.h>
 
 /* Version information */
-#define TM5000_VERSION "3.6"
+#define TM5000_VERSION "3.5"
 #define TM5000_VERSION_MAJOR 3
-#define TM5000_VERSION_MINOR 6
+#define TM5000_VERSION_MINOR 5
 
 /* Buffer size constants - v3.4 enhanced capacity */
 #define MAX_SAMPLES_PER_MODULE 1024
@@ -130,8 +129,7 @@ typedef struct {
     unsigned char slot_number;   /* 1 byte */
     unsigned char gpib_address;  /* 1 byte */
     unsigned char enabled:1;     /* 1 bit - pack boolean flags */
-    unsigned char is_result:1;   /* 1 bit - computed trace (FFT/math): no GPIB, exempt from phantom cleanup */
-    unsigned char reserved:6;    /* 6 bits - reserved for future flags */
+    unsigned char reserved:7;    /* 7 bits - reserved for future flags */
 } tm5000_module;
 #pragma pack()
 

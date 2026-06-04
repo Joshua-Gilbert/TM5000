@@ -326,8 +326,7 @@ void execute_fft_with_config(void) {
     char *window_names[] = {"Rectangular", "Hamming", "Hanning", "Blackman"};
     char *format_names[] = {"dB Magnitude", "Linear Magnitude", "Power Spectrum"};
     float mag_linear;
-    float out_bin_hz;   /* Hz per displayed output bin (== freq_resolution unless decimated) */
-
+    
     clrscr();
     printf("\n\nFFT Execution\n");
     printf("=============\n\n");
@@ -385,7 +384,6 @@ void execute_fft_with_config(void) {
     }
     
     freq_resolution = sample_rate / N;
-    out_bin_hz = freq_resolution;  /* default; overridden below if the spectrum is decimated */
     printf("Frequency resolution: %.3f Hz\n", freq_resolution);
     
     /* Allocate memory for FFT */
@@ -563,38 +561,16 @@ void execute_fft_with_config(void) {
     printf("Calculating %s...\n", format_names[g_fft_config.output_format]);
     
     if (g_has_287) {
-        int half = N / 2;                  /* number of meaningful bins for real input */
-        int op = g_fft_config.output_points;
-        int b, b0, b1;
-        float m;
-
-        /* When op < half, decimate the spectrum across the FULL 0..Nyquist span
-           instead of truncating to the first op bins (v3.6, FINDINGS #6 - high
-           frequencies were previously dropped silently). Each output bin takes the
-           PEAK of its source-bin group so narrow high-frequency peaks survive, and
-           the frequency axis is scaled to match. When op == half this is a 1:1 map
-           and behaviour is identical to before. */
-        out_bin_hz = (op > 0) ? (freq_resolution * (float)half / (float)op) : freq_resolution;
-
-        for (i = 0; i < op; i++) {
-            b0 = (int)(((long)i * half) / op);
-            b1 = (int)((((long)i + 1) * half) / op);
-            if (b1 <= b0) b1 = b0 + 1;
-            if (b1 > half) b1 = half;
-
-            mag_linear = 0.0;
-            for (b = b0; b < b1; b++) {
-                m = sqrt(real_data[b] * real_data[b] +
-                         imag_data[b] * imag_data[b]) / (N/2);
-                if (m > mag_linear) mag_linear = m;  /* peak-preserving */
-            }
-
+        for (i = 0; i < g_fft_config.output_points && i < N/2; i++) {
+            mag_linear = sqrt(real_data[i] * real_data[i] + 
+                             imag_data[i] * imag_data[i]) / (N/2);
+            
             switch(g_fft_config.output_format) {
                 case 0: /* dB Magnitude */
-                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude/low-freq bins still display (v3.6, FINDINGS #2) */
+                    if (mag_linear > 1e-8) {  /* Reasonable threshold to avoid log10 domain errors */
                         magnitude[i] = 20.0 * log10(mag_linear);
                     } else {
-                        magnitude[i] = -240.0;  /* deep floor (was -160, which clipped low-frequency content) */
+                        magnitude[i] = -160.0;  /* Reasonable low dB value */
                     }
                     /* For dB, find peak in dB domain for consistent comparison */
                     if (i > 0 && magnitude[i] > max_mag) {  /* Skip DC for peak finding */
@@ -602,7 +578,7 @@ void execute_fft_with_config(void) {
                         peak_index = i;
                     }
                     break;
-
+                    
                 case 1: /* Linear Magnitude */
                     magnitude[i] = mag_linear;
                     if (i > 0 && magnitude[i] > max_mag) {  /* Skip DC for peak finding */
@@ -610,7 +586,7 @@ void execute_fft_with_config(void) {
                         peak_index = i;
                     }
                     break;
-
+                    
                 case 2: /* Power Spectrum */
                     magnitude[i] = mag_linear * mag_linear;
                     if (i > 0 && magnitude[i] > max_mag) {  /* Skip DC for peak finding */
@@ -637,7 +613,6 @@ void execute_fft_with_config(void) {
         printf("\nStoring FFT in slot %d...\n", target_slot);
         g_system->modules[target_slot].enabled = 1;
         g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
         strcpy(g_system->modules[target_slot].description, "FFT Result");
         g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
     }
@@ -691,14 +666,14 @@ void execute_fft_with_config(void) {
                 break;
         }
         
-        g_traces[target_slot].x_scale = out_bin_hz;  /* Hz per displayed output bin */
+        g_traces[target_slot].x_scale = freq_resolution;  /* Hz per sample */
         
         /* Set frequency offset based on centering mode */
         if (g_fft_config.peak_centering && peak_index > 0) {
             /* Centered mode: peak frequency becomes the center reference */
-            float peak_frequency = peak_index * out_bin_hz;
+            float peak_frequency = peak_index * freq_resolution;
             int center_position = g_fft_config.output_points / 2;
-            g_traces[target_slot].x_offset = peak_frequency - (center_position * out_bin_hz);
+            g_traces[target_slot].x_offset = peak_frequency - (center_position * freq_resolution);
         } else {
             /* Normal mode: start at 0 Hz */
             g_traces[target_slot].x_offset = 0.0;
@@ -717,7 +692,7 @@ void execute_fft_with_config(void) {
     printf("Peak: %.2f %s at %.1f Hz\n", max_mag,
            (g_fft_config.output_format == 0) ? "dB" : 
            (g_fft_config.output_format == 1) ? "V" : "V²",
-           peak_index * out_bin_hz);
+           peak_index * freq_resolution);
     
     /* Clean up memory */
     _ffree(real_data);
@@ -726,7 +701,7 @@ void execute_fft_with_config(void) {
     _ffree(window_data);
     
     printf("\nResults stored in slot %d\n", target_slot);
-    printf("Frequency resolution: %.3f Hz per point\n", out_bin_hz);
+    printf("Frequency resolution: %.3f Hz per point\n", freq_resolution);
     printf("\nPress any key to continue...");
     getch();
 }
@@ -780,7 +755,6 @@ void perform_differentiation(void) {
         printf("\nStoring result in slot %d...\n", target_slot);
         g_system->modules[target_slot].enabled = 1;
         g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
         strcpy(g_system->modules[target_slot].description, "Derivative");
         g_system->modules[target_slot].gpib_address = 0;
     }
@@ -886,7 +860,6 @@ void perform_integration(void) {
         printf("\nStoring result in slot %d...\n", target_slot);
         g_system->modules[target_slot].enabled = 1;
         g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
         strcpy(g_system->modules[target_slot].description, "Integral");
         g_system->modules[target_slot].gpib_address = 0;
     }
@@ -988,7 +961,6 @@ void perform_smoothing(void) {
         printf("\nStoring result in slot %d...\n", target_slot);
         g_system->modules[target_slot].enabled = 1;
         g_system->modules[target_slot].module_type = MOD_NONE;
-        g_system->modules[target_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
         strcpy(g_system->modules[target_slot].description, "Smoothed");
         g_system->modules[target_slot].gpib_address = 0;
     }

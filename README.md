@@ -2,7 +2,7 @@
 
 ## Professional Instrument Control for DOS Systems
 
-![Version](https://img.shields.io/badge/Version-3.5-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
+![Version](https://img.shields.io/badge/Version-3.6-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
 
 <img width="1344" height="1691" alt="Gridcase 1520 with Tektronix TM5006A GPIB measurement system — FFT analysis of precision voltage reference" src="https://github.com/user-attachments/assets/7f70d8ae-4ebc-4a04-a70c-bf06f67a440f" />
 
@@ -115,6 +115,7 @@ across the files below. Full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 | **v3.3** | June 2025 | File-I/O reliability; symbol-conflict resolution |
 | **v3.4** | July 2025 | 1024-sample buffers; ~22% memory reduction |
 | **v3.5** | July 2025 | Configuration profiles; enhanced export; enhanced math |
+| **v3.6** | June 2026 | Regression fixes: FFT spectrum/dB, computed-trace persistence, DM5120 buffering, stats units, `.tm5` import |
 
 ### 🔨 Requirements
 
@@ -131,7 +132,7 @@ See [docs/BUILD.md](docs/BUILD.md).
 ```sh
 # Build (from the source tree)
 cd src
-wmake                     # produces tm5000.exe (~276 KB)
+wmake                     # produces tm5000.exe (~283 KB)
 
 # Run on DOS / DOSBox
 #   1. load the Personal488 driver (DRVR488.EXE) if using GPIB hardware
@@ -146,19 +147,22 @@ Main Menu → Configure Modules → [select instrument] → [set parameters]
           → File / Export → [save .tm5 / .cfg / CSV / PostScript]
 ```
 
-### ⚠️ Known issues
+### ✅ Fixed in v3.6
 
-v3.5 ships with several known limitations. Because every prior version is
-preserved, most have been traced to a specific cause — and in several cases to a
-version where the behavior *worked*. The full, code-referenced analysis is in
-**[docs/FINDINGS.md](docs/FINDINGS.md)**. Highlights:
+Every limitation catalogued for v3.5 has been traced to a specific cause (in several
+cases to a prior version where the behavior *worked*) and fixed in v3.6. Details:
+[docs/changelogs/CHANGELOG_v3.6.md](docs/changelogs/CHANGELOG_v3.6.md); full
+code-referenced analysis: [docs/FINDINGS.md](docs/FINDINGS.md).
 
-- **Some documented FFT/GPIB "fixes" were never actually applied** to the shipped
-  code (verify changelog claims against source).
-- Computed FFT/math result traces can be wiped on entering continuous monitoring.
-- DM5120 buffer fills can time out (external-trigger default vs. v2.9's internal trigger).
-- Enhanced Statistics mislabels non-voltage traces (dB/Hz/Ω/A) as volts.
-- `.tm5` import can corrupt on count mismatch (parser stream desync).
+- Computed FFT/math result traces are no longer wiped on entering continuous monitoring.
+- FFT low-frequency dB content is no longer clipped (the documented-but-missing fix is now applied).
+- The FFT spectrum is no longer silently truncated at small output sizes (peak-preserving decimation).
+- DM5120 buffer fills no longer stall waiting on an external trigger (defaults to internal; `EXT` opt-in).
+- Enhanced Statistics labels dB/Hz/Ω/A traces correctly instead of as volts.
+- `.tm5` import resynchronises to the data marker, tolerating a sample-count mismatch.
+
+> Remaining lower-priority items (dormant assembly modules, the non-287 FFT fallback
+> path, and code-quality cleanups from the review pass) are tracked for a future release.
 
 ### 🔬 Educational use
 

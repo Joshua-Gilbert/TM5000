@@ -105,7 +105,6 @@ measurement_system* init_measurement_system(unsigned int points) {
     for (i = 0; i < 10; i++) {
         sys->modules[i].enabled = 0;
         sys->modules[i].module_type = MOD_NONE;
-        sys->modules[i].is_result = 0;
         sys->modules[i].slot_number = i;
         sys->modules[i].gpib_address = 0;
         sys->modules[i].last_reading = 0.0;
