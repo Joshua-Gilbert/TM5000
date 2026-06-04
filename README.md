@@ -27,16 +27,16 @@ buildable source is in [`src/`](src); every prior version is kept under
 
 ```
 TM5000/
-├── src/                 Current canonical source (v3.5) — build from here
+├── src/                 Current canonical source (v3.6) — build from here
 ├── archive/             Frozen historical versions (reference only)
 │   ├── v1-binaries/     V1.8 / V1.9 executables (no source survives)
 │   ├── v2-source/       V2.0–V2.9 monolithic single-file C
-│   └── v3.0/ … v3.4/    Earlier modular releases (each self-contained)
+│   └── v3.0/ … v3.5/    Earlier modular releases (each self-contained)
 ├── docs/
 │   ├── BUILD.md         Toolchain + build/run instructions
-│   ├── ARCHITECTURE.md  v3.5 architecture notes
+│   ├── ARCHITECTURE.md  Architecture notes (v3.6)
 │   ├── FINDINGS.md      Cross-version regression analysis (what worked vs broke)
-│   └── changelogs/      Detailed v3.5 changelog + release notes
+│   └── changelogs/      Per-version changelogs (v3.5, v3.6) + release notes
 ├── CHANGELOG.md         Consolidated version history
 ├── CONTRIBUTING.md
 ├── README.md
@@ -67,7 +67,7 @@ TM5000/
 - Waveform math: differentiation, integration, smoothing/filtering, scaling, offset,
   dual-trace operations, curve fitting, correlation, linear regression
 - Automatic peak detection
-- Optional 80287 coprocessor acceleration (pure-C FFT path; see *Known issues*)
+- Optional 80287 coprocessor acceleration (pure-C FFT path)
 
 #### Display & Visualization
 - **CGA graphics** (320×200, 4-color) with engineering grid
@@ -115,7 +115,7 @@ across the files below. Full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 | **v3.3** | June 2025 | File-I/O reliability; symbol-conflict resolution |
 | **v3.4** | July 2025 | 1024-sample buffers; ~22% memory reduction |
 | **v3.5** | July 2025 | Configuration profiles; enhanced export; enhanced math |
-| **v3.6** | June 2026 | Regression fixes: FFT spectrum/dB, computed-trace persistence, DM5120 buffering, stats units, `.tm5` import |
+| **v3.6** | June 2026 | Regression fixes (FFT, DM5120, stats, import) **+ new math** (polynomial/exponential curve fit, cross-correlation, phase/delay) **+ linker dead-strip** for a smaller binary |
 
 ### 🔨 Requirements
 
@@ -132,7 +132,7 @@ See [docs/BUILD.md](docs/BUILD.md).
 ```sh
 # Build (from the source tree)
 cd src
-wmake                     # produces tm5000.exe (~283 KB)
+wmake                     # produces tm5000.exe (~270 KB, dead-stripped)
 
 # Run on DOS / DOSBox
 #   1. load the Personal488 driver (DRVR488.EXE) if using GPIB hardware
@@ -161,8 +161,13 @@ code-referenced analysis: [docs/FINDINGS.md](docs/FINDINGS.md).
 - Enhanced Statistics labels dB/Hz/Ω/A traces correctly instead of as volts.
 - `.tm5` import resynchronises to the data marker, tolerating a sample-count mismatch.
 
-> Remaining lower-priority items (dormant assembly modules, the non-287 FFT fallback
-> path, and code-quality cleanups from the review pass) are tracked for a future release.
+**Also new in v3.6:** polynomial & exponential curve fitting, cross-correlation, and
+phase/delay analysis (previously stubbed) are now implemented. The build enables
+OpenWatcom dead-code elimination (`-zm` + `OPTION ELIMINATE`), so `tm5000.exe` is
+~270 KB — smaller than v3.5 despite the added features. See [CHANGELOG.md](CHANGELOG.md).
+
+> Remaining lower-priority items (header/API-hygiene cleanups noted in the review pass)
+> are tracked for a future release.
 
 ### 🔬 Educational use
 

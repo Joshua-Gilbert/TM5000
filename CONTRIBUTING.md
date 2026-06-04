@@ -8,11 +8,11 @@ bug fixes, documentation, restored features, hardware notes — are welcome.
 
 ```
 TM5000/
-├── src/         Current canonical source (v3.5) — build from here
+├── src/         Current canonical source (v3.6) — build from here
 ├── archive/     Historical, frozen versions (read-only reference)
 │   ├── v1-binaries/   V1.8 / V1.9 executables (no source survives)
 │   ├── v2-source/     V2.0–V2.9 monolithic single-file C
-│   └── v3.0 … v3.4/   Earlier modular releases
+│   └── v3.0 … v3.5/   Earlier modular releases
 ├── docs/        Architecture notes, per-version changelogs, build guide
 ├── CHANGELOG.md Consolidated version history
 ├── README.md

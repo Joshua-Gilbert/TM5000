@@ -1,398 +1,192 @@
-# TM5000 v3.5 Architecture Design
-## Data Management Foundation - Technical Specification
+# TM5000 Architecture (as-built, v3.6)
 
-*Architecture Document v1.0 - July 2025*
-
----
-
-## 🏗️ **System Architecture Overview**
-
-### **Design Philosophy**
-TM5000 v3.5 builds upon the proven modular architecture of v3.4 while introducing sophisticated data management capabilities. The design prioritizes memory efficiency, maintains DOS 16-bit compatibility, and ensures seamless integration with existing workflows.
-
-### **Memory Architecture Planning**
-
-#### **v3.4 Baseline Analysis**
-```
-Current Memory Usage (v3.4):
-├── Executable Size: 218KB
-├── Runtime Memory: ~400KB
-├── Buffer Allocation: Dynamic (1024 samples × 10 modules)
-├── Available Headroom: ~240KB
-└── Target Growth: +14KB (3.5% increase)
-```
-
-#### **v3.5 Memory Budget**
-```
-Memory Allocation Plan:
-├── Configuration Profiles: +3KB runtime, +2KB executable
-├── Enhanced Data Export: +4KB runtime, +3KB executable  
-├── Advanced Math: +3KB runtime, +6KB executable
-├── Integration Overhead: +2KB runtime, +1KB executable
-└── Total Impact: +12KB runtime, +13KB executable
-```
-
-#### **Memory Management Strategy**
-- **Dynamic Loading**: Load modules only when needed
-- **Buffer Reuse**: Share buffers between similar operations
-- **Compression**: Use bit-packing for configuration data
-- **Garbage Collection**: Automated cleanup of temporary allocations
+Technical description of the TM5000 GPIB control system as it is actually built in
+[`src/`](../src). It supersedes the original v3.5 *planning* document. For the build
+toolchain see [BUILD.md](BUILD.md); for the cross-version bug history see
+[FINDINGS.md](FINDINGS.md); for version history see [../CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
-## 📁 **Module Architecture**
+## 1. Overview
 
-### **New Module Structure**
+TM5000 is a single-process, menu-driven DOS application that controls Tektronix
+TM5000-series instruments over GPIB (IEEE-488) and acquires, analyzes, plots, and
+prints/export their measurements. It is a modular C rewrite (v3.0+) of the original
+monolithic source, split so every translation unit stays within the DOS 64 KB segment
+limit.
 
-#### **config_profiles.c/h - Configuration Management**
+- **Language/target:** C89, OpenWatcom, 16-bit real-mode MS-DOS, 80286 + optional 80287.
+- **Memory model:** large (`-ml`) — code and data pointers are far; data items ≥100 bytes
+  go far automatically (`-zt100`), `const` lives in the code segment (`-zc`).
+- **Display:** CGA 320×200 4-color.
+- **GPIB hardware:** Personal488 (IOtech/CEC) via the vendor `ieeeio` driver shim.
+
+---
+
+## 2. Module map & layering
+
+```
+            main.c            program entry, globals, 287 detect, init/cleanup
+              │
+   ┌──────────┼─────────────────────────────────────────────┐
+   │          │                                              │
+ io layer   instruments        data/persistence      math            ui/display
+ ───────    ───────────        ────────────────      ────            ──────────
+ gpib.c     modules.c          data.c                math_functions.c  ui.c
+ ieeeio_w.c module_funcs.c     export_enhanced.c     math_enhanced.c   ui_math_menus.c
+            (DC5009/DC5010/     config_profiles.c                       graphics.c
+             DM5010/DM5120/                                             print.c
+             PS5004/PS5010/
+             FG5010)
+   asm (optimization, currently dormant): cga_asm  mem286  fixed286  trig287_simple
+```
+
+| File | Responsibility |
+|------|----------------|
+| `main.c` / `tm5000.h` | Entry point, all global definitions, 287 detection, the single shared header (system types, instrument config structs, globals as `extern`, constants). |
+| `gpib.c/.h` | GPIB transport: generic `gpib_write/read`, SRQ/serial-poll, and DM5120/DM5010-specific I/O wrappers, over `ieeeio_w`. |
+| `ieeeio_w.c` / `ieeeio.h` | Vendor Personal488 driver glue (Watcom port of IOtech IEEEIO). Lowest layer. |
+| `modules.c/.h` | Per-instrument drivers, `configure_modules`, `single_measurement`, `continuous_monitor`, and `validate_enabled_modules`. Largest unit. |
+| `module_funcs.c/.h` | Interactive "advanced configuration" menus / comm-test helpers per instrument. |
+| `data.c/.h` | Per-module buffer alloc/store, `.tm5`/`.cfg` text persistence, enhanced-export types. |
+| `export_enhanced.c` | Metadata-rich CSV/TSV export and real-time streaming export. |
+| `config_profiles.c/.h` | Full-system configuration profiles saved to `PROFILES.DAT`. |
+| `math_functions.c/.h` | FFT (pure C), differentiation, integration, smoothing, core statistics. |
+| `math_enhanced.c` | Dual-trace ops, statistics, digital filtering, curve fitting (linear/poly/exp), correlation, cross-correlation, phase/delay. |
+| `ui.c/.h` | Top-level menus, input helpers, the integration hub (`calculate_statistics`, file/profile/export menus). |
+| `ui_math_menus.c` | CGA front-ends for the enhanced-math operations. |
+| `graphics.c/.h` | CGA primitives, the waveform/graph engine, unit scaling (`get_units_for_type` + the per-unit helpers), mouse. |
+| `print.c/.h` | Text and PostScript reports over LPT1. |
+
+---
+
+## 3. Key data structures (`tm5000.h`)
+
 ```c
-/* Configuration Profile Structure */
-typedef struct {
-    char name[32];                    /* Profile name */
-    char description[64];             /* User description */
-    time_t created;                   /* Creation timestamp */
-    time_t modified;                  /* Last modification */
-    dm5120_config dm5120_configs[10]; /* DM5120 settings */
-    dm5010_config dm5010_configs[10]; /* DM5010 settings */
-    ps5004_config ps5004_configs[10]; /* PS5004 settings */
-    ps5010_config ps5010_configs[10]; /* PS5010 settings */
-    dc5009_config dc5009_configs[10]; /* DC5009 settings */
-    dc5010_config dc5010_configs[10]; /* DC5010 settings */
-    fg5010_config fg5010_configs[10]; /* FG5010 settings */
-    graph_scale graph_settings;       /* Graph display settings */
-    fft_config fft_settings;         /* FFT configuration */
-    control_panel_state panel_state;  /* Control panel state */
-    unsigned char checksum;           /* Data integrity check */
-} config_profile;
+#pragma pack(1)
+typedef struct {                 /* one instrument slot (or computed-result slot) */
+    float far *module_data;      /* sample buffer (far) */
+    char  description[12];
+    float last_reading;
+    unsigned int module_data_count;
+    unsigned int module_data_size;
+    unsigned char module_type;   /* MOD_NONE / MOD_DC5009 ... MOD_FG5010 */
+    unsigned char slot_number;
+    unsigned char gpib_address;
+    unsigned char enabled:1;
+    unsigned char is_result:1;   /* computed (FFT/math) trace - see §5 */
+    unsigned char reserved:6;
+} tm5000_module;
+#pragma pack()
 
-/* Profile Management Functions */
-int save_config_profile(char *name, char *description);
-int load_config_profile(char *name);
-int delete_config_profile(char *name);
-int list_config_profiles(char profiles[][32], int max_count);
-int validate_config_profile(config_profile *profile);
+measurement_system { tm5000_module modules[10]; int gpib_devices[10]; ... }  /* g_system */
+trace_info         { label, data, x_scale, x_offset, unit_type, enabled, ... } /* g_traces[10] */
+fft_config         { input_points, output_points, window_type, output_format, flags } /* g_fft_config */
 ```
 
-### **Enhanced Existing Modules**
-
-#### **data.c/h Extensions - Export System**
-```c
-/* Enhanced Export Configuration */
-typedef struct {
-    unsigned char include_metadata:1;     /* Include system metadata */
-    unsigned char include_timestamps:1;   /* Add timestamp columns */
-    unsigned char include_settings:1;     /* Export instrument settings */
-    unsigned char real_time_export:1;     /* Stream during measurement */
-    unsigned char compress_data:1;        /* Apply compression */
-    unsigned char scientific_notation:1;  /* Use scientific format */
-    unsigned char custom_delimiter:1;     /* Use custom delimiter */
-    unsigned char reserved:1;             /* Future expansion */
-    char delimiter;                       /* Custom delimiter character */
-    char filename_template[64];           /* Filename pattern */
-    int precision;                        /* Decimal places */
-} export_config;
-
-/* Export Functions */
-int export_data_enhanced(char *filename, export_config *config);
-int start_realtime_export(char *filename, export_config *config);
-int stop_realtime_export(void);
-int export_metadata_header(FILE *file, export_config *config);
-int compress_export_file(char *filename);
-```
-
-#### **math_functions.c/h Extensions - Advanced Analysis**
-```c
-/* Dual-Trace Operation Types */
-#define TRACE_OP_ADD      0
-#define TRACE_OP_SUBTRACT 1
-#define TRACE_OP_MULTIPLY 2
-#define TRACE_OP_DIVIDE   3
-
-/* Statistics Configuration */
-typedef struct {
-    unsigned char enable_mean:1;
-    unsigned char enable_rms:1;
-    unsigned char enable_std_dev:1;
-    unsigned char enable_min_max:1;
-    unsigned char enable_peak_detect:1;
-    unsigned char enable_frequency:1;
-    unsigned char rolling_stats:1;
-    unsigned char reserved:1;
-    int window_size;                  /* For rolling statistics */
-    float update_rate;                /* Statistics update frequency */
-} statistics_config;
-
-/* Digital Filter Configuration */
-typedef struct {
-    int filter_type;                  /* 0=LP, 1=HP, 2=BP */
-    float cutoff_freq;                /* Cutoff frequency */
-    float bandwidth;                  /* For bandpass filters */
-    int order;                        /* Filter order (1-4) */
-    float sample_rate;                /* Sampling rate */
-} filter_config;
-
-/* Advanced Math Functions */
-int perform_dual_trace_operation(int trace1, int trace2, int operation, int result_slot);
-int calculate_realtime_statistics(int trace_slot, statistics_config *config);
-int apply_digital_filter(int trace_slot, filter_config *config);
-int perform_curve_fitting(int trace_slot, int fit_type, float coefficients[]);
-int calculate_correlation(int trace1, int trace2, float *correlation);
-```
+The system supports **up to 10 slots**. Per-instrument settings live in parallel
+`g_<inst>_config[10]` arrays; `config_profile` captures all of them plus graph/FFT/panel
+state for save/restore.
 
 ---
 
-## 🎮 **User Interface Integration**
+## 4. GPIB & instruments
 
-### **Enhanced Menu Structure**
-```
-Main Menu
-├── Configure Modules
-├── Measurement Operations  
-├── File Operations
-│   ├── Load Data
-│   ├── Save Data
-│   ├── Export Enhanced       ← NEW: Advanced Export
-│   └── Configuration Profiles ← NEW: Profile Management
-├── Graph Display
-├── Mathematical Functions
-│   ├── FFT Analysis
-│   ├── Statistics
-│   ├── Dual-Trace Math       ← NEW: Trace Operations
-│   ├── Digital Filtering     ← NEW: Signal Processing
-│   └── Curve Fitting         ← NEW: Analysis Tools
-├── Print Graph
-└── Exit
-```
-
-### **New UI Components**
-
-#### **Configuration Profile Manager**
-```
-Configuration Profiles
-======================
-
-Current Profiles:
-1. Lab Setup A          [Modified: 07/15/25]
-2. Production Test      [Modified: 07/12/25]  
-3. Calibration Run      [Modified: 07/10/25]
-
-Options:
-S. Save Current Configuration
-L. Load Profile
-D. Delete Profile
-R. Rename Profile
-N. New Profile from Current
-0. Return to Main Menu
-
-Profile: _
-```
-
-#### **Enhanced Export Dialog**
-```
-Enhanced Data Export
-====================
-
-Filename: MEASUREMENT_2025_07_15.CSV
-Format: CSV with Metadata
-
-Options:
-[X] Include Timestamps
-[X] Include Instrument Settings  
-[X] Scientific Notation
-[ ] Real-time Export
-[ ] Compress Output
-
-Delimiter: Comma
-Precision: 6 decimal places
-
-[E] Export  [P] Preview  [0] Cancel
-```
+- All bus I/O funnels through `gpib.c` over the Personal488 shim (`ieeeio_w.c`); logical
+  slot ↔ GPIB address mapping is `address = slot + base`.
+- Seven instrument drivers live in `modules.c`. **DC5009 and DC5010 share one
+  implementation**: the 22 byte-identical `dc5010_*` routines forward to their `dc5009_*`
+  counterparts; only the DC5010-unique features (rise/fall time, A±B totalize, burst) are
+  separate.
+- DM5120 buffered acquisition defaults to an internal (`TALK,CONT`) trigger so the buffer
+  self-fills without external trigger hardware; `EXT` is opt-in per the advanced config.
 
 ---
 
-## 💾 **File Format Specifications**
+## 5. Acquisition & the computed-result trace mechanism
 
-### **Enhanced Configuration Profile Format**
-```
-TM5000 Profile File Format v3.5
-================================
+A measurement slot normally maps to a real instrument. **Computed results** (FFT,
+differentiation, integration, smoothing, dual-trace math) are also stored in a module
+slot, but with `module_type == MOD_NONE`, `gpib_address == 0`, and `is_result == 1`.
 
-Header (32 bytes):
-├── Magic Number: "TM5P" (4 bytes)
-├── Version: 0x35 (1 byte)  
-├── Profile Count: (1 byte)
-├── Creation Date: Unix timestamp (4 bytes)
-├── Checksum: CRC16 (2 bytes)
-└── Reserved: (20 bytes)
+`module_is_result(slot)` recognizes such a slot **either** by the `is_result` flag **or**
+derived from state (`MOD_NONE` with allocated data) — the derived test lets computed
+traces survive a `.tm5`/`.cfg` reload, which does not serialize the flag. This is used by:
 
-Profile Entry (512 bytes each):
-├── Profile Header (64 bytes)
-│   ├── Name (32 bytes, null-terminated)
-│   ├── Description (64 bytes, null-terminated)
-│   ├── Created: Unix timestamp (4 bytes)
-│   ├── Modified: Unix timestamp (4 bytes)
-│   └── Flags: Configuration options (8 bytes)
-└── Configuration Data (448 bytes)
-    ├── Module Configurations (400 bytes)
-    ├── Graph Settings (32 bytes)
-    ├── FFT Configuration (8 bytes)
-    └── Panel State (8 bytes)
-```
+- `validate_enabled_modules()` — never purges a computed-result slot as a "phantom".
+- `continuous_monitor()` — never counts, clears, or GPIB-reads a computed-result slot.
+- `sync_traces_with_modules()` — preserves the computed trace's `unit_type`/`x_scale`/
+  `x_offset` instead of reclassifying it by `module_type`.
 
-### **Enhanced CSV Export Format**
-```
-TM5000 Enhanced CSV Export v3.5
-================================
-
-Header Section:
-# TM5000 Measurement Data Export
-# Generated: 2025-07-15 14:23:45
-# System: TM5000 v3.5
-# Profile: Lab Setup A
-# 
-# Instrument Configuration:
-# Slot 0: DM5120, Address 22, Range ±10V
-# Slot 1: PS5004, Address 5, Output 5.000V
-#
-# Measurement Parameters:
-# Sample Rate: 500ms
-# Sample Count: 1024
-# Start Time: 2025-07-15 14:20:00
-#
-
-Data Section:
-Timestamp,Sample,Slot_0_DM5120_V,Slot_1_PS5004_V,Temperature_C,Humidity_%
-2025-07-15 14:20:00.000,0,1.234567E+00,5.000123E+00,23.5,45.2
-2025-07-15 14:20:00.500,1,1.234789E+00,5.000098E+00,23.5,45.2
-```
+This is the v3.6 fix for the long-standing "computed traces get wiped" regression (see
+FINDINGS #1).
 
 ---
 
-## ⚡ **Performance Optimizations**
+## 6. Math subsystem
 
-### **Memory Management Improvements**
-```c
-/* Smart Buffer Allocation */
-typedef struct {
-    void far *buffer;
-    unsigned int size;
-    unsigned int used;
-    time_t last_access;
-    unsigned char type;        /* 0=data, 1=config, 2=temp */
-    unsigned char priority;    /* 0=low, 1=normal, 2=high */
-} smart_buffer;
-
-/* Memory Pool Management */
-int init_memory_pool(void);
-void far *allocate_smart_buffer(unsigned int size, unsigned char type);
-int free_smart_buffer(void far *buffer);
-int garbage_collect_buffers(void);
-int get_memory_usage_stats(unsigned int *total, unsigned int *used, unsigned int *free);
-```
-
-### **File I/O Optimizations**
-```c
-/* Buffered File I/O */
-typedef struct {
-    FILE *file;
-    char buffer[512];          /* DOS-optimal buffer size */
-    unsigned int buffer_pos;
-    unsigned int buffer_size;
-    unsigned char mode;        /* 0=read, 1=write */
-    unsigned char dirty;       /* Buffer needs flush */
-} buffered_file;
-
-/* Optimized File Operations */
-int open_buffered_file(buffered_file *bf, char *filename, char *mode);
-int read_buffered_data(buffered_file *bf, void *data, unsigned int size);
-int write_buffered_data(buffered_file *bf, void *data, unsigned int size);
-int close_buffered_file(buffered_file *bf);
-```
+- **FFT** (`math_functions.c`): pure-C, power-of-2, 64–1024 points, with
+  Rectangular/Hamming/Hanning/Blackman windows. Uses the 80287 when present; falls back to
+  a coarse software DFT otherwise (approximate, ≤64-point — a coprocessor is recommended).
+  Output formats: dB (threshold `1e-12`, floor `-240 dB`), linear, power. When the requested
+  output size is smaller than N/2 the spectrum is **peak-preserving decimated** across the
+  full 0..Nyquist span with a correspondingly scaled frequency axis.
+- **Enhanced analysis** (`math_enhanced.c`): dual-trace operations; basic/rolling
+  statistics; digital filtering; **curve fitting** — linear, polynomial (order 2–3, with X
+  centered+scaled for numerical conditioning), and exponential; Pearson **correlation**;
+  **cross-correlation** (per-lag overlap-normalized, double-precision accumulators) and
+  **phase/delay** analysis (peak-alignment lag over the reliable lag range).
+- Result traces are written into a computed-result slot (§5) and displayed like any trace.
 
 ---
 
-## 🔧 **Implementation Strategy**
+## 7. Persistence & export
 
-### **Phase 1: Foundation (Weeks 1-2)**
-1. **Memory Architecture**: Implement smart buffer management
-2. **Core Structures**: Define all new data structures
-3. **File Formats**: Implement enhanced file format handlers
-4. **Basic UI**: Create placeholder menus for new features
-
-### **Phase 2: Core Features (Weeks 3-4)**
-1. **Configuration Profiles**: Complete profile save/load system
-2. **File Browser**: Implement directory navigation and file operations
-3. **Export System**: Add metadata and real-time export capabilities
-4. **Math Extensions**: Implement dual-trace operations and statistics
-
-### **Phase 3: Integration (Weeks 5-6)**
-1. **UI Integration**: Complete menu system integration
-2. **Error Handling**: Robust error handling for all new features
-3. **Performance Testing**: Optimize memory usage and execution speed
-4. **Documentation**: User guides and technical documentation
-
-### **Testing Strategy**
-```
-Testing Framework v3.5:
-├── Unit Tests: Individual function validation
-├── Integration Tests: Feature interaction validation
-├── Memory Tests: Memory leak and usage validation
-├── Performance Tests: Speed and efficiency benchmarks
-├── Compatibility Tests: DOS system compatibility
-└── User Acceptance Tests: Real-world usage scenarios
-```
-
-### **Quality Assurance Checklist**
-- [ ] All new features work within 640KB memory limit
-- [ ] No regression in existing functionality
-- [ ] File formats maintain backward compatibility
-- [ ] UI follows established TM5000 design patterns
-- [ ] Error handling provides meaningful user feedback
-- [ ] Documentation covers all new features
-- [ ] Performance meets or exceeds v3.4 baseline
+- **`.tm5` measurement files / `.cfg` configuration files**: line-oriented text. A file has
+  a `GlobalData:` block, a `ModuleData:` marker, then `Slot<n>:<count>` records with samples,
+  ending at `EndOfFile`. Loading resynchronizes to the `ModuleData:` marker (tolerant of a
+  global-count mismatch) and warns if the marker is absent.
+- **Configuration profiles** (`config_profiles.c`): the full multi-instrument + graph/FFT/
+  panel state to `PROFILES.DAT`, checksum-validated.
+- **Enhanced export** (`export_enhanced.c`): CSV/TSV with metadata/timestamps/settings and
+  optional real-time streaming.
 
 ---
 
-## 📊 **Success Metrics**
+## 8. Build & code size
 
-### **Technical Metrics**
-- **Memory Usage**: <414KB runtime (target: +14KB from v3.4)
-- **Executable Size**: <233KB (target: +15KB from v3.4)
-- **Performance**: <5% overhead for new features
-- **File Compatibility**: 100% backward compatibility with v3.4
+OpenWatcom, large model, 286 target — see [BUILD.md](BUILD.md) for the exact flags. Two
+size-relevant build options are enabled:
 
-### **User Experience Metrics**
-- **Configuration Time**: <30 seconds to save/load profiles
-- **Export Speed**: <5 seconds for typical measurement export
-- **Learning Curve**: <15 minutes for experienced TM5000 users
+- `wcc -zm` — emit each function in its own segment, so that
+- `wlink OPTION ELIMINATE` can **drop every unreferenced function** (and the dormant
+  assembly modules) from the image. OpenWatcom's linker has no identical-code *folding*, so
+  duplicate functions are still consolidated in source (e.g. the DC5009/DC5010 forwarders).
 
-### **Quality Metrics**
-- **Code Coverage**: >90% test coverage for new features
-- **Bug Density**: <1 bug per 1000 lines of new code
-- **User Acceptance**: >95% satisfaction with new features
-- **System Stability**: <0.1% crash rate in production use
+Result: `tm5000.exe` ≈ **270 KB** (dead-stripped), within the 640 KB conventional-memory
+budget with room for the 1024-sample × 10-module far buffers.
 
 ---
 
-## 🔄 **Migration Strategy**
+## 9. Assembly modules (dormant)
 
-### **Data Migration**
-- **Automatic Upgrade**: Convert v3.4 configurations to v3.5 profiles
-- **File Conversion**: Batch convert existing .tm5 files to enhanced format
-- **Settings Preservation**: Maintain all existing user preferences
-- **Rollback Support**: Allow downgrade to v3.4 if needed
-
-### **User Training**
-- **Quick Start Guide**: 2-page guide for new features
-- **Video Tutorials**: Screen recordings of new workflows
-- **Migration Checklist**: Step-by-step upgrade process
-- **Support Documentation**: Troubleshooting common issues
+`cga_asm.asm`, `mem286.asm`, `fixed286.asm`, and `trig287_simple.asm` contain CGA/286/287
+optimization routines that are **not currently called from C** (only `extern`-declared).
+With `OPTION ELIMINATE` they are stripped from the image, so they cost nothing today; they
+remain in the tree as scaffolding to wire in (or remove) later.
 
 ---
 
-*This architecture design provides the technical foundation for TM5000 v3.5, ensuring robust data management capabilities while maintaining the system's core strengths of reliability, efficiency, and DOS compatibility.*
+## 10. Known design notes / limitations
 
-**Document Version**: 1.0  
-**Author**: TM5000 Development Team  
-**Date**: July 2025  
-**Review**: August 2025
+- The non-287 software-DFT FFT path is approximate and low-resolution; accurate FFTs need a
+  coprocessor.
+- `tm5000.h` is a "god header" (all subsystem prototypes); header/API hygiene cleanups are
+  tracked for a future pass.
+- See [FINDINGS.md](FINDINGS.md) for the code-verified cross-version regression analysis and
+  [../CHANGELOG.md](../CHANGELOG.md) for what changed in each release.
+
+---
+
+*As-built for v3.6. Update this document when the module structure, data layout, or build
+options change.*
