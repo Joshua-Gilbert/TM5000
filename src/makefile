@@ -3,9 +3,14 @@
 # OpenWatcom C/C++ 16-bit DOS compilation with assembly optimizations
 
 # Compiler settings
-CC = /mnt/c/WATCOM/BINNT/wcc.exe
-ASM = /mnt/c/WATCOM/BINNT/wasm.exe
-LINKER = /mnt/c/WATCOM/BINNT/wlink.exe
+# WATCOM_BIN points at the OpenWatcom 16-bit DOS tool binaries. Override it on
+# the command line for a different install or a native (non-WSL) build, e.g.:
+#   wmake WATCOM_BIN=C:/WATCOM/binnt
+# The default targets a WSL build invoking the Windows OpenWatcom .exe tools.
+WATCOM_BIN = /mnt/c/WATCOM/BINNT
+CC = $(WATCOM_BIN)/wcc.exe
+ASM = $(WATCOM_BIN)/wasm.exe
+LINKER = $(WATCOM_BIN)/wlink.exe
 CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100
 ASMFLAGS = -ml -2
 TARGET = tm5000.exe
@@ -83,9 +88,6 @@ cga_asm.obj: cga_asm.asm
 mem286.obj: mem286.asm
 	$(ASM) $(ASMFLAGS) mem286.asm
 
-trig287.obj: trig287.asm
-	$(ASM) $(ASMFLAGS) -fp2 trig287.asm
-
 trig287_simple.obj: trig287_simple.asm
 	$(ASM) $(ASMFLAGS) -fp2 trig287_simple.asm
 
@@ -98,9 +100,12 @@ clean:
 	-del *.obj 2>nul || rm -f *.obj
 	-del $(TARGET) 2>nul || rm -f $(TARGET)
 
-# Alternative compilation using wcl (if preferred)
+# Alternative single-command build (C only, INCOMPLETE).
+# NOTE: this target omits math_enhanced.c, ui_math_menus.c, config_profiles.c,
+# export_enhanced.c and all assembly modules, so it produces a reduced/partial
+# binary. Use the default `all` target for a complete build.
 wcl: main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c
-	/mnt/c/WATCOM/BINNT/wcl.exe $(CFLAGS) main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c -fe=$(TARGET)
+	$(WATCOM_BIN)/wcl.exe $(CFLAGS) main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c -fe=$(TARGET)
 
 # Help target
 help:
@@ -125,11 +130,10 @@ help:
 	@echo   math_enhanced.c  - Enhanced math operations
 	@echo.
 	@echo Assembly Optimizations (286/287/CGA):
-	@echo   fft_286.asm   - 287-optimized FFT butterfly operations
-	@echo   cga_asm.asm   - CGA graphics acceleration
-	@echo   mem286.asm    - 286 memory operations
-	@echo   trig287.asm   - 287 trigonometric functions
-	@echo   fixed286.asm  - Fixed-point math fallback
+	@echo   cga_asm.asm         - CGA graphics acceleration
+	@echo   mem286.asm          - 286 memory operations
+	@echo   trig287_simple.asm  - 287 trigonometric helpers
+	@echo   fixed286.asm        - Fixed-point math fallback
 	@echo.
 	@echo Compiler flags: $(CFLAGS)
 	@echo Assembly flags: $(ASMFLAGS)

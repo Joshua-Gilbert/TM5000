@@ -1,0 +1,32 @@
+# ── OpenWatcom / DOS build intermediates ─────────────────────────────
+# The committed *.exe files are kept intentionally (archival builds, and
+# V1 has no source). Only transient build output is ignored here.
+*.obj
+*.OBJ
+*.o
+*.err
+*.ERR
+*.map
+*.MAP
+*.lst
+*.LST
+*.sym
+*.SYM
+# Watcom linker temporaries / response files
+*.lk1
+*.lnk
+*.tmp
+__wlink.lnk
+
+# ── Editor / IDE ─────────────────────────────────────────────────────
+.vscode/
+*.swp
+*~
+
+# ── OS cruft ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Local task DB (Bob companion plugin, not part of this project) ───
+data/
