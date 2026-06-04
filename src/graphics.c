@@ -147,12 +147,7 @@ void draw_line(int x1, int y1, int x2, int y2, unsigned char color) {
 }
 
 /* Draw a rectangle */
-void draw_rectangle(int x1, int y1, int x2, int y2, unsigned char color) {
-    draw_line(x1, y1, x2, y1, color);  /* Top */
-    draw_line(x2, y1, x2, y2, color);  /* Right */
-    draw_line(x2, y2, x1, y2, color);  /* Bottom */
-    draw_line(x1, y2, x1, y1, color);  /* Left */
-}
+
 
 /* Fill a rectangle */
 void fill_rectangle(int x1, int y1, int x2, int y2, unsigned char color) {
@@ -255,79 +250,22 @@ void get_mouse_status(void) {
 }
 
 /* Set mouse position */
-void set_mouse_pos(int x, int y) {
-    union REGS regs;
-    
-    if (!g_mouse.present) return;
-    
-    regs.w.ax = MOUSE_SET_POS;
-    regs.w.cx = x * 8;  /* Convert from text to pixel coordinates */
-    regs.w.dx = y * 8;
-    int86(MOUSE_INT, &regs, &regs);
-}
+
 
 /* Check if mouse is in specified region and button is pressed */
-int mouse_in_region(int x1, int y1, int x2, int y2) {
-    get_mouse_status();
-    return (g_mouse.x >= x1 && g_mouse.x <= x2 && 
-            g_mouse.y >= y1 && g_mouse.y <= y2 &&
-            g_mouse.left_button);
-}
+
 
 /* Draw a circle using midpoint circle algorithm */
-void draw_circle(int cx, int cy, int radius, unsigned char color) {
-    int x = 0;
-    int y = radius;
-    int d = 1 - radius;
-    
-    while (x <= y) {
-        /* Draw 8 symmetric points */
-        plot_pixel(cx + x, cy + y, color);
-        plot_pixel(cx - x, cy + y, color);
-        plot_pixel(cx + x, cy - y, color);
-        plot_pixel(cx - x, cy - y, color);
-        plot_pixel(cx + y, cy + x, color);
-        plot_pixel(cx - y, cy + x, color);
-        plot_pixel(cx + y, cy - x, color);
-        plot_pixel(cx - y, cy - x, color);
-        
-        if (d < 0) {
-            d = d + 2 * x + 3;
-        } else {
-            d = d + 2 * (x - y) + 5;
-            y--;
-        }
-        x++;
-    }
-}
+
 
 /* Draw a filled circle */
-void fill_circle(int cx, int cy, int radius, unsigned char color) {
-    int x, y;
-    int radius_sq = radius * radius;
-    
-    for (y = -radius; y <= radius; y++) {
-        for (x = -radius; x <= radius; x++) {
-            if (x * x + y * y <= radius_sq) {
-                plot_pixel(cx + x, cy + y, color);
-            }
-        }
-    }
-}
+
 
 /* Set CGA color palette */
-void set_cga_palette(int palette) {
-    /* palette: 0 = green/red/brown, 1 = cyan/magenta/white */
-    outportb(0x3D9, 0x30 | (palette ? 0x20 : 0x00));
-}
+
 
 /* Wait for vertical retrace to reduce flicker */
-void wait_vretrace(void) {
-    /* Wait for start of vertical retrace */
-    while (!(inportb(0x3DA) & 0x08));
-    /* Wait for end of vertical retrace */
-    while (inportb(0x3DA) & 0x08);
-}
+
 
 /* Graphics functions for graph_display */
 void auto_scale_graph(void) {
@@ -1393,68 +1331,7 @@ void graph_config_menu(void) {
 }
 
 /* Draw filled rectangle - wrapper for existing fill_rectangle function */
-void draw_filled_rect(int x1, int y1, int x2, int y2, unsigned char color) {
-    fill_rectangle(x1, y1, x2, y2, color);
-}
+
 
 /* Draw readout box with text - complete implementation from TM5000L.c */
-void draw_readout(int x, int y, char *text) {
-    int text_len = strlen(text) * 6;
-    int box_x = x + 5;
-    int box_y = y - 30;
-    int i, j;
-    char enhanced_text[80];
-    
-    /* Position adjustment to keep box on screen */
-    if (box_x + text_len + 8 > SCREEN_WIDTH) {
-        box_x = x - text_len - 12;
-    }
-    if (box_y < 0) box_y = y + 5;
-    
-    /* Fill background with black (color 0) */
-    for (i = 0; i < 16; i++) {
-        for (j = 0; j < text_len + 8; j++) {
-            plot_pixel(box_x + j, box_y + i, 0);
-        }
-    }
-    
-    /* Draw top border (2 lines thick) */
-    for (j = 0; j < text_len + 8; j++) {
-        plot_pixel(box_x + j, box_y, 3);     /* Top line */
-        plot_pixel(box_x + j, box_y + 1, 1); /* Second line */
-    }
-    
-    /* Draw bottom border (2 lines thick) */
-    for (j = 0; j < text_len + 8; j++) {
-        plot_pixel(box_x + j, box_y + 15, 3); /* Bottom line */
-        plot_pixel(box_x + j, box_y + 14, 1); /* Second line */
-    }
-    
-    /* Draw left border (2 pixels thick) */
-    for (i = 0; i < 16; i++) {
-        plot_pixel(box_x, box_y + i, 3);     /* Left edge */
-        plot_pixel(box_x + 1, box_y + i, 1); /* Second column */
-    }
-    
-    /* Draw right border (2 pixels thick) */
-    for (i = 0; i < 16; i++) {
-        plot_pixel(box_x + text_len + 7, box_y + i, 3); /* Right edge */
-        plot_pixel(box_x + text_len + 6, box_y + i, 1); /* Second column */
-    }
-    
-    /* Copy and enhance text with units */
-    strcpy(enhanced_text, text);
-    
-    /* Auto-add voltage units if not present */
-    if (strstr(text, ":") && !strstr(text, "V") && !strstr(text, "mV")) {
-        if (g_graph_scale.max_value - g_graph_scale.min_value < 0.1) {
-            strcat(enhanced_text, " mV");
-        } else {
-            strcat(enhanced_text, " V");
-        }
-    }
-    
-    /* Draw text with shadow effect */
-    draw_text(box_x + 5, box_y + 5, enhanced_text, 1);  /* Shadow (color 1) */
-    draw_text(box_x + 4, box_y + 4, enhanced_text, 3);  /* Main text (color 3) */
-}
+

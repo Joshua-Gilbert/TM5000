@@ -60,7 +60,6 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
 int dm5120_get_multiple_samples(int address, int slot, float far *buffer, int num_samples);
 float read_dm5120_buffered(int address, int slot);
 float read_dm5120_enhanced(int address, int slot);
-float read_dm5120(int address);
 float read_dm5120_voltage(int address);
 void dm5120_clear_statistics(int slot);
 void test_dm5120_comm(int address);
@@ -111,7 +110,6 @@ int ps5010_get_settings(int address, char *buffer, int maxlen);
 int ps5010_get_error(int address);
 void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on);
 void ps5010_set_srq(int address, int on);
-float read_ps5010(int address, int slot);
 void test_ps5010_comm(int address);
 
 /* Measurement functions */

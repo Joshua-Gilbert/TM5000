@@ -40,31 +40,34 @@ void print_string(char *str) {
     }
 }
 
+/* Map an internal (uppercase) unit string to its PostScript-friendly glyph form.
+   Single source of truth shared by get_print_units and get_trace_print_units. */
+static char *ps_unit_of(char *u) {
+    if (strcmp(u, "UV")   == 0) return "uV";   /* For PostScript /mu glyphshow support */
+    if (strcmp(u, "MV")   == 0) return "mV";
+    if (strcmp(u, "V")    == 0) return "V";
+    if (strcmp(u, "HZ")   == 0) return "Hz";
+    if (strcmp(u, "KHZ")  == 0) return "kHz";
+    if (strcmp(u, "MHZ")  == 0) return "MHz";
+    if (strcmp(u, "GHZ")  == 0) return "GHz";
+    if (strcmp(u, "DB")   == 0) return "dB";
+    if (strcmp(u, "UV/S") == 0) return "uV/s";
+    if (strcmp(u, "MV/S") == 0) return "mV/s";
+    if (strcmp(u, "V/S")  == 0) return "V/s";
+    if (strcmp(u, "UA")   == 0) return "uA";
+    if (strcmp(u, "MA")   == 0) return "mA";
+    if (strcmp(u, "A")    == 0) return "A";
+    if (strcmp(u, "UO")   == 0) return "uO";   /* uOhm */
+    if (strcmp(u, "MO")   == 0) return "mO";   /* mOhm */
+    if (strcmp(u, "O")    == 0) return "O";    /* Ohm */
+    return u;  /* power spectrum (^2/Hz) and anything else: pass through */
+}
+
 /* Print-specific unit conversion for PostScript glyphs - supports FFT and counter units */
 void get_print_units(float range, char **unit_str, float *scale_factor, int *decimal_places, char **postscript_unit) {
     /* Get the standard graphics units first */
     get_graph_units(range, unit_str, scale_factor, decimal_places);
-    
-    /* Convert graphics units to print-friendly units with PostScript glyph support */
-    if (strcmp(*unit_str, "UV") == 0) {
-        *postscript_unit = "uV";  /* For PostScript /mu glyphshow support */
-    } else if (strcmp(*unit_str, "MV") == 0) {
-        *postscript_unit = "mV";  /* Standard millivolt */
-    } else if (strcmp(*unit_str, "V") == 0) {
-        *postscript_unit = "V";   /* Standard volt */
-    } else if (strcmp(*unit_str, "HZ") == 0) {
-        *postscript_unit = "Hz";  /* Frequency units */
-    } else if (strcmp(*unit_str, "KHZ") == 0) {
-        *postscript_unit = "kHz";
-    } else if (strcmp(*unit_str, "MHZ") == 0) {
-        *postscript_unit = "MHz";
-    } else if (strcmp(*unit_str, "GHZ") == 0) {
-        *postscript_unit = "GHz";
-    } else if (strcmp(*unit_str, "DB") == 0) {
-        *postscript_unit = "dB";  /* Decibel units for FFT */
-    } else {
-        *postscript_unit = *unit_str;  /* Default passthrough for other units */
-    }
+    *postscript_unit = ps_unit_of(*unit_str);
 }
 
 /* Enhanced unit detection for trace-specific printing */
@@ -100,45 +103,7 @@ void get_trace_print_units(int trace_idx, float range, char **unit_str, float *s
     }
     
     /* Convert to print-friendly PostScript units */
-    if (strcmp(*unit_str, "UV") == 0) {
-        *postscript_unit = "uV";
-    } else if (strcmp(*unit_str, "MV") == 0) {
-        *postscript_unit = "mV";
-    } else if (strcmp(*unit_str, "V") == 0) {
-        *postscript_unit = "V";
-    } else if (strcmp(*unit_str, "HZ") == 0) {
-        *postscript_unit = "Hz";
-    } else if (strcmp(*unit_str, "KHZ") == 0) {
-        *postscript_unit = "kHz";
-    } else if (strcmp(*unit_str, "MHZ") == 0) {
-        *postscript_unit = "MHz";
-    } else if (strcmp(*unit_str, "GHZ") == 0) {
-        *postscript_unit = "GHz";
-    } else if (strcmp(*unit_str, "DB") == 0) {
-        *postscript_unit = "dB";
-    } else if (strcmp(*unit_str, "UV/S") == 0) {
-        *postscript_unit = "uV/s";
-    } else if (strcmp(*unit_str, "MV/S") == 0) {
-        *postscript_unit = "mV/s";
-    } else if (strcmp(*unit_str, "V/S") == 0) {
-        *postscript_unit = "V/s";
-    } else if (strcmp(*unit_str, "UA") == 0) {
-        *postscript_unit = "uA";
-    } else if (strcmp(*unit_str, "MA") == 0) {
-        *postscript_unit = "mA";
-    } else if (strcmp(*unit_str, "A") == 0) {
-        *postscript_unit = "A";
-    } else if (strcmp(*unit_str, "UO") == 0) {
-        *postscript_unit = "uO";  /* µΩ for PostScript */
-    } else if (strcmp(*unit_str, "MO") == 0) {
-        *postscript_unit = "mO";  /* mΩ for PostScript */
-    } else if (strcmp(*unit_str, "O") == 0) {
-        *postscript_unit = "O";   /* Ω for PostScript */
-    } else if (strstr(*unit_str, "²/Hz") != NULL) {
-        *postscript_unit = *unit_str;  /* Power spectrum units pass through */
-    } else {
-        *postscript_unit = *unit_str;
-    }
+    *postscript_unit = ps_unit_of(*unit_str);
 }
 
 /* Print options menu */

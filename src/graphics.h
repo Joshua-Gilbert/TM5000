@@ -18,7 +18,6 @@ void plot_pixel(int x, int y, unsigned char color);
 void draw_line(int x1, int y1, int x2, int y2, unsigned char color);
 void draw_line_aa(int x1, int y1, int x2, int y2, unsigned char color);
 void fill_rectangle(int x1, int y1, int x2, int y2, unsigned char color);
-void draw_filled_rect(int x1, int y1, int x2, int y2, unsigned char color);
 void draw_gradient_rect(int x1, int y1, int x2, int y2, unsigned char color1, unsigned char color2);
 
 /* Text functions */
@@ -28,7 +27,6 @@ void textattr(unsigned char attr);
 void clreol(void);
 void draw_text(int x, int y, char *text, unsigned char color);
 void draw_text_scaled(int x, int y, char *text, unsigned char color, int scale_x, int scale_y);
-void draw_readout(int x, int y, char *text);
 
 /* Enhanced font support */
 int get_font_index(char c);
@@ -63,8 +61,6 @@ int init_mouse(void);
 void show_mouse(void);
 void hide_mouse(void);
 void get_mouse_status(void);
-void set_mouse_pos(int x, int y);
-int mouse_in_region(int x1, int y1, int x2, int y2);
 
 /* Utility functions */
 void get_graph_units(float range, char **unit_str, float *scale_factor, int *decimal_places);

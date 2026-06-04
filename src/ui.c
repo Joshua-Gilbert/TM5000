@@ -1023,25 +1023,13 @@ void calculate_statistics(void) {
 }
 
 /* Data analysis menu stub */
-void data_analysis_menu(void) {
-    printf("\n\nData analysis functions not yet implemented.\n");
-    printf("Press any key to continue...");
-    getch();
-}
+
 
 /* Unit conversion menu stub */
-void unit_conversion_menu(void) {
-    printf("\n\nUnit conversion functions not yet implemented.\n");
-    printf("Press any key to continue...");
-    getch();
-}
+
 
 /* Calculator menu stub */
-void calculator_menu(void) {
-    printf("\n\nCalculator functions not yet implemented.\n");
-    printf("Press any key to continue...");
-    getch();
-}
+
 
 /* Module selection menu for monitoring */
 void module_selection_menu(void) {

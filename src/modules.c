@@ -322,104 +322,59 @@ void dc5010_set_function(int address, char *function, char *channel) {
 }
 
 void dc5010_set_coupling(int address, char channel, char *coupling) {
-    
-    sprintf(gpib_cmd_buffer, "COU CHA %c %s", channel, coupling);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_coupling(address, channel, coupling);
 }
 
 void dc5010_set_impedance(int address, char channel, char *impedance) {
-    
-    sprintf(gpib_cmd_buffer, "TER CHA %c %s", channel, impedance);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_impedance(address, channel, impedance);
 }
 
 void dc5010_set_attenuation(int address, char channel, char *attenuation) {
-    
-    sprintf(gpib_cmd_buffer, "ATT CHA %c %s", channel, attenuation);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_attenuation(address, channel, attenuation);
 }
 
 void dc5010_set_slope(int address, char channel, char *slope) {
-    
-    sprintf(gpib_cmd_buffer, "SLO CHA %c %s", channel, slope);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_slope(address, channel, slope);
 }
 
 void dc5010_set_level(int address, char channel, float level) {
-    
-    sprintf(gpib_cmd_buffer, "LEV CHA %c %.3f", channel, level);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_level(address, channel, level);
 }
 
 void dc5010_set_filter(int address, int enabled) {
-    gpib_write(address, enabled ? "FIL ON" : "FIL OFF");
-    delay(50);
+    dc5009_set_filter(address, enabled);
 }
 
 void dc5010_set_gate_time(int address, float gate_time) {
-    
-    sprintf(gpib_cmd_buffer, "GATE %.3f", gate_time);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_gate_time(address, gate_time);
 }
 
 void dc5010_set_averaging(int address, int count) {
-    
-    sprintf(gpib_cmd_buffer, "AVG %d", count);
-    gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    dc5009_set_averaging(address, count);
 }
 
 void dc5010_auto_trigger(int address) {
-    gpib_write(address, "AUTO");
-    delay(100);
+    dc5009_auto_trigger(address);
 }
 
 void dc5010_start_measurement(int address) {
-    gpib_write(address, "START");
-    delay(50);
+    dc5009_start_measurement(address);
 }
 
 void dc5010_stop_measurement(int address) {
-    gpib_write(address, "STOP");
-    delay(50);
+    dc5009_stop_measurement(address);
 }
 
 float dc5010_read_measurement(int address) {
-    
-    float value = 0.0;
-    
-    gpib_write(address, "SEND");
-    delay(100);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%f", &value) == 1 || sscanf(gpib_response_buffer, "%e", &value) == 1) {
-            return value;
-        }
-    }
-    return 0.0;
+    return dc5009_read_measurement(address);
 }
 
 int dc5010_check_overflow(int address) {
-    
-    
-    gpib_write(address, "OVER?");
-    delay(50);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        return (strcmp(gpib_response_buffer, "ON") == 0);
-    }
-    return 0;
+    return dc5009_check_overflow(address);
 }
 
 void dc5010_clear_overflow(int address) {
-    gpib_write(address, "OVER OFF");
-    delay(50);
+    dc5009_clear_overflow(address);
 }
 
 /* DC5010 specific functions */
@@ -443,34 +398,24 @@ void dc5010_measure_fall_time(int address) {
 
 /* DC5010 Query Commands */
 void dc5010_query_function(int address, char *buffer) {
-    gpib_write(address, "FUNC?");
-    delay(50);
-    gpib_read(address, gpib_response_buffer, 80);
+    dc5009_query_function(address, buffer);
 }
 
 void dc5010_query_id(int address, char *buffer) {
-    gpib_write(address, "ID?");
-    delay(50);
-    gpib_read(address, gpib_response_buffer, 80);
+    dc5009_query_id(address, buffer);
 }
 
 int dc5010_query_error(int address) {
-    
-    gpib_write(address, "ERR?");
-    delay(50);
-    gpib_read(address, gpib_response_buffer, 80);
-    return atoi(gpib_response_buffer);
+    return dc5009_query_error(address);
 }
 
 /* DC5010 Advanced Functions */
 void dc5010_set_preset(int address, int enabled) {
-    gpib_write(address, enabled ? "PRE ON" : "PRE OFF");
-    delay(50);
+    dc5009_set_preset(address, enabled);
 }
 
 void dc5010_manual_timing(int address) {
-    gpib_write(address, "TMAN");
-    delay(50);
+    dc5009_manual_timing(address);
 }
 
 void dc5010_totalize_sum(int address) {
@@ -489,44 +434,16 @@ void dc5010_propagation_delay(int address) {
 }
 
 void dc5010_set_srq(int address, int enabled) {
-    gpib_write(address, enabled ? "RQS ON" : "RQS OFF");
-    delay(50);
+    dc5009_set_srq(address, enabled);
 }
 
 unsigned char dc5010_get_status_byte(int address) {
-    unsigned char status;
-    ieee_spoll(address, &status);
-    return status;
+    return dc5009_get_status_byte(address);
 }
 
 /* DC5010 Extended Range Measurement */
 double dc5010_read_extended_range(int address) {
-    
-    float display_value = 0.0;
-    int overflow_count = 0;
-    unsigned char status;
-    double total_result;
-    const double OVERFLOW_MULTIPLIER = 10995.1162778;
-    
-    /* Read display value */
-    gpib_write(address, "SEND");
-    delay(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        sscanf(gpib_response_buffer, "%f", &display_value);
-    }
-    
-    /* Check for overflow condition */
-    ieee_spoll(address, &status);
-    if (status & 0x02) {  /* Overflow bit in status byte */
-        /* Count overflow events - simplified approach */
-        /* In a real implementation, this would track overflow events over time */
-        overflow_count = 1;  /* This would need to be maintained globally */
-    }
-    
-    /* Calculate extended range result per programming guide */
-    total_result = (double)display_value + (overflow_count * OVERFLOW_MULTIPLIER);
-    
-    return total_result;
+    return dc5009_read_extended_range(address);
 }
 
 /* DC5009 Communication Test */
@@ -3593,42 +3510,7 @@ int dm5120_get_multiple_samples(int address, int slot, float far *buffer, int nu
 }
 
 /* Example usage of corrected DM5120 buffering */
-void dm5120_buffer_example(int address, int slot) {
-    float samples[100];
-    int count, i;
-    dm5120_config *cfg = &g_dm5120_config[slot];
-    
-    printf("\nDM5120 Buffer Example for Slot %d\n", slot);
-    printf("Current settings: %d digits, buffer size %d\n", 
-           cfg->digits, cfg->buffer_size);
-    
-    /* Method 1: Direct buffer fill */
-    printf("\nMethod 1: Direct buffer fill (100 samples)\n");
-    count = dm5120_fill_buffer_complete(address, slot, samples, 100);
-    printf("Collected %d samples\n", count);
-    
-    if (count > 0) {
-        printf("First 5 samples: ");
-        for (i = 0; i < 5 && i < count; i++) {
-            printf("%.6f ", samples[i]);
-        }
-        printf("\n");
-    }
-    
-    /* Method 2: Using convenience function */
-    printf("\nMethod 2: Convenience function (50 samples)\n");
-    count = dm5120_get_multiple_samples(address, slot, samples, 50);
-    printf("Collected %d samples\n", count);
-    
-    /* Method 3: Sequential buffered readings */
-    printf("\nMethod 3: Sequential buffered readings (10 calls)\n");
-    for (i = 0; i < 10; i++) {
-        float value = read_dm5120_buffered(address, slot);
-        printf("Reading %d: %.6f\n", i+1, value);
-    }
-    
-    printf("\nBuffer example complete.\n");
-}
+
 float read_dm5120_enhanced(int address, int slot) {
     float value = 0.0;
     int retry;
@@ -3722,17 +3604,7 @@ float read_dm5120_enhanced(int address, int slot) {
     
     return 0.0;
 }
-float read_dm5120(int address) {
-    int i;
-    for (i = 0; i < 10; i++) {
-        if (g_system->modules[i].enabled && 
-            g_system->modules[i].gpib_address == address &&
-            g_system->modules[i].module_type == MOD_DM5120) {
-            return read_dm5120_enhanced(address, i);
-        }
-    }
-    return read_dm5120_enhanced(address, 0);
-}
+
 float read_dm5120_voltage(int address) {
     
     float value = 0.0;
@@ -5141,21 +5013,7 @@ void ps5010_set_srq(int address, int on) {
     gpib_write(address, on ? "RQS ON" : "RQS OFF");
     delay(50);
 }
-float read_ps5010(int address, int slot) {
-    ps5010_config *cfg = &g_ps5010_config[slot];
-    int neg_stat, pos_stat, log_stat;
-    
-    if (ps5010_read_regulation(address, &neg_stat, &pos_stat, &log_stat)) {
-        cfg->cv_mode1 = (pos_stat == 1);
-        cfg->cc_mode1 = (pos_stat == 2);
-        cfg->cv_mode2 = (neg_stat == 1);
-        cfg->cc_mode2 = (neg_stat == 2);
-        
-        return 0.0;
-    }
-    
-    return 0.0;
-}
+
 void test_ps5010_comm(int address) {
     
     int neg_stat, pos_stat, log_stat;

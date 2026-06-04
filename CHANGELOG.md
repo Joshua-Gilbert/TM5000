@@ -49,6 +49,23 @@ clean (0 errors, no new warnings); verified with the OpenWatcom v2 toolchain.
 - `src/makefile`: overridable `WATCOM_BIN`, removed the dead `trig287.asm` rule, fixed
   the stale `help` text, flagged the incomplete `wcl` target (object list/flags unchanged).
 
+### Code cleanup (behavior-preserving refactor)
+From the code-review pass; build-verified and confirmed by an adversarial
+behavior-preservation review. No runtime behavior change.
+- Consolidated the **DC5009/DC5010 driver twins**: 22 byte-identical `dc5010_*`
+  functions now forward to their `dc5009_*` implementations (single source of truth;
+  the DC5010-unique functions are untouched).
+- Deduplicated the two PostScript-unit ladders in `print.c` into one `ps_unit_of()` helper.
+- Removed **15 dead (zero-caller) functions** + their stale prototypes: graphics
+  primitives (`draw_circle`, `fill_circle`, `draw_rectangle`, `set_cga_palette`,
+  `wait_vretrace`, `draw_filled_rect`, `draw_readout`, `mouse_in_region`,
+  `set_mouse_pos`), unreachable stub menus (`data_analysis_menu`, `unit_conversion_menu`,
+  `calculator_menu`), and superseded/demo readers (`read_dm5120`, `read_ps5010`,
+  `dm5120_buffer_example`).
+- **Binary: 283,388 → 280,348 bytes (−3,040, −1.1%)** (OpenWatcom v2). The OpenWatcom
+  linker does not fold/dead-strip, so the savings come from removing whole dead
+  functions; consolidating small duplicate functions is binary-neutral.
+
 ---
 
 ## [3.5] — July 2025 — Data Management Foundation
