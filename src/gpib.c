@@ -69,6 +69,9 @@ int gpib_check_srq(int address) {
 const char gpib_driver_name[] = "Personal488 (Driver488)";
 const char gpib_driver_note[] = "Note: Personal488 enforces strict command/response pairing\n";
 
+/* Driver488 build: keep TM5000's per-device LOCAL on exit */
+int gpib_release_bus(void) { return 0; }
+
 void gpib_driver_help(void) {
     printf("\nMake sure:\n");
     printf("1. DRVR488.EXE is loaded\n");

@@ -133,11 +133,13 @@ void delay(unsigned int milliseconds) {
 void cleanup(void) {
     int i;
     
-    /* Put all modules in local mode first */
-    for (i = 0; i < 10; i++) {
-        if (g_system && g_system->modules[i].enabled &&
-            !g_system->modules[i].is_result && g_system->modules[i].gpib_address) {
-            gpib_local(g_system->modules[i].gpib_address);   /* not FFT/math slots */
+    /* Put all modules in local mode first (GRIDGPIB: REN off does it all) */
+    if (!gpib_release_bus()) {
+        for (i = 0; i < 10; i++) {
+            if (g_system && g_system->modules[i].enabled &&
+                !g_system->modules[i].is_result && g_system->modules[i].gpib_address) {
+                gpib_local(g_system->modules[i].gpib_address);   /* not FFT/math slots */
+            }
         }
     }
     

@@ -30,6 +30,8 @@ int gpib_probe(int address, char *id, int maxlen);
 /* Which GPIB driver this build talks to (start-up banner, terminal) */
 extern const char gpib_driver_name[];
 void gpib_driver_help(void);        /* hints when init_gpib_system() fails */
+int gpib_release_bus(void);         /* on exit: 1 = all devices put to local
+                                       by the driver, 0 = caller does it */
 extern const char gpib_driver_note[];   /* extra start-up note, may be "" */
 
 /* DM5120-specific GPIB functions */

@@ -227,6 +227,15 @@ int gpib_check_srq(int address)
 const char gpib_driver_name[] = "GRIDGPIB";
 const char gpib_driver_note[] = "";
 
+/* GRIDGPIB build: on exit drop REN - every device returns to local in one
+   register write, instead of addressing each slot (GTL), which waited on
+   command-byte timeouts when the bus was left in an odd state */
+int gpib_release_bus(void)
+{
+    gg_local(GG_ALL);
+    return 1;
+}
+
 void gpib_driver_help(void)
 {
     printf("\nMake sure:\n");
