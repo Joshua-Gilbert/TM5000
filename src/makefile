@@ -18,18 +18,40 @@ CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100 -zm
 # 2.0's wasm rejects the mismatch). trig287 adds -fp2 in its own rule.
 ASMFLAGS = -2
 TARGET = tm5000.exe
+# Grid-OS: TM5000G - same program on the GRIDGPIB resident driver
+TARGET_G = tm5000g.exe
 
 # Object files with assembly optimizations
 OBJS = main.obj gpib.obj modules.obj graphics.obj ui.obj data.obj print.obj math_functions.obj math_enhanced.obj ui_math_menus.obj module_funcs.obj ieeeio_w.obj config_profiles.obj export_enhanced.obj cga_asm.obj mem286.obj trig287_simple.obj fixed286.obj
 
-# Default target
-all: $(TARGET)
+# GRIDGPIB build: gpib_gg + gridgpib replace gpib; modules.c and
+# module_funcs.c are compiled again with -DGRIDGPIB (no fixed GPIB waits)
+OBJS_G = main.obj gpib_gg.obj gridgpib.obj modules_g.obj graphics.obj ui.obj data.obj print.obj math_functions.obj math_enhanced.obj ui_math_menus.obj module_funcs_g.obj ieeeio_w.obj config_profiles.obj export_enhanced.obj cga_asm.obj mem286.obj trig287_simple.obj fixed286.obj
+
+# Default target: both builds
+all: $(TARGET) $(TARGET_G)
 
 # Link executable. OPTION ELIMINATE drops unreferenced segments (dead-code
 # elimination); combined with -zm it removes uncalled functions and the dormant
 # assembly modules from the image.
 $(TARGET): $(OBJS)
 	$(LINKER) option eliminate system dos file main.obj,gpib.obj,modules.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET)
+
+# TM5000G (GRIDGPIB) executable
+$(TARGET_G): $(OBJS_G)
+	$(LINKER) option eliminate system dos file main.obj,gpib_gg.obj,gridgpib.obj,modules_g.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs_g.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET_G)
+
+gpib_gg.obj: gpib_gg.c gpib.h gridgpib.h tm5000.h
+	$(CC) $(CFLAGS) gpib_gg.c
+
+gridgpib.obj: gridgpib.c gridgpib.h
+	$(CC) $(CFLAGS) gridgpib.c
+
+modules_g.obj: modules.c modules.h tm5000.h gpib.h data.h
+	$(CC) $(CFLAGS) -DGRIDGPIB -fo=modules_g.obj modules.c
+
+module_funcs_g.obj: module_funcs.c module_funcs.h tm5000.h
+	$(CC) $(CFLAGS) -DGRIDGPIB -fo=module_funcs_g.obj module_funcs.c
 
 # Compile main program
 main.obj: main.c tm5000.h
@@ -105,6 +127,7 @@ fixed286.obj: fixed286.asm
 clean:
 	-del *.obj 2>nul || rm -f *.obj
 	-del $(TARGET) 2>nul || rm -f $(TARGET)
+	-del $(TARGET_G) 2>nul || rm -f $(TARGET_G)
 
 # Alternative single-command build (C only, INCOMPLETE).
 # NOTE: this target omits math_enhanced.c, ui_math_menus.c, config_profiles.c,
@@ -119,7 +142,7 @@ help:
 	@echo =================================================
 	@echo ""
 	@echo Available targets:
-	@echo   all     - Build complete system with assembly optimizations (default)
+	@echo   all     - Build tm5000.exe (Driver488) and tm5000g.exe (GRIDGPIB) (default)
 	@echo   wcl     - Build using wcl single command (C only)
 	@echo   clean   - Remove object files and executable
 	@echo   help    - Show this help

@@ -14,6 +14,7 @@
 
 #include "tm5000.h"
 #include "math_functions.h"
+#include "data.h"
 #include <math.h>
 
 /* Assembly function prototypes for 286/287 optimizations */
@@ -758,8 +759,8 @@ void execute_fft_with_config(void) {
 void perform_differentiation(void) {
     int slot, i;
     int target_slot = -1;
-    float far *source_data;
-    float far *result_data;
+    double far *source_data;
+    double far *result_data;
     int count;
     float dt;
     float scale_factor;
@@ -783,7 +784,7 @@ void perform_differentiation(void) {
     source_data = g_system->modules[slot].module_data;
     count = g_system->modules[slot].module_data_count;
     
-    dt = g_control_panel.sample_rate_ms / 1000.0;  /* Convert to seconds */
+    dt = slot_interval_s(slot);   /* Grid-OS: measured interval (incl. averaging) */
     
     printf("\nDifferentiating %d samples...\n", count);
     printf("Time step: %.3f seconds\n", dt);
@@ -864,8 +865,8 @@ void perform_differentiation(void) {
 void perform_integration(void) {
     int slot, i;
     int target_slot = -1;
-    float far *source_data;
-    float far *result_data;
+    double far *source_data;
+    double far *result_data;
     int count;
     float dt;
     float sum;
@@ -890,7 +891,7 @@ void perform_integration(void) {
     source_data = g_system->modules[slot].module_data;
     count = g_system->modules[slot].module_data_count;
     
-    dt = g_control_panel.sample_rate_ms / 1000.0;  /* Convert to seconds */
+    dt = slot_interval_s(slot);   /* Grid-OS: measured interval (incl. averaging) */
     
     printf("\nIntegrating %d samples...\n", count);
     printf("Time step: %.3f seconds\n", dt);
@@ -957,8 +958,8 @@ void perform_integration(void) {
 void perform_smoothing(void) {
     int slot, i, j;
     int target_slot = -1;
-    float far *source_data;
-    float far *result_data;
+    double far *source_data;
+    double far *result_data;
     int count;
     int window_size;
     float sum;

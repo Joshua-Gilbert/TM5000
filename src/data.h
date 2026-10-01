@@ -19,8 +19,20 @@
 /* Data buffer management */
 int allocate_module_buffer(int slot, unsigned int size);
 void free_module_buffer(int slot);
-void store_module_data(int slot, float value);
+void store_module_data(int slot, double value);
 void clear_module_data(int slot);
+
+/* Grid-OS: measurement-time stamps for the graph's time axis.  The monitor
+ * sets g_mclock (BIOS ticks of measurement time, monotonic) and
+ * g_mclock_valid around its own store; a sample stored any other way (file
+ * load, single readings) has no time stamp and turns the slot's time axis
+ * off until it is cleared.  g_store_suppress stops readers that store their
+ * own result (read_dm5120_enhanced) from adding a second sample per pass.  */
+extern unsigned long g_mclock;
+extern char g_mclock_valid;
+extern char g_store_suppress;
+long sample_time_ms(int slot, unsigned int idx);   /* -1 = not available */
+double slot_interval_s(int slot);
 
 /* File I/O operations */
 void save_data(void);
@@ -102,7 +114,7 @@ int export_measurement_summary(char *filename, export_config *config);
 
 /* Real-time Export Functions */
 int start_realtime_export(char *filename_template, export_config *config);
-int update_realtime_export(int slot, float value, time_t timestamp);
+int update_realtime_export(int slot, double value, time_t timestamp);
 int stop_realtime_export(void);
 int pause_realtime_export(void);
 int resume_realtime_export(void);
@@ -115,9 +127,9 @@ int export_measurement_conditions(FILE *file, export_config *config);
 int export_calibration_info(FILE *file, export_config *config);
 
 /* Data Format Functions */
-int format_data_value(char *buffer, int buffer_size, float value, export_config *config);
+int format_data_value(char *buffer, int buffer_size, double value, export_config *config);
 int format_timestamp(char *buffer, int buffer_size, time_t timestamp, export_config *config);
-int format_scientific_notation(char *buffer, int buffer_size, float value, int precision);
+int format_scientific_notation(char *buffer, int buffer_size, double value, int precision);
 int generate_filename_from_template(char *output, int output_size, char *template, time_t timestamp);
 
 /* Compression Functions */

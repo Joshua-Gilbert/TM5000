@@ -64,7 +64,23 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (~276 KB).
+Output: `tm5000.exe` (Driver488) and `tm5000g.exe` (GRIDGPIB, ~290 KB each).
+
+`tm5000g.exe` uses `gpib_gg.c` + `gridgpib.c` instead of `gpib.c`, and compiles
+`modules.c` / `module_funcs.c` a second time with `-DGRIDGPIB` (as
+`modules_g.obj` / `module_funcs_g.obj`) so the fixed Driver488 pacing waits
+(`GPIB_PACE`) compile to nothing. It needs `GRIDGPIB.COM` loaded instead of
+`DRVR488` — see [`driver/gridgpib/`](../driver/gridgpib).
+
+OpenWatcom 2.0 for Linux (`binl64`) also builds the tree with GNU make (its
+`wcc` writes `.o` by default, hence `-fo=.obj`):
+
+```sh
+make CC="wcc -q -fo=.obj" ASM="wasm -q -fo=.obj" LINKER="wlink option quiet"
+```
+
+Built this way, `tm5000g.exe` is byte-identical to the build tested on the
+GRiDCase 1520.
 
 Other makefile targets:
 
