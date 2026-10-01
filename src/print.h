@@ -19,6 +19,13 @@ void print_graph_postscript(void);
 void lpt_send_byte(unsigned char data);
 void print_string(char *str);
 int print_screen_ps(const char *caption);
+
+/* what the graph's P key prints (set in the print menu) */
+#define PRINT_MODE_POSTSCRIPT 0
+#define PRINT_MODE_TEXT       1
+#define PRINT_MODE_SCREEN     2
+extern int g_print_mode;
+void print_graph_selected(void);
 extern int g_lpt_error;
 
 /* Unit conversion for printing */

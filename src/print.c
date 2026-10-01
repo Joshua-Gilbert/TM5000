@@ -247,6 +247,22 @@ static char *x_title(int max_samples) {
 }
 
 /* Print options menu */
+/* Grid-OS: what the graph's P key prints - the print menu sets it (the
+   last kind printed from the menu, or option 5) */
+int g_print_mode = PRINT_MODE_POSTSCRIPT;
+
+static const char *print_mode_name(int m) {
+    return m == PRINT_MODE_TEXT ? "Text graph" :
+           m == PRINT_MODE_SCREEN ? "Screen copy" : "PostScript plot";
+}
+
+/* P from the graph, text and PostScript modes (screen copy is done by the
+   graph itself, which still has the picture on screen) */
+void print_graph_selected(void) {
+    if (g_print_mode == PRINT_MODE_TEXT) print_graph_text();
+    else print_graph_postscript();
+}
+
 void print_graph_menu(void) {
     int choice;
     char input_buffer[80];
@@ -265,6 +281,7 @@ void print_graph_menu(void) {
         printf("2. Brother PostScript (HL5370DL)\n");
         printf("3. Toggle custom header ON/OFF\n");
         printf("4. Set custom header text\n");
+        printf("5. P key in the graph prints: %s\n", print_mode_name(g_print_mode));
         printf("0. Cancel\n\n");
         printf("Select option: ");
         
@@ -272,11 +289,18 @@ void print_graph_menu(void) {
         
         switch(choice) {
             case '1':
+                g_print_mode = PRINT_MODE_TEXT;
                 print_graph_text();
                 return;
             case '2':
+                g_print_mode = PRINT_MODE_POSTSCRIPT;
                 print_graph_postscript();
                 return;
+            case '5':
+                g_print_mode = (g_print_mode == PRINT_MODE_POSTSCRIPT) ? PRINT_MODE_TEXT :
+                               (g_print_mode == PRINT_MODE_TEXT) ? PRINT_MODE_SCREEN :
+                                                                   PRINT_MODE_POSTSCRIPT;
+                break;
             case '3':
                 g_use_custom_header = !g_use_custom_header;
                 break;

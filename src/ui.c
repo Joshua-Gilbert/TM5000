@@ -2450,9 +2450,14 @@ void graph_display(void) {
                     done = 1;
                     break;
                 
-                case 'P':  /* Grid-OS: print the screen as shown (PostScript) */
+                case 'P':  /* Grid-OS: print with the print menu's setting */
                     ptr_hide();
-                    {
+                    if (g_print_mode != PRINT_MODE_SCREEN) {
+                        text_mode();
+                        print_graph_selected();
+                        need_redraw = 1;
+                        init_graphics();
+                    } else {
                         int err;
                         _fmemset(video_mem + 97 * 80 + 52, 0, 28);   /* footer, right */
                         _fmemset(video_mem + 8192 + 97 * 80 + 52, 0, 28);
@@ -2469,7 +2474,7 @@ void graph_display(void) {
                     }
                     break;
                     
-                case 'O':  /* Print options: text graph, PostScript plot, header */
+                case 'O':  /* Print options: text graph, PostScript plot, header, P key */
                     ptr_hide();
                     text_mode();
                     print_graph_menu();
