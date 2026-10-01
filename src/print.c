@@ -229,6 +229,15 @@ static double run_seconds(int max_samples, int *measured, int *avg) {
             g_system->modules[i].avg_shift > sh)
             sh = g_system->modules[i].avg_shift;
     *avg = 1 << sh;
+    /* a computed spectrum (FFT): the duration of the measurement it came from */
+    for (i = 0; i < 10; i++) {
+        if (g_traces[i].enabled && g_traces[i].data_count == max_samples &&
+            g_system->modules[i].is_result && g_system->modules[i].src_seconds > 0.0f) {
+            *measured = g_system->modules[i].src_measured;
+            *avg = 1;
+            return g_system->modules[i].src_seconds;
+        }
+    }
     if (time_axis_slot(max_samples, &sp) >= 0) {
         *measured = 1;
         return sp / 1000.0;
@@ -236,6 +245,16 @@ static double run_seconds(int max_samples, int *measured, int *avg) {
     *measured = 0;
     return (max_samples > 1) ?
         (double)(max_samples - 1) * g_control_panel.sample_rate_ms * (1 << sh) / 1000.0 : 0.0;
+}
+
+/* the FFT result slot being printed (longest trace is a spectrum), or -1 */
+static int spectrum_slot(int max_samples) {
+    int i;
+    for (i = 0; i < 10; i++)
+        if (g_traces[i].enabled && g_traces[i].data_count == max_samples &&
+            g_system->modules[i].is_result && g_system->modules[i].src_seconds > 0.0f)
+            return i;
+    return -1;
 }
 
 /* x label k of n for the printed axis: time when the X:TIME view is on and
@@ -508,7 +527,11 @@ void print_graph_text(void) {
     {
         int meas, avg;
         double secs = run_seconds(max_samples, &meas, &avg);
-        if (max_samples > 1 && secs > 0.0)
+        int sp = spectrum_slot(max_samples);
+        if (sp >= 0)
+            sprintf(label, "Spectrum: %d bins of %.4g Hz, from %.1f s of measurement%s\r\n",
+                    max_samples, (double)g_traces[sp].x_scale, secs, meas ? " (measured)" : "");
+        else if (max_samples > 1 && secs > 0.0)
             sprintf(label, "Sample interval: %.0f ms %s, Samples: %d\r\n",
                     secs * 1000.0 / (max_samples - 1), meas ? "(measured)" : "(set)", max_samples);
         else
@@ -1039,7 +1062,10 @@ void print_graph_postscript(void) {
     {
         int meas, avg;
         double secs = run_seconds(max_samples, &meas, &avg);
-        if (max_samples > 1 && secs > 0.0)
+        int sp = spectrum_slot(max_samples);
+        if (sp >= 0)
+            sprintf(label, "(%.4g Hz/bin) show\r\n", (double)g_traces[sp].x_scale);
+        else if (max_samples > 1 && secs > 0.0)
             sprintf(label, "(%.0f ms%s%s) show\r\n", secs * 1000.0 / (max_samples - 1),
                     meas ? " measured" : "", avg > 1 ? "" : "");
         else
@@ -1611,6 +1637,8 @@ void print_report(void) {
         }
         print_string("\r\n");
         t = sample_time_ms(i, m->module_data_count - 1);
+        if (t < 0 && m->is_result && m->src_seconds > 0.0f)
+            t = (long)(m->src_seconds * 1000.0f);      /* FFT: source measurement */
         if (t >= 0) {
             if (t < 60000L) sprintf(buffer, "  Duration: %.1f seconds (measured)\r\n", t / 1000.0);
             else            sprintf(buffer, "  Duration: %.1f minutes (measured)\r\n", t / 60000.0);

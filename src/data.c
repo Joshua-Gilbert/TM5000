@@ -63,6 +63,8 @@ static void reset_slot_state(tm5000_module *m) {
     m->acc_n = 0;
     m->avg_shift = 0;
     m->time_ok = 0;               /* set again by the first time-stamped sample */
+    m->src_seconds = 0.0f;
+    m->src_measured = 0;
 }
 
 int allocate_module_buffer(int slot, unsigned int size) {
@@ -176,6 +178,21 @@ double slot_interval_s(int slot) {
     long t = (m->module_data_count > 1) ? sample_time_ms(slot, m->module_data_count - 1) : -1L;
     if (t > 0) return t / 1000.0 / (m->module_data_count - 1);
     return g_control_panel.sample_rate_ms / 1000.0 * (1u << m->avg_shift);
+}
+
+/* Give a computed time-domain trace (derivative, integral, smoothing, trace
+   math) the time stamps of the trace it was computed from */
+void copy_time_axis(int dst, int src) {
+    tm5000_module *d = &g_system->modules[dst], *s = &g_system->modules[src];
+    unsigned int k, n;
+    if (dst == src) return;
+    if (!d->sample_t || !s->sample_t || !s->time_ok) { d->time_ok = 0; return; }
+    n = d->module_data_count < s->module_data_count ? d->module_data_count : s->module_data_count;
+    if (n > d->module_data_size) n = d->module_data_size;
+    for (k = 0; k < n; k++) d->sample_t[k] = s->sample_t[k];
+    d->t_origin = s->t_origin;
+    d->avg_shift = s->avg_shift;
+    d->time_ok = (n == d->module_data_count);
 }
 
 /* Clear all data in a module's buffer */

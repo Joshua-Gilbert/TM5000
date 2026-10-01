@@ -143,8 +143,8 @@ int fft_configuration_menu(void) {
     float temp_float;
     char *window_names[] = {"Rectangular", "Hamming", "Hanning", "Blackman"};
     char *format_names[] = {"dB Magnitude", "Linear Magnitude", "Power Spectrum"};
-    int valid_sizes[] = {64, 128, 256, 512, 1024};
-    int num_sizes = 5;
+    int valid_sizes[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
+    int num_sizes = 8;     /* Grid-OS: up to 8192 (pooled buffers hold 8192) */
     int i, size_index;
     
     while (!done) {
@@ -166,12 +166,12 @@ int fft_configuration_menu(void) {
             printf("  Sample rate: Auto-detect\n");
         }
         
-        printf("\nMemory usage: ~%dKB working space\n", 
-               (g_fft_config.input_points * 8 + 1023) / 1024);
+        printf("\nMemory usage: ~%ldKB working space\n", 
+               ((long)g_fft_config.input_points * 12 + (long)g_fft_config.output_points * 12 + 1023) / 1024);
         
         printf("\nOptions:\n");
-        printf("1. Input Size [64|128|256|512|1024]\n");
-        printf("2. Output Resolution [32|64|128|256|512|1024]\n");
+        printf("1. Input Size [64 ... 8192]\n");
+        printf("2. Output Resolution [64 ... input size]\n");
         printf("3. Window Function\n");
         printf("4. Processing Options\n");
         printf("5. Sample Rate\n");
@@ -312,7 +312,8 @@ void execute_fft_with_config(void) {
     float max_mag = 0.0;
     int target_slot = -1;
     int le, le2;
-    float ur, ui, sr, si;
+    double ur, ui, sr, si, ur_old;   /* Grid-OS: double twiddles - the float
+                                        recurrence drifted over 4096 steps */
     int ip;
     int dft_size;
     float sum_real, sum_imag;
@@ -381,8 +382,10 @@ void execute_fft_with_config(void) {
         sample_rate = g_fft_config.custom_sample_rate;
         printf("Sample rate: %.2f Hz (custom)\n", sample_rate);
     } else {
-        sample_rate = 1000.0 / g_control_panel.sample_rate_ms;
-        printf("Sample rate: %.2f Hz (auto-detect)\n", sample_rate);
+        /* Grid-OS: the source's measured sample interval (includes AUTO
+           rate, slow passes and averaging), not the set rate */
+        sample_rate = (float)(1.0 / slot_interval_s(slot));
+        printf("Sample rate: %.4f Hz (measured)\n", sample_rate);
     }
     
     freq_resolution = sample_rate / N;
@@ -490,7 +493,7 @@ void execute_fft_with_config(void) {
             ui = 0.0;
             
             /* Calculate twiddle factors with range validation */
-            angle = 3.14159 / le2;
+            angle = 3.14159265358979 / le2;
             if (angle > 1000.0 || angle < -1000.0) {
                 printf("Warning: Extreme twiddle angle detected, using approximation\n");
                 sr = 1.0 - angle*angle/2.0;  /* cos approximation */
@@ -518,15 +521,15 @@ void execute_fft_with_config(void) {
                 }
                 
                 /* Update twiddle factors with validation */
-                temp_real = ur;
-                ur = temp_real * sr - ui * si;
-                ui = temp_real * si + ui * sr;
+                ur_old = ur;
+                ur = ur_old * sr - ui * si;
+                ui = ur_old * si + ui * sr;
                 
                 /* Check for overflow/underflow in twiddle factors */
                 if (ur > 1e10 || ur < -1e10 || ui > 1e10 || ui < -1e10) {
                     printf("Warning: Twiddle factor overflow, resetting\n");
-                    ur = cos(3.14159 * j / le2);
-                    ui = -sin(3.14159 * j / le2);
+                    ur = cos(3.14159265358979 * j / le2);
+                    ui = -sin(3.14159265358979 * j / le2);
                 }
             }
             
@@ -666,9 +669,23 @@ void execute_fft_with_config(void) {
     strcpy(g_system->modules[target_slot].description, "FFT Result");
     g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
     
-    /* Allocate buffer and store results */
-    if (!g_system->modules[target_slot].module_data) {
+    /* Allocate buffer and store results (a reused slot's buffer may be too
+       small for a larger output - it was written past its end before) */
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)g_fft_config.output_points) {
         allocate_module_buffer(target_slot, g_fft_config.output_points);
+    }
+    /* the measurement the spectrum was computed from, for printouts */
+    {
+        long t0 = sample_time_ms(slot, 0);
+        long t1 = sample_time_ms(slot, actual_input_size - 1);
+        if (target_slot != slot && t0 >= 0 && t1 >= t0) {
+            g_system->modules[target_slot].src_seconds = (t1 - t0) / 1000.0f;
+            g_system->modules[target_slot].src_measured = 1;
+        } else {
+            g_system->modules[target_slot].src_seconds = (float)((actual_input_size - 1) / sample_rate);
+            g_system->modules[target_slot].src_measured = 0;
+        }
     }
     
     /* Apply peak centering if enabled */
@@ -810,7 +827,8 @@ void perform_differentiation(void) {
     strcpy(g_system->modules[target_slot].description, "Derivative");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)count) {
         allocate_module_buffer(target_slot, count);
     }
     result_data = g_system->modules[target_slot].module_data;
@@ -838,6 +856,7 @@ void perform_differentiation(void) {
     }
     
     g_system->modules[target_slot].module_data_count = count;
+    copy_time_axis(target_slot, slot);   /* Grid-OS: X:TIME and durations */
     
     /* Set up trace for display with proper derivative units */
     if (target_slot >= 0 && target_slot < 10) {
@@ -917,7 +936,8 @@ void perform_integration(void) {
     strcpy(g_system->modules[target_slot].description, "Integral");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)count) {
         allocate_module_buffer(target_slot, count);
     }
     result_data = g_system->modules[target_slot].module_data;
@@ -934,18 +954,19 @@ void perform_integration(void) {
         for (i = 1; i < count; i++) {
             double trapezoid_area = (double)(source_data[i] + source_data[i-1]) * 0.5 * dt;
             kahan_add(&acc, trapezoid_area);
-            result_data[i] = (float)acc.sum;
+            result_data[i] = acc.sum;
         }
     } else {
         /* Software mode with Kahan summation */
         for (i = 1; i < count; i++) {
             double rectangle_area = (double)source_data[i] * dt;
             kahan_add(&acc, rectangle_area);
-            result_data[i] = (float)acc.sum;
+            result_data[i] = acc.sum;
         }
     }
     
     g_system->modules[target_slot].module_data_count = count;
+    copy_time_axis(target_slot, slot);   /* Grid-OS: X:TIME and durations */
     
     printf("\nIntegration complete!\n");
     printf("Units changed from V to V*s\n");
@@ -1020,7 +1041,8 @@ void perform_smoothing(void) {
     strcpy(g_system->modules[target_slot].description, "Smoothed");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)count) {
         allocate_module_buffer(target_slot, count);
     }
     result_data = g_system->modules[target_slot].module_data;
@@ -1043,10 +1065,11 @@ void perform_smoothing(void) {
             kahan_add(&window_acc, (double)source_data[j]);
         }
         
-        result_data[i] = (float)(window_acc.sum / (end - start + 1));
+        result_data[i] = window_acc.sum / (end - start + 1);
     }
     
     g_system->modules[target_slot].module_data_count = count;
+    copy_time_axis(target_slot, slot);   /* Grid-OS: X:TIME and durations */
     
     printf("\nSmoothing complete!\n");
     printf("Noise reduction applied with %d-point moving average\n", window_size);

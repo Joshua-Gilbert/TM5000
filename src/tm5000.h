@@ -154,6 +154,8 @@ typedef struct {
     double acc_v, acc_t;         /* readings waiting to be averaged into the next sample */
     unsigned int acc_n;
     unsigned char avg_shift;     /* each stored sample = mean of 2^avg_shift readings */
+    unsigned char src_measured;  /* computed trace: src_seconds came from time stamps */
+    float src_seconds;           /* computed trace (FFT): duration of the measurement used */
 } tm5000_module;
 #pragma pack()
 

@@ -135,9 +135,17 @@ void cleanup(void) {
     
     /* Put all modules in local mode first */
     for (i = 0; i < 10; i++) {
-        if (g_system && g_system->modules[i].enabled) {
-            gpib_local(g_system->modules[i].gpib_address);
+        if (g_system && g_system->modules[i].enabled &&
+            !g_system->modules[i].is_result && g_system->modules[i].gpib_address) {
+            gpib_local(g_system->modules[i].gpib_address);   /* not FFT/math slots */
         }
+    }
+    
+    /* Grid-OS: reset the mouse driver (hides the pointer, drops our state) */
+    if (g_mouse.present) {
+        union REGS r;
+        r.x.ax = MOUSE_RESET;
+        int86(MOUSE_INT, &r, &r);
     }
     
     /* Simple v2.9 style cleanup */
