@@ -27,6 +27,11 @@ int ieee_spoll(int address, unsigned char *status);
    and restores the normal ones. */
 int gpib_probe(int address, char *id, int maxlen);
 
+/* Which GPIB driver this build talks to (start-up banner, terminal) */
+extern const char gpib_driver_name[];
+void gpib_driver_help(void);        /* hints when init_gpib_system() fails */
+extern const char gpib_driver_note[];   /* extra start-up note, may be "" */
+
 /* DM5120-specific GPIB functions */
 void gpib_write_dm5120(int address, char *command);
 int gpib_read_dm5120(int address, char *buffer, int maxlen);

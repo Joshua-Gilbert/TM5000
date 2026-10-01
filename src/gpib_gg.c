@@ -122,7 +122,7 @@ static int d488_command(const char *line)
         sprintf(buf, "CS21 GRIDGPIB %s\r\n", last_err[0] ? last_err : "OK");
         pend_set(buf, strlen(buf));
     } else if ((q = kw(p, "HELLO")) != NULL) {
-        static const char h[] = "GRIDGPIB 1.0 (Driver488 command subset) Grid-OS\r\n";
+        static const char h[] = "GRIDGPIB 1.1 (Driver488 command subset) Grid-OS\r\n";
         pend_set(h, sizeof(h) - 1);
     } else if (kw(p, "ABORT") || kw(p, "RESET")) {
         last_err[0] = '\0';
@@ -222,6 +222,16 @@ int gpib_check_srq(int address)
     unsigned char st;
     if (gg_spoll(address, &st)) return 0;
     return st;
+}
+
+const char gpib_driver_name[] = "GRIDGPIB";
+const char gpib_driver_note[] = "";
+
+void gpib_driver_help(void)
+{
+    printf("\nMake sure:\n");
+    printf("1. GRIDGPIB.COM is loaded (not together with DRVR488)\n");
+    printf("2. The GPIB cable is connected\n");
 }
 
 int gpib_probe(int address, char *id, int maxlen)

@@ -172,7 +172,7 @@ int main(void) {
     
     clrscr();
     printf("TM5000 GPIB Control System v" TM5000_VERSION "\n");
-    printf("For Personal488 Driver V2.2 August 1989\n");
+    printf("GPIB driver: %s\n", gpib_driver_name);
     printf("(C) 2025 - For Gridcase 1520\n\n");
     g_has_287 = 0;  /* Default to no FPU */
     
@@ -218,10 +218,7 @@ int main(void) {
     
     if (init_gpib_system() < 0) {
         printf("Error: GPIB initialization failed\n");
-        printf("\nMake sure:\n");
-        printf("1. DRVR488.EXE is loaded\n");
-        printf("2. Program is compiled in real mode (-mc flag)\n");
-        printf("3. Personal488 hardware is connected\n");
+        gpib_driver_help();
         cleanup();
         return 1;
     }
@@ -231,7 +228,7 @@ int main(void) {
         printf("No mouse detected - keyboard only mode.\n");
     }
     printf("\nSystem initialized successfully.\n");
-    printf("Note: Personal488 enforces strict command/response pairing\n");
+    printf("%s", gpib_driver_note);
     printf("Press any key to continue...");
     getch();
     

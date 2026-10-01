@@ -933,16 +933,16 @@ void gpib_terminal_mode(void) {
     int i;
     
     clrscr();
-    printf("GPIB Terminal Mode - Personal488\n");
+    printf("GPIB Terminal Mode - %s\n", gpib_driver_name);
     printf("=================================\n\n");
-    printf("Enter commands EXACTLY as in KYBDCTRL\n");
+    printf("Enter Driver488-style commands (as in KYBDCTRL)\n");
     printf("Examples:\n");
     printf("  REMOTE 16\n");
     printf("  OUTPUT 16; voltage?\n");
     printf("  ENTER 16\n");
     printf("  STATUS\n");
     printf("Type 'EXIT' to return\n\n");
-    printf("Note: BREAK is sent via IOCTL, not as a command\n\n");
+    printf("\n");
     
     ieee_write("status\r\n");
     GPIB_PACE(100);

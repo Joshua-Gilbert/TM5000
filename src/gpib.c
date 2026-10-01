@@ -66,6 +66,15 @@ int gpib_check_srq(int address) {
 /* Grid-OS auto-detect through Driver488: a 1 s TIME OUT while probing
  * (OUTPUT to an empty address fails with "no listener"; a device that
  * listens but never talks times out), then back to Driver488's 10 s. */
+const char gpib_driver_name[] = "Personal488 (Driver488)";
+const char gpib_driver_note[] = "Note: Personal488 enforces strict command/response pairing\n";
+
+void gpib_driver_help(void) {
+    printf("\nMake sure:\n");
+    printf("1. DRVR488.EXE is loaded\n");
+    printf("2. Personal488 hardware is connected\n");
+}
+
 int gpib_probe(int address, char *id, int maxlen) {
     char cmd[40];
     int present = 0;
