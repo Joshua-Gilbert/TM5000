@@ -18,6 +18,10 @@ unsigned long g_mclock = 0;
 char g_mclock_valid = 0;
 char g_store_suppress = 0;
 
+/* Buffer size per module for the continuous monitor: 0 = AUTO (the
+   memory of ten 1024-sample slots shared by the modules monitored) */
+unsigned g_buffer_samples = 0;
+
 /* ---- Grid-OS: sample buffers up to exactly 64 KB ------------------- */
 #define DOS_BLOCKS 24
 static unsigned dos_seg[DOS_BLOCKS];          /* segments taken from DOS */

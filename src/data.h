@@ -38,6 +38,7 @@ double slot_interval_s(int slot);
    _fmalloc takes a 16-bit size, so 65536 bytes would wrap to 0; such a
    block comes from DOS as a whole segment instead.  Use free_samples(). */
 void far *alloc_samples(unsigned n, unsigned elsize);
+extern unsigned g_buffer_samples;   /* 0 = AUTO (pooled), else samples */
 void free_samples(void far *p);
 
 /* File I/O operations */

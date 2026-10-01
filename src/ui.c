@@ -697,6 +697,10 @@ void continuous_monitor_setup(void) {
                (g_control_panel.use_custom ? "custom" : "preset"));
         printf("  Monitoring: %s\n", 
                g_control_panel.monitor_all ? "All modules" : "Selected modules");
+        if (g_buffer_samples)
+            printf("  Buffer: %u samples per module\n", g_buffer_samples);
+        else
+            printf("  Buffer: AUTO - 10 x 1024 samples shared by the modules monitored\n");
         
         if (!g_control_panel.monitor_all) {
             int count = 0;
@@ -716,6 +720,7 @@ void continuous_monitor_setup(void) {
         printf("1. Set Sample Rate\n");
         printf("2. Select Modules to Monitor\n");
         printf("3. Start Monitoring\n");
+        printf("4. Buffer Size per Module (AUTO, 1024, 2048, 4096, 8192)\n");
         printf("0. Return to Menu\n\n");
         printf("Choice: ");
         
@@ -732,6 +737,11 @@ void continuous_monitor_setup(void) {
                 
             case '3':
                 continuous_monitor();
+                break;
+                
+            case '4':  /* Grid-OS: cycle AUTO -> 1024 -> 2048 -> 4096 -> 8192 */
+                g_buffer_samples = (g_buffer_samples == 0) ? 1024 :
+                                   (g_buffer_samples >= 8192) ? 0 : g_buffer_samples * 2;
                 break;
                 
             case '0':

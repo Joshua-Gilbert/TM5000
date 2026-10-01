@@ -5460,6 +5460,7 @@ void continuous_monitor(void) {
     unsigned long passes = 0;                    /* readings per slot this run */
     unsigned int pool_size = MAX_SAMPLES_PER_MODULE;
     int avg_shown = -1;
+    int mon_rows_used = 0;                       /* rows drawn on the last pass */
     unsigned long mclock_base = g_mclock + 1;   /* measurement clock keeps rising */
     
     for (i = 0; i < 10; i++) { mod_ticks[i] = 0; mon_last[i][0] = '\0'; }
@@ -5479,7 +5480,8 @@ void continuous_monitor(void) {
                 (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))))
                 nmon++;
         if (nmon > 0) {
-            unsigned long want = POOL_SAMPLES / nmon;
+            unsigned long want = g_buffer_samples ? (unsigned long)g_buffer_samples
+                                                  : POOL_SAMPLES / nmon;
             unsigned int size;
             int ok;
             if (want > POOLED_MAX) want = POOLED_MAX;
@@ -5538,7 +5540,8 @@ void continuous_monitor(void) {
         printf("Sample rate: %d ms (%lu ticks), %d active modules\n", 
                g_control_panel.sample_rate_ms, ticks_per_sample, active_modules);
     printf("Commands: C=Clear data      Buffer: %u samples per module%s\n", pool_size,
-           pool_size > MAX_SAMPLES_PER_MODULE ? " (pooled)" : "");
+           g_buffer_samples ? (pool_size < g_buffer_samples ? " (less memory free)" : "")
+                            : (pool_size > MAX_SAMPLES_PER_MODULE ? " (pooled)" : ""));
     printf("============================================================\n\n");
     
     last_tick_count = *((unsigned long far *)0x0040006CL);
@@ -5644,7 +5647,9 @@ void continuous_monitor(void) {
                         case MOD_DC5009:
                         case MOD_DC5010:
                             value = dc5009_read_measurement(g_system->modules[i].gpib_address);
-                            lp("%13.7f MHz  ", value / 1e6);
+                            if (fabs(value) >= 1e6)      lp("%13.7f MHz  ", value / 1e6);
+                            else if (fabs(value) >= 1e3) lp("%13.6f kHz  ", value / 1e3);
+                            else                         lp("%13.4f Hz   ", value);
                             break;
                             
                         case MOD_DM5010:
@@ -5838,6 +5843,15 @@ void continuous_monitor(void) {
             } 
         } 
         
+        /* Grid-OS: blank rows left over from a longer previous pass (a
+           module line that is no longer drawn would otherwise stay on the
+           screen and look like a duplicated or overwritten slot) */
+        {
+            int r;
+            for (r = mon_row; r < mon_rows_used; r++) vputs(r, 1, "", 79);
+            mon_rows_used = mon_row;
+        }
+        
         /* POST-MEASUREMENT PROCESSING */
         if (need_sample && g_control_panel.running && samples_taken > 0) {
             if (g_system->data_count < g_system->buffer_size) {
@@ -5931,6 +5945,7 @@ void continuous_monitor(void) {
     
     /* CLEANUP AND SUMMARY */
     g_store_suppress = 0;
+    clrscr();                  /* Grid-OS: summary on a clean screen */
     printf("\n\nMonitoring complete.\n");
     printf("Readings per slot: %lu\n", passes);
     for (i = 0; i < 10; i++) {          /* Grid-OS: per slot, from its own buffer */
