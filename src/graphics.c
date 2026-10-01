@@ -1159,7 +1159,7 @@ void draw_grid_dynamic(int max_samples) {
         }
         
         if (max_samples > 0) {
-            int sample_num = (max_samples - 1) * i / 5;
+            int sample_num = (int)((long)(max_samples - 1) * i / 5);
             long t;
             if (g_xaxis_time && tslot >= 0 && (t = sample_time_ms(tslot, sample_num)) >= 0) {
                 fmt_time_label(label, t, tspan);

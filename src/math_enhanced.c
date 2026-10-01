@@ -1177,8 +1177,8 @@ int calculate_median(double *data, int count) {
         return MATH_ERROR_BUFFER_OVERFLOW;
     }
     
-    /* Copy data for sorting */
-    memcpy(sorted_data, data, count * sizeof(double));
+    /* Copy data for sorting (float copy - the buffer is float[1024]) */
+    for (i = 0; i < count; i++) sorted_data[i] = (float)data[i];
     
     /* Simple bubble sort */
     for (i = 0; i < count - 1; i++) {

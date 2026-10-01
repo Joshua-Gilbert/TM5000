@@ -47,6 +47,11 @@
 
 /* Buffer size constants - v3.4 enhanced capacity */
 #define MAX_SAMPLES_PER_MODULE 1024
+/* Grid-OS buffer pooling: the monitor shares the memory of 10 x 1024-sample
+   slots among the modules it reads - one module gets up to POOLED_MAX
+   samples (8 bytes each, must stay in one 64 KB far segment).           */
+#define POOL_SAMPLES   (10L * MAX_SAMPLES_PER_MODULE)
+#define POOLED_MAX     8000u
 #define MIN_BUFFER_SIZE 10
 #define MAX_BUFFER_SIZE MAX_SAMPLES_PER_MODULE
 

@@ -5458,6 +5458,7 @@ void continuous_monitor(void) {
     /* "Time" = measurement time: BIOS ticks accumulated only while RUNNING */
     unsigned long run_ticks = 0, run_mark, run_now, run_ms;
     unsigned long passes = 0;                    /* readings per slot this run */
+    unsigned int pool_size = MAX_SAMPLES_PER_MODULE;
     int avg_shown = -1;
     unsigned long mclock_base = g_mclock + 1;   /* measurement clock keeps rising */
     
@@ -5465,6 +5466,46 @@ void continuous_monitor(void) {
     
     /* Validate and cleanup phantom enabled modules first */
     validate_enabled_modules();
+    
+    /* Grid-OS buffer pooling ("stringing" slots): the modules this run
+       reads share the memory of ten 1024-sample slots - 1 module: 8000
+       samples, 2: 5120 each, 3: 3413 ... 10: 1024.  Buffers are cleared at
+       the start of a run anyway, so they can be resized here.  If memory
+       runs short the size is halved until everything fits. */
+    {
+        int nmon = 0;
+        for (i = 0; i < 10; i++)
+            if (g_system->modules[i].enabled && !module_is_result(i) &&
+                (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))))
+                nmon++;
+        if (nmon > 0) {
+            unsigned long want = POOL_SAMPLES / nmon;
+            unsigned int size;
+            int ok;
+            if (want > POOLED_MAX) want = POOLED_MAX;
+            if (want < MAX_SAMPLES_PER_MODULE) want = MAX_SAMPLES_PER_MODULE;
+            size = (unsigned int)want;
+            do {
+                ok = 1;
+                for (i = 0; i < 10; i++) {
+                    if (g_system->modules[i].enabled && !module_is_result(i) &&
+                        (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))) &&
+                        g_system->modules[i].module_data_size != size) {
+                        free_module_buffer(i);       /* free first: less fragmentation */
+                    }
+                }
+                for (i = 0; i < 10 && ok; i++) {
+                    if (g_system->modules[i].enabled && !module_is_result(i) &&
+                        (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))) &&
+                        !g_system->modules[i].module_data) {
+                        if (!allocate_module_buffer(i, size) || !g_system->modules[i].sample_t) ok = 0;
+                    }
+                }
+                if (!ok) size /= 2;
+            } while (!ok && size >= 256);
+            pool_size = size;
+        }
+    }
     
     /* Initialize active modules and allocate buffers */
     for (i = 0; i < 10; i++) {
@@ -5496,7 +5537,8 @@ void continuous_monitor(void) {
     else
         printf("Sample rate: %d ms (%lu ticks), %d active modules\n", 
                g_control_panel.sample_rate_ms, ticks_per_sample, active_modules);
-    printf("Commands: C=Clear data\n");
+    printf("Commands: C=Clear data      Buffer: %u samples per module%s\n", pool_size,
+           pool_size > MAX_SAMPLES_PER_MODULE ? " (pooled)" : "");
     printf("============================================================\n\n");
     
     last_tick_count = *((unsigned long far *)0x0040006CL);

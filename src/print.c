@@ -599,7 +599,7 @@ void print_graph_text(void) {
                 samples_to_print = g_traces[i].data_count;
                 
                 for (x = 0; x < 65; x++) {
-                    j = (x * g_traces[i].data_count) / 65;
+                    j = (int)((long)x * g_traces[i].data_count / 65);
                     if (j >= g_traces[i].data_count) j = g_traces[i].data_count - 1;
                     
                     value = g_traces[i].data[j];
@@ -1245,7 +1245,7 @@ void print_graph_postscript(void) {
                         sample_num = g_traces[j].data_count;
                     }
                 }
-                sample_num = (sample_num * i) / 10;
+                sample_num = (int)((long)sample_num * i / 10);
                 
                 if (i % 2 == 0) {  /* Label every other tick for clarity */
                     char xl[16];
