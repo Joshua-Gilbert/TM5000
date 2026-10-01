@@ -16,6 +16,7 @@
 
 #include "math_functions.h"
 #include "modules.h"
+#include "data.h"
 #include <dos.h>
 #include <malloc.h>
 
@@ -387,7 +388,7 @@ int apply_moving_average_filter(double *data, int count, int window_size) {
     }
     
     /* Allocate temporary buffer for filtered data */
-    filtered_data = (double *)malloc(count * sizeof(double));
+    filtered_data = (double *)alloc_samples(count, sizeof(double));
     if (!filtered_data) {
         return MATH_ERROR_MEMORY;
     }
@@ -407,8 +408,8 @@ int apply_moving_average_filter(double *data, int count, int window_size) {
     }
     
     /* Copy filtered data back to original array */
-    memcpy(data, filtered_data, count * sizeof(double));
-    free(filtered_data);
+    for (i = 0; i < count; i++) data[i] = filtered_data[i];   /* count*8 can be 64 KB */
+    free_samples(filtered_data);
     
     return MATH_SUCCESS;
 }
@@ -715,7 +716,7 @@ int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result 
     }
     
     /* Allocate temporary array for ln(y) */
-    ln_y_data = (double *)malloc(count * sizeof(double));
+    ln_y_data = (double *)alloc_samples(count, sizeof(double));
     if (!ln_y_data) {
         return MATH_ERROR_MEMORY;
     }
@@ -728,7 +729,7 @@ int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result 
     /* Perform linear regression on transformed data */
     fit_result = fit_linear_regression(x_data, ln_y_data, count, &linear_result);
     
-    free(ln_y_data);
+    free_samples(ln_y_data);
     
     if (fit_result != MATH_SUCCESS) {
         return fit_result;
@@ -880,11 +881,11 @@ int calculate_cross_correlation(double *data1, double *data2, int count, double 
         return MATH_ERROR_INVALID_PARAMS;
     }
 
-    c1 = (double *)malloc(count * sizeof(double));
-    c2 = (double *)malloc(count * sizeof(double));
+    c1 = (double *)alloc_samples(count, sizeof(double));
+    c2 = (double *)alloc_samples(count, sizeof(double));
     if (!c1 || !c2) {
-        if (c1) free(c1);
-        if (c2) free(c2);
+        if (c1) free_samples(c1);
+        if (c2) free_samples(c2);
         return MATH_ERROR_INVALID_PARAMS;   /* out of memory */
     }
 
@@ -915,8 +916,8 @@ int calculate_cross_correlation(double *data1, double *data2, int count, double 
         }
     }
 
-    free(c1);
-    free(c2);
+    free_samples(c1);
+    free_samples(c2);
     return MATH_SUCCESS;
 }
 
@@ -944,13 +945,13 @@ int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
         return -1;
     }
 
-    corr = (double *)malloc(count * sizeof(double));
+    corr = (double *)alloc_samples(count, sizeof(double));
     if (!corr) {
         return -1;
     }
 
     if (calculate_cross_correlation(data1, data2, count, corr) != MATH_SUCCESS) {
-        free(corr);
+        free_samples(corr);
         return -1;
     }
 
@@ -963,7 +964,7 @@ int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
         }
     }
 
-    free(corr);
+    free_samples(corr);
     return best_lag;
 }
 

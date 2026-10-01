@@ -18,6 +18,40 @@ unsigned long g_mclock = 0;
 char g_mclock_valid = 0;
 char g_store_suppress = 0;
 
+/* ---- Grid-OS: sample buffers up to exactly 64 KB ------------------- */
+#define DOS_BLOCKS 24
+static unsigned dos_seg[DOS_BLOCKS];          /* segments taken from DOS */
+
+void far *alloc_samples(unsigned n, unsigned elsize) {
+    unsigned long bytes = (unsigned long)n * elsize;
+    unsigned seg;
+    int i;
+    if (bytes == 0 || bytes > 65536UL) return NULL;
+    if (bytes <= 65000UL) return _fmalloc((unsigned)bytes);
+    /* 65001-65536 bytes: a whole DOS segment, offset 0, so 16-bit
+       offsets reach every byte and indexes never wrap */
+    for (i = 0; i < DOS_BLOCKS && dos_seg[i]; i++) ;
+    if (i == DOS_BLOCKS) return NULL;
+    if (_dos_allocmem((unsigned)((bytes + 15) >> 4), &seg) != 0) return NULL;
+    dos_seg[i] = seg;
+    return MK_FP(seg, 0);
+}
+
+void free_samples(void far *p) {
+    int i;
+    if (!p) return;
+    if (FP_OFF(p) == 0) {
+        for (i = 0; i < DOS_BLOCKS; i++) {
+            if (dos_seg[i] && dos_seg[i] == FP_SEG(p)) {
+                _dos_freemem(dos_seg[i]);
+                dos_seg[i] = 0;
+                return;
+            }
+        }
+    }
+    _ffree(p);
+}
+
 /* Allocate memory buffer for a module's data */
 static void reset_slot_state(tm5000_module *m) {
     m->module_data_count = 0;
@@ -33,12 +67,15 @@ int allocate_module_buffer(int slot, unsigned int size) {
     m = &g_system->modules[slot];
     
     /* Free existing buffers if present */
-    if (m->module_data) _ffree(m->module_data);
-    if (m->sample_t) _ffree(m->sample_t);
+    if (m->module_data) free_samples(m->module_data);
+    if (m->sample_t) free_samples(m->sample_t);
+    m->module_data = NULL;
+    m->sample_t = NULL;
+    if (size > POOLED_MAX) size = POOLED_MAX;
     
     /* Allocate new buffer (+4 bytes per sample for its time stamp) */
-    m->module_data = (double far *)_fmalloc(size * sizeof(double));
-    m->sample_t = (unsigned long far *)_fmalloc(size * sizeof(unsigned long));
+    m->module_data = (double far *)alloc_samples(size, sizeof(double));
+    m->sample_t = (unsigned long far *)alloc_samples(size, sizeof(unsigned long));
     reset_slot_state(m);
     if (m->module_data) {
         m->module_data_size = size;
@@ -54,12 +91,12 @@ void free_module_buffer(int slot) {
     if (slot < 0 || slot >= 10) return;
     m = &g_system->modules[slot];
     if (m->module_data) {
-        _ffree(m->module_data);
+        free_samples(m->module_data);
         m->module_data = NULL;
         m->module_data_size = 0;
     }
     if (m->sample_t) {
-        _ffree(m->sample_t);
+        free_samples(m->sample_t);
         m->sample_t = NULL;
     }
     reset_slot_state(m);

@@ -34,6 +34,12 @@ extern char g_store_suppress;
 long sample_time_ms(int slot, unsigned int idx);   /* -1 = not available */
 double slot_interval_s(int slot);
 
+/* Grid-OS: sample-sized buffers up to 8192 x 8 bytes (exactly 64 KB).
+   _fmalloc takes a 16-bit size, so 65536 bytes would wrap to 0; such a
+   block comes from DOS as a whole segment instead.  Use free_samples(). */
+void far *alloc_samples(unsigned n, unsigned elsize);
+void free_samples(void far *p);
+
 /* File I/O operations */
 void save_data(void);
 void load_data(void);
