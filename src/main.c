@@ -92,7 +92,7 @@ measurement_system* init_measurement_system(unsigned int points) {
     
     memset(sys, 0, sizeof(measurement_system));
     sys->buffer_size = points;
-    sys->data_buffer = (float far *)_fmalloc(points * sizeof(float));
+    sys->data_buffer = (double far *)_fmalloc(points * sizeof(double));
     
     if (!sys->data_buffer) {
         free(sys);

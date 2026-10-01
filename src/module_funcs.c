@@ -94,7 +94,7 @@ void send_custom_command(void) {
         printf("Sending: '%s'\n", command);
         
         ieee_write("fill off\r\n");
-        delay(50);
+        GPIB_PACE(50);
         
         gpib_write(g_system->modules[slot].gpib_address, command);
         
@@ -323,31 +323,31 @@ void configure_dm5120_advanced(int slot) {
                 printf("\n\nQuerying DM5120 status...\n");
                 
                 gpib_write(address, "FUNCT?");
-                delay(100);
+                GPIB_PACE(100);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("Function: %s\n", buffer);
                 }
                 
                 gpib_write(address, "RANGE?");
-                delay(50);
+                GPIB_PACE(50);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("Range: %s\n", buffer);
                 }
                 
                 gpib_write(address, "FILTER?");
-                delay(50);
+                GPIB_PACE(50);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("Filter: %s\n", buffer);
                 }
                 
                 gpib_write(address, "TRIGGER?");
-                delay(50);
+                GPIB_PACE(50);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("Trigger: %s\n", buffer);
                 }
                 
                 gpib_write(address, "ERROR?");
-                delay(50);
+                GPIB_PACE(50);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("Error status: %s\n", buffer);
                 }
@@ -360,7 +360,7 @@ void configure_dm5120_advanced(int slot) {
                 printf("\n\nApplying settings to DM5120...\n");
                 
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 dm5120_set_function(address, cfg->function);
                 dm5120_set_range(address, cfg->range_mode);
@@ -563,13 +563,13 @@ void configure_ps5004_advanced(int slot) {
                 printf("\n\nQuerying PS5004 status...\n");
                 
                 gpib_write(address, "SET?");
-                delay(100);
+                GPIB_PACE(100);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("All settings:\n%s\n", buffer);
                 }
                 
                 gpib_write(address, "REGULATION?");
-                delay(50);
+                GPIB_PACE(50);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("\nRegulation status: %s", buffer);
                     temp_int = ps5004_get_regulation_status(address);
@@ -581,7 +581,7 @@ void configure_ps5004_advanced(int slot) {
                 }
                 
                 gpib_write(address, "ERROR?");
-                delay(50);
+                GPIB_PACE(50);
                 if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
                     printf("Error status: %s\n", buffer);
                 }
@@ -594,7 +594,7 @@ void configure_ps5004_advanced(int slot) {
                 printf("\n\nApplying settings to PS5004...\n");
                 
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 ps5004_set_voltage(address, cfg->voltage);
                 ps5004_set_current(address, cfg->current_limit);
@@ -606,18 +606,18 @@ void configure_ps5004_advanced(int slot) {
                 }
                 
                 gpib_write(address, cfg->vri_enabled ? "VRI ON" : "VRI OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->cri_enabled ? "CRI ON" : "CRI OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->uri_enabled ? "URI ON" : "URI OFF");
-                delay(50);
+                GPIB_PACE(50);
                 
                 gpib_write(address, cfg->dt_enabled ? "DT ON" : "DT OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->user_enabled ? "USER ON" : "USER OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->rqs_enabled ? "RQS ON" : "RQS OFF");
-                delay(50);
+                GPIB_PACE(50);
                 
                 ps5004_set_output(address, cfg->output_enabled);
                 
@@ -630,14 +630,14 @@ void configure_ps5004_advanced(int slot) {
                 printf("\n\nTesting measurement...\n");
                 
                 ps5004_set_display(address, "VOLTAGE");
-                delay(100);
+                GPIB_PACE(100);
                 
                 printf("Voltage reading: ");
                 temp_float = ps5004_read_value(address);
                 printf("%.4f V\n", temp_float);
                 
                 ps5004_set_display(address, "CURRENT");
-                delay(100);
+                GPIB_PACE(100);
                 
                 printf("Current reading: ");
                 temp_float = ps5004_read_value(address);
@@ -839,7 +839,7 @@ void configure_ps5010_advanced(int slot) {
                 printf("\n\nApplying settings to PS5010...\n");
                 
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 ps5010_set_voltage(address, 1, cfg->voltage1);
                 ps5010_set_voltage(address, 2, cfg->voltage2);
@@ -906,7 +906,7 @@ void configure_ps5010_advanced(int slot) {
                 
                 printf("Setting both supplies to 10V using VTRA...\n");
                 ps5010_set_tracking_voltage(address, 10.0);
-                delay(200);
+                GPIB_PACE(200);
                 
                 printf("Command sent. Check front panel displays.\n");
                 printf("\nPress any key to continue...");
@@ -945,7 +945,7 @@ void gpib_terminal_mode(void) {
     printf("Note: BREAK is sent via IOCTL, not as a command\n\n");
     
     ieee_write("status\r\n");
-    delay(100);
+    GPIB_PACE(100);
     bytes_read = ieee_read(response, sizeof(response));
     if (bytes_read > 0) {
         printf("Initial Status: %s\n", response);
@@ -976,7 +976,7 @@ void gpib_terminal_mode(void) {
         strcat(command, "\r\n");
         ieee_write(command);
         
-        delay(100);
+        GPIB_PACE(100);
         
         bytes_read = ieee_read(response, sizeof(response)-1);
         if (bytes_read > 0) {
@@ -1053,7 +1053,7 @@ void dm5120_buffer_query_menu(int address) {
                 break;
             case '6':
                 gpib_write_dm5120(address, "READ ONESTORE");
-                delay(100);
+                GPIB_PACE(100);
                 if (gpib_read_dm5120(address, response, 128) > 0) {
                     printf("\nValue: %s\n", response);
                 }
@@ -1062,7 +1062,7 @@ void dm5120_buffer_query_menu(int address) {
                 count = dm5120_get_buffer_count(address);
                 printf("\nReading %d values...\n", count);
                 gpib_write_dm5120(address, "READ ALLSTORE");
-                delay(200);
+                GPIB_PACE(200);
                 if (gpib_read_dm5120(address, response, 128) > 0) {
                     printf("Data: %s\n", response);
                 }
@@ -1129,7 +1129,7 @@ void dm5120_stoint_menu(int address, int slot) {
         switch(choice) {
             case '1':
                 gpib_write_dm5120(address, "STOINT ONE");
-                delay(100);
+                GPIB_PACE(100);
                 printf("\nSTOINT set to ONE\n");
                 break;
             case '2':
@@ -1229,13 +1229,13 @@ void dm5120_srq_menu(int address, int slot) {
                     int rqs;
                     scanf("%d", &rqs);
                     gpib_write_dm5120(address, rqs ? "RQS ON" : "RQS OFF");
-                    delay(100);
+                    GPIB_PACE(100);
                     printf("RQS: %s\n", rqs ? "ON" : "OFF");
                 }
                 break;
             case '6':
                 gpib_write_dm5120(address, "EVENT?");
-                delay(100);
+                GPIB_PACE(100);
                 if (gpib_read_dm5120(address, response, 64) > 0) {
                     printf("\nEVENT: %s\n", response);
                 }

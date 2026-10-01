@@ -23,9 +23,12 @@ void draw_gradient_rect(int x1, int y1, int x2, int y2, unsigned char color1, un
 /* Text functions */
 void clrscr(void);
 void gotoxy(int x, int y);
+void vputs(int row, int col, const char *s, int width);
+void vattr(int row, int col, int width, unsigned char attr);
 void textattr(unsigned char attr);
 void clreol(void);
 void draw_text(int x, int y, char *text, unsigned char color);
+void draw_text_small(int x, int y, char *text, unsigned char color);
 void draw_text_scaled(int x, int y, char *text, unsigned char color, int scale_x, int scale_y);
 
 /* Enhanced font support */
@@ -41,7 +44,13 @@ void draw_frequency_grid(int fft_samples, int selected_trace);
 void draw_legend_enhanced(int *is_fft_trace, int selected_trace);
 float get_engineering_scale(float range, float *per_div, char **unit_str, int *decimal_places);
 void auto_scale_graph(void);
-int value_to_y(float value);
+int value_to_y(double value);
+void graph_limits(double *mn, double *mx);
+void set_limits(double mn, double mx);
+extern int g_xaxis_time;
+int time_axis_slot(int max_samples, long *span_ms);
+void fmt_time_label(char *buf, long ms, long span_ms);
+char *time_unit_name(long span_ms);
 float y_to_value(int y);
 void update_sample_rate(void);
 

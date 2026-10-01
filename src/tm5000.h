@@ -67,6 +67,16 @@
 #define CGA_MEMORY      0xB8000000L
 #define SCREEN_WIDTH    320
 #define SCREEN_HEIGHT   200
+/* GPIB pacing.  TM5000 waits a fixed time after most bus calls to suit
+ * Driver488.  The GRIDGPIB build (TM5000G, gpib_gg.c) compiles modules.c and
+ * module_funcs.c with -DGRIDGPIB: its calls return only when the bus
+ * transaction is complete, so the waits compile to nothing there.        */
+#ifdef GRIDGPIB
+#define GPIB_PACE(ms) ((void)0)
+#else
+#define GPIB_PACE(ms) delay(ms)
+#endif
+
 #define LPT1_BASE       0x378
 #define LPT1_STATUS     (LPT1_BASE + 1)
 #define LPT1_CONTROL    (LPT1_BASE + 2)
@@ -121,9 +131,9 @@ extern int gpib_error;
 /* Structure definitions - optimized member ordering and bit fields */
 #pragma pack(1)
 typedef struct {
-    float far *module_data;      /* 4 bytes - far pointer (keep for compatibility) */
+    double far *module_data;     /* Grid-OS: double - keeps full counter resolution */
     char description[12];        /* 12 bytes - reduced size */
-    float last_reading;          /* 4 bytes */
+    double last_reading;         /* Grid-OS: double */
     unsigned int module_data_count;  /* 4 bytes - Count for this module */
     unsigned int module_data_size;   /* 4 bytes - Size allocated */
     unsigned char module_type;   /* 1 byte */
@@ -131,14 +141,21 @@ typedef struct {
     unsigned char gpib_address;  /* 1 byte */
     unsigned char enabled:1;     /* 1 bit - pack boolean flags */
     unsigned char is_result:1;   /* 1 bit - computed trace (FFT/math): no GPIB, exempt from phantom cleanup */
-    unsigned char reserved:6;    /* 6 bits - reserved for future flags */
+    unsigned char time_ok:1;     /* Grid-OS: every stored sample has a measurement-time stamp */
+    unsigned char reserved:5;    /* 5 bits - reserved for future flags */
+    /* Grid-OS: time stamps and averaging when the buffer fills */
+    unsigned long far *sample_t; /* measurement clock (BIOS ticks) of each sample (mean of its group) */
+    unsigned long t_origin;      /* measurement clock at the run's first reading */
+    double acc_v, acc_t;         /* readings waiting to be averaged into the next sample */
+    unsigned int acc_n;
+    unsigned char avg_shift;     /* each stored sample = mean of 2^avg_shift readings */
 } tm5000_module;
 #pragma pack()
 
 typedef struct {
     tm5000_module modules[10];   /* 10 * 35 = 350 bytes - largest member first */
     int gpib_devices[10];        /* 40 bytes - second largest array */
-    float far *data_buffer;      /* 4 bytes - far pointer */
+    double far *data_buffer;     /* Grid-OS: double */
     unsigned int buffer_size;    /* 4 bytes */
     unsigned int data_count;     /* 4 bytes */
     int sample_rate;             /* 4 bytes */
@@ -160,7 +177,8 @@ typedef struct {
     unsigned char running:1;  /* 1 bit - pack boolean flags */
     unsigned char use_custom:1; /* 1 bit - 0=use preset, 1=use custom */
     unsigned char monitor_all:1; /* 1 bit - 0=selective, 1=monitor all enabled modules */
-    unsigned char reserved:5; /* 5 bits - reserved for future flags */
+    unsigned char auto_rate:1;   /* 1 bit - 1=AUTO: fastest cycle the instruments allow */
+    unsigned char reserved:4; /* 4 bits - reserved for future flags */
 } control_panel_state;
 
 /* FFT Configuration structure - optimized member ordering and bit fields */
@@ -191,7 +209,7 @@ typedef struct {
 
 typedef struct {
     char label[12];              /* 12 bytes - reduced size */
-    float *data;                 /* 4 bytes - pointer (keep for compatibility) */
+    double *data;                /* Grid-OS: double (points at module_data) */
     float x_scale;               /* 4 bytes - For frequency traces: Hz per sample */
     float x_offset;              /* 4 bytes - X-axis offset (for centering) */
     int data_count;              /* 4 bytes */
@@ -475,7 +493,7 @@ int dm5120_read_all_stored(int address, float far *buffer, int max_samples);
 /* From data.c */
 int allocate_module_buffer(int slot, unsigned int size);
 void free_module_buffer(int slot);
-void store_module_data(int slot, float value);
+void store_module_data(int slot, double value);
 void clear_module_data(int slot);
 void save_data(void);
 void load_data(void);

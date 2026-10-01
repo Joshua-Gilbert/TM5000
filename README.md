@@ -23,11 +23,17 @@ study in how a constrained 16-bit DOS application evolved. The current,
 buildable source is in [`src/`](src); every prior version is kept under
 [`archive/`](archive).
 
+> **Grid-OS / TM5000G:** `src/` also builds `tm5000g.exe`, the same program on
+> the small, fast GRIDGPIB resident driver in [`driver/gridgpib/`](driver/gridgpib)
+> (1.85 KB resident; serial poll 0.5 ms vs 87 ms under Driver488). See the
+> [Grid-OS changelog](docs/changelogs/CHANGELOG_GRIDOS.md).
+
 ### 📁 Repository layout
 
 ```
 TM5000/
 ├── src/                 Current canonical source (v3.6) — build from here
+├── driver/gridgpib/     GRIDGPIB resident GPIB driver + test (used by tm5000g.exe)
 ├── archive/             Frozen historical versions (reference only)
 │   ├── v1-binaries/     V1.8 / V1.9 executables (no source survives)
 │   ├── v2-source/       V2.0–V2.9 monolithic single-file C

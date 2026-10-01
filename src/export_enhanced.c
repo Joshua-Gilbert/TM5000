@@ -122,8 +122,14 @@ int export_data_enhanced(char *filename, export_config *config) {
     for (i = 0; i < total_samples; i++) {
         /* Timestamp column */
         if (config->flags & EXPORT_FLAG_TIMESTAMPS) {
-            time_t sample_time = config->export_start_time + 
-                               (i * (g_control_panel.sample_rate_ms / 1000.0));
+            time_t sample_time;
+            {   /* Grid-OS: the sample's measured time when it has one */
+                int s;
+                long t = -1L;
+                for (s = 0; s < 10 && t < 0; s++) t = sample_time_ms(s, i);
+                sample_time = config->export_start_time + (t >= 0 ? t / 1000L :
+                              (long)(i * (g_control_panel.sample_rate_ms / 1000.0)));
+            }
             format_timestamp(timestamp_str, sizeof(timestamp_str), sample_time, config);
             fprintf(file, "%s%c", timestamp_str, config->delimiter);
         }
@@ -134,7 +140,7 @@ int export_data_enhanced(char *filename, export_config *config) {
         /* Data values for each enabled module */
         for (j = 0; j < enabled_count; j++) {
             int slot = enabled_modules[j];
-            float value = 0.0;
+            double value = 0.0;
             
             /* Get data value if available */
             if (i < g_system->modules[slot].module_data_count) {
@@ -233,7 +239,7 @@ int start_realtime_export(char *filename_template, export_config *config) {
 }
 
 /* Update real-time export with new data point */
-int update_realtime_export(int slot, float value, time_t timestamp) {
+int update_realtime_export(int slot, double value, time_t timestamp) {
     char timestamp_str[32];
     char value_str[32];
     
@@ -384,7 +390,7 @@ int export_measurement_conditions(FILE *file, export_config *config) {
 }
 
 /* Format data value according to export configuration */
-int format_data_value(char *buffer, int buffer_size, float value, export_config *config) {
+int format_data_value(char *buffer, int buffer_size, double value, export_config *config) {
     if (!buffer || buffer_size < 32) {
         return EXPORT_ERROR_MEMORY;
     }
@@ -413,9 +419,9 @@ int format_timestamp(char *buffer, int buffer_size, time_t timestamp, export_con
 }
 
 /* Format value in scientific notation */
-int format_scientific_notation(char *buffer, int buffer_size, float value, int precision) {
+int format_scientific_notation(char *buffer, int buffer_size, double value, int precision) {
     int exponent = 0;
-    float mantissa = value;
+    double mantissa = value;
     
     if (!buffer || buffer_size < 32) {
         return EXPORT_ERROR_MEMORY;
