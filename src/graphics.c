@@ -1458,18 +1458,12 @@ void graph_config_menu(void) {
         printf("========================\n\n");
         
         printf("Current Settings:\n");
-        printf("  Scale: %.6f to %.6f\n", g_graph_scale.min_value, g_graph_scale.max_value);
-        printf("  Auto-scale: %s\n", g_graph_scale.auto_scale ? "ON" : "OFF");
-        {
-            float current_range = g_graph_scale.max_value - g_graph_scale.min_value;
-            float per_div = current_range / 5.0;
-            if (per_div >= 1.0) {
-                printf("  Voltage per div: %.3fV\n", per_div);
-            } else if (per_div >= 0.001) {
-                printf("  Voltage per div: %.1fmV\n", per_div * 1000.0);
-            } else {
-                printf("  Voltage per div: %.0fuV\n", per_div * 1000000.0);
-            }
+        {   /* Grid-OS: double limits; per division in plain units (was volts only) */
+            double mn, mx;
+            graph_limits(&mn, &mx);
+            printf("  Scale: %.10g to %.10g\n", mn, mx);
+            printf("  Auto-scale: %s\n", g_graph_scale.auto_scale ? "ON" : "OFF");
+            printf("  Per division: %.4g\n", (mx - mn) / 5.0);
         }
         printf("  Sample start: %d\n", g_graph_scale.sample_start);
         printf("  Sample count: %d\n", g_graph_scale.sample_count);

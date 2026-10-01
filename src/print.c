@@ -181,6 +181,18 @@ static int step_dec(double step) {
     return d > 9 ? 9 : d;
 }
 
+/* decimals so a range or per-division value keeps 3 significant digits
+   (a 2 Hz range printed as "0 Hz" per division with the unit's 0 decimals) */
+static int sig_dec(int dec, double v) {
+    int d;
+    v = fabs(v);
+    if (v <= 0.0) return dec < 0 ? 0 : dec;
+    d = 2 - (int)floor(log10(v));
+    if (d < dec) d = dec;
+    if (d < 0) d = 0;
+    return d > 9 ? 9 : d;
+}
+
 /* decimals for a legend value: at least the unit's own, enough to show
    changes of 'res' (already scaled to the unit), at most 9 */
 static int val_dec(int dec, double res) {
@@ -459,21 +471,11 @@ void print_graph_text(void) {
     }
     print_string("\r\n");
     
-    if (decimal_places == 0) {
-        sprintf(label, "Y Scale: %.0f to %.0f %s\r\n", 
-                min_val * scale_factor,
-                max_val * scale_factor,
-                unit_str);
-    } else if (decimal_places >= 4) {
+    {   /* Grid-OS: enough decimals to tell the limits apart */
+        int sd = decimal_places, s2 = step_dec(y_range / 10.0 * scale_factor);
+        if (s2 > sd) sd = s2;
         sprintf(label, "Y Scale: %.*f to %.*f %s\r\n", 
-                decimal_places, min_val * scale_factor,
-                decimal_places, max_val * scale_factor,
-                unit_str);
-    } else {
-        sprintf(label, "Y Scale: %.*f to %.*f %s\r\n", 
-                decimal_places, min_val * scale_factor,
-                decimal_places, max_val * scale_factor,
-                unit_str);
+                sd, min_val * scale_factor, sd, max_val * scale_factor, unit_str);
     }
     print_string(label);
     if (off_mode) {
@@ -495,15 +497,11 @@ void print_graph_text(void) {
         }
         
         /* Calculate range exactly as displayed on grid lines (10 divisions) */
-        if (range_decimal_places == 0) {
-            sprintf(label, "Total Scale: %.0f %s (%.0f %s per division)\r\n", 
-                    y_range * range_scale_factor, range_unit_str,
-                    (y_range / 10.0) * range_scale_factor, range_unit_str);
-        } else {
-            sprintf(label, "Total Scale: %.*f %s (%.*f %s per division)\r\n", 
-                    range_decimal_places, y_range * range_scale_factor, range_unit_str,
-                    range_decimal_places, (y_range / 10.0) * range_scale_factor, range_unit_str);
-        }
+        sprintf(label, "Total Scale: %.*f %s (%.*f %s per division)\r\n", 
+                sig_dec(range_decimal_places, y_range * range_scale_factor),
+                y_range * range_scale_factor, range_unit_str,
+                sig_dec(range_decimal_places, y_range / 10.0 * range_scale_factor),
+                (y_range / 10.0) * range_scale_factor, range_unit_str);
     }
     print_string(label);
     
@@ -564,14 +562,15 @@ void print_graph_text(void) {
         print_string(label);
         
         {
-            double per_div = (g_graph_scale.max_value - g_graph_scale.min_value) / 10.0;
+            double per_div = (max_val - min_val) / 10.0;   /* double limits */
             char *per_div_unit;
             double per_div_scale;
             int per_div_decimal;
             char *per_div_ps_unit;
             get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
             sprintf(label, "Units per div: %.*f %s, Auto Scale: %s\r\n",
-                    per_div_decimal, per_div * per_div_scale, per_div_ps_unit,
+                    sig_dec(per_div_decimal, per_div * per_div_scale),
+                    per_div * per_div_scale, per_div_ps_unit,
                     g_graph_scale.auto_scale ? "ON" : "OFF");
         }
         print_string(label);
@@ -994,14 +993,11 @@ void print_graph_postscript(void) {
     
     print_string("/Times-Roman findfont 10 scalefont setfont\r\n");
     print_string("72 705 moveto\r\n");
-    if (decimal_places == 0) {
-        sprintf(label, "(Scale: %.0f to %.0f ) show ", 
-                min_val * scale_factor,
-                max_val * scale_factor);
-    } else {
+    {   /* Grid-OS: enough decimals to tell the limits apart */
+        int sd = decimal_places, s2 = step_dec(y_range / 10.0 * scale_factor);
+        if (s2 > sd) sd = s2;
         sprintf(label, "(Scale: %.*f to %.*f ) show ", 
-                decimal_places, min_val * scale_factor,
-                decimal_places, max_val * scale_factor);
+                sd, min_val * scale_factor, sd, max_val * scale_factor);
     }
     print_string(label);
     if (strcmp(unit_str, "uV") == 0) {
@@ -1029,11 +1025,9 @@ void print_graph_postscript(void) {
             range_unit_str = range_postscript_unit;
         }
         
-        if (range_decimal_places == 0) {
-            sprintf(label, "(Range: %.0f ) show ", y_range * range_scale_factor);
-        } else {
-            sprintf(label, "(Range: %.*f ) show ", range_decimal_places, y_range * range_scale_factor);
-        }
+        sprintf(label, "(Range: %.*f ) show ",
+                sig_dec(range_decimal_places, y_range * range_scale_factor),
+                y_range * range_scale_factor);
         print_string(label);
         if (strcmp(range_unit_str, "uV") == 0) {
             print_string("( ) show /mu glyphshow (V, Interval: ) show ");
@@ -1117,7 +1111,8 @@ void print_graph_postscript(void) {
                 sprintf(label, "(Sample Range: %d to %d, Units/div: %.*f %s, Auto Scale: %s) show\r\n",
                         g_graph_scale.sample_start + 1,
                         g_graph_scale.sample_start + g_graph_scale.sample_count,
-                        per_div_decimal, per_div * per_div_scale, per_div_ps_unit,
+                        sig_dec(per_div_decimal, per_div * per_div_scale),
+                        per_div * per_div_scale, per_div_ps_unit,
                         g_graph_scale.auto_scale ? "ON" : "OFF");
             }
         } else {
@@ -1134,7 +1129,8 @@ void print_graph_postscript(void) {
                 }
                 sprintf(label, "(Sample Range: All (1 to %d), Units/div: %.*f %s, Auto Scale: %s) show\r\n", 
                         actual_samples,
-                        per_div_decimal, per_div * per_div_scale, per_div_ps_unit,
+                        sig_dec(per_div_decimal, per_div * per_div_scale),
+                        per_div * per_div_scale, per_div_ps_unit,
                         g_graph_scale.auto_scale ? "ON" : "OFF");
             }
         }
