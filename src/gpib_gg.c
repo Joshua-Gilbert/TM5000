@@ -224,6 +224,26 @@ int gpib_check_srq(int address)
     return st;
 }
 
+int gpib_probe(int address, char *id, int maxlen)
+{
+    unsigned char st;
+    int old, n;
+    id[0] = '\0';
+    old = gg_timeout(150);                 /* a real instrument polls in <1 ms */
+    if (gg_spoll(address, &st)) {
+        if (old > 0) gg_timeout((unsigned)old);
+        return 0;                          /* nothing at this address */
+    }
+    gg_timeout(1500);
+    n = gg_query(address, "ID?", id, maxlen);          /* Tektronix */
+    if (n <= 0 || strncmp(id, "ID", 2) != 0) {
+        n = gg_query(address, "*IDN?", id, maxlen);    /* IEEE 488.2 */
+        if (n <= 0) id[0] = '\0';
+    }
+    if (old > 0) gg_timeout((unsigned)old);
+    return 1;
+}
+
 int ieee_spoll(int address, unsigned char *status)
 {
     int e = gg_spoll(address, status);

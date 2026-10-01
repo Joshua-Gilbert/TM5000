@@ -21,6 +21,9 @@ Detailed changelog: [docs/changelogs/CHANGELOG_GRIDOS.md](docs/changelogs/CHANGE
 Driver: [driver/gridgpib/](driver/gridgpib/)
 
 ### Added
+- **Auto-detect modules** (Configure Modules → A): scans GPIB addresses 1–30, reads
+  each instrument's `ID?` (or `*IDN?`), lists everything found and adds the TM5000
+  modules that aren't set up yet to free slots (existing slots are never changed).
 - **TM5000G** (`tm5000g.exe`): the same program on the GRIDGPIB resident driver
   (1.85 KB resident vs ≈43 KB for Driver488; serial poll 0.5 ms vs 87 ms; test-set
   bus time 8.5 s vs 34.8 s). `wmake` now builds both executables.

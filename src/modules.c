@@ -1763,6 +1763,134 @@ void validate_enabled_modules(void) {
 }
 
 /* Stub implementations for other module functions - to be filled in from TM5000L.c */
+/* ---- Grid-OS: auto-detect modules ----------------------------------- */
+static const char *auto_models[] = { "", "DC5009", "DM5010", "DM5120", "PS5004",
+                                     "PS5010", "DC5010", "FG5010" };
+
+/* MOD_xxx for an instrument ID such as "ID TEK/DC5009,V79.1,F1.2" */
+static int model_to_type(const char *id) {
+    int t;
+    for (t = MOD_DC5009; t <= MOD_FG5010; t++)
+        if (strstr(id, auto_models[t])) return t;
+    return MOD_NONE;
+}
+
+/* set up one slot (same steps as the manual configuration, no prompts) */
+static void setup_module(int slot, int module_type, int address, const char *desc) {
+    tm5000_module *m = &g_system->modules[slot];
+    m->enabled = 1;
+    m->module_type = module_type;
+    m->is_result = 0;
+    m->slot_number = slot;
+    m->gpib_address = address;
+    m->last_reading = 0.0;
+    strncpy(m->description, desc, sizeof(m->description) - 1);
+    m->description[sizeof(m->description) - 1] = '\0';
+    switch (module_type) {
+        case MOD_DC5009: init_dc5009_config(slot); break;
+        case MOD_DM5010: init_dm5010_config(slot); break;
+        case MOD_DM5120: init_dm5120_config(slot); init_dm5120_config_enhanced(slot); break;
+        case MOD_PS5004: init_ps5004_config(slot); break;
+        case MOD_PS5010: init_ps5010_config(slot); break;
+        case MOD_DC5010: init_dc5010_config(slot); break;
+        case MOD_FG5010: init_fg5010_config(slot); break;
+    }
+    gpib_remote(address);
+    GPIB_PACE(200);
+    allocate_module_buffer(slot, MAX_SAMPLES_PER_MODULE);
+}
+
+/* Scan GPIB addresses 1-30, identify the instruments and add the TM5000
+ * modules that are not configured yet to free slots.  Existing slots are
+ * never changed - a mismatch is only reported. */
+void auto_detect_modules(void) {
+    static struct { unsigned char addr, type, slot, action; char id[36]; } f[30];
+    char id[80];
+    int addr, i, k, n = 0, n_new = 0, used[10];
+    char *p;
+    
+    clrscr();
+    printf("Auto-detect modules\n");
+    printf("===================\n\n");
+    printf("Scanning GPIB addresses 1-30 (controller = 21)  ESC cancels\n");
+    for (addr = 1; addr <= 30; addr++) {
+        if (addr == 21) continue;
+        printf("\r  address %2d ", addr);
+        fflush(stdout);
+        if (kbhit() && getch() == 27) {
+            printf("\nCancelled.  Press any key...");
+            getch();
+            return;
+        }
+        if (!gpib_probe(addr, id, sizeof(id))) continue;
+        for (p = id; *p; p++) if (*p == '\r' || *p == '\n') { *p = '\0'; break; }
+        f[n].addr = (unsigned char)addr;
+        f[n].type = (unsigned char)model_to_type(id);
+        strncpy(f[n].id, id, sizeof(f[n].id) - 1);
+        f[n].id[sizeof(f[n].id) - 1] = '\0';
+        n++;
+    }
+    printf("\r                \n");
+    if (n == 0) {
+        printf("No instruments answered.  Is the GPIB driver loaded and the bus\n");
+        printf("cable connected?\n\nPress any key...");
+        getch();
+        return;
+    }
+    
+    /* action: 0 = not a TM5000 module / no free slot, 1 = already set up,
+       2 = that address's slot is set up as another type (left alone),
+       3 = add to a free slot */
+    for (i = 0; i < 10; i++)
+        used[i] = g_system->modules[i].enabled || g_system->modules[i].is_result;
+    for (k = 0; k < n; k++) {
+        f[k].action = 0;
+        f[k].slot = 0;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].enabled && g_system->modules[i].gpib_address == f[k].addr) {
+                f[k].slot = (unsigned char)i;
+                f[k].action = (g_system->modules[i].module_type == f[k].type) ? 1 : 2;
+                break;
+            }
+        }
+        if (i == 10 && f[k].type != MOD_NONE) {
+            for (i = 0; i < 10 && used[i]; i++) ;
+            if (i < 10) { used[i] = 1; f[k].slot = (unsigned char)i; f[k].action = 3; n_new++; }
+        }
+    }
+    
+    printf("Addr  Instrument                            TM5000\n");
+    printf("----  ------------------------------------  ----------------------\n");
+    for (k = 0; k < n; k++) {
+        printf(" %2d   %-36s  ", f[k].addr, f[k].id[0] ? f[k].id : "(answers, no ID reply)");
+        switch (f[k].action) {
+            case 1:  printf("slot %d, already set up\n", f[k].slot); break;
+            case 2:  printf("slot %d set up as other\n", f[k].slot); break;
+            case 3:  printf("-> slot %d (new)\n", f[k].slot); break;
+            default: printf(f[k].type != MOD_NONE ? "no free slot\n" : "not a TM5000 module\n");
+        }
+    }
+    if (n_new == 0) {
+        printf("\nNothing new to add.  Press any key...");
+        getch();
+        return;
+    }
+    printf("\nAdd %d module(s) as shown? (Y/N): ", n_new);
+    if (toupper(getch()) != 'Y') {
+        printf("N\nNothing changed.  Press any key...");
+        getch();
+        return;
+    }
+    printf("Y\n");
+    for (k = 0; k < n; k++) {
+        if (f[k].action != 3) continue;
+        printf("  slot %d: %s at GPIB %d\n", f[k].slot, auto_models[f[k].type], f[k].addr);
+        setup_module(f[k].slot, f[k].type, f[k].addr, auto_models[f[k].type]);
+    }
+    printf("\nDone - use 0-9 to change a slot's settings.  Press any key...");
+    getch();
+}
+
 void configure_modules(void) {
     int choice, slot, address, module_type;
     int done = 0;
@@ -1788,6 +1916,7 @@ void configure_modules(void) {
         
         printf("\nOptions:\n");
         printf("0-9: Configure slot\n");
+        printf("A:   Auto-detect modules on the bus\n");
         printf("ESC: Exit\n\n");
         printf("Choice: ");
         
@@ -1795,6 +1924,8 @@ void configure_modules(void) {
         
         if (choice == 27) {  /* ESC */
             done = 1;
+        } else if (choice == 'A' || choice == 'a') {
+            auto_detect_modules();
         } else if (choice >= '0' && choice <= '9') {
             slot = choice - '0';
             

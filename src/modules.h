@@ -11,6 +11,7 @@
 
 /* Module configuration functions */
 void configure_modules(void);
+void auto_detect_modules(void);
 void validate_enabled_modules(void);
 int module_is_result(int slot);   /* computed-result trace (FFT/math)? - flag or derived from state */
 /* void module_selection_menu(void); - moved to ui.h */
