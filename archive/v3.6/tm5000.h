@@ -1,8 +1,7 @@
 /*
  * TM5000 GPIB Control System for Gridcase 1520
- * Version 3.7 - Grid-OS: TM5000G on the GRIDGPIB driver, double-precision
- *               samples with time stamps, pooled/averaged buffers, auto-detect,
- *               graph/print/FFT fixes (v3.6: regression fixes)
+ * Version 3.6 - Regression fixes: computed-trace persistence, FFT spectrum/dB,
+ *               DM5120 buffer triggering, statistics units, .tm5 import
  * Main header file with common definitions
  * C89 compliant
  *
@@ -42,17 +41,12 @@
 #include <errno.h>
 
 /* Version information */
-#define TM5000_VERSION "3.7"
+#define TM5000_VERSION "3.6"
 #define TM5000_VERSION_MAJOR 3
-#define TM5000_VERSION_MINOR 7
+#define TM5000_VERSION_MINOR 6
 
 /* Buffer size constants - v3.4 enhanced capacity */
 #define MAX_SAMPLES_PER_MODULE 1024
-/* Grid-OS buffer pooling: the monitor shares the memory of 10 x 1024-sample
-   slots among the modules it reads - one module gets up to POOLED_MAX
-   samples - 8192 x 8 bytes = one whole 64 KB segment (alloc_samples).  */
-#define POOL_SAMPLES   (10L * MAX_SAMPLES_PER_MODULE)
-#define POOLED_MAX     8192u
 #define MIN_BUFFER_SIZE 10
 #define MAX_BUFFER_SIZE MAX_SAMPLES_PER_MODULE
 
@@ -73,16 +67,6 @@
 #define CGA_MEMORY      0xB8000000L
 #define SCREEN_WIDTH    320
 #define SCREEN_HEIGHT   200
-/* GPIB pacing.  TM5000 waits a fixed time after most bus calls to suit
- * Driver488.  The GRIDGPIB build (TM5000G, gpib_gg.c) compiles modules.c and
- * module_funcs.c with -DGRIDGPIB: its calls return only when the bus
- * transaction is complete, so the waits compile to nothing there.        */
-#ifdef GRIDGPIB
-#define GPIB_PACE(ms) ((void)0)
-#else
-#define GPIB_PACE(ms) delay(ms)
-#endif
-
 #define LPT1_BASE       0x378
 #define LPT1_STATUS     (LPT1_BASE + 1)
 #define LPT1_CONTROL    (LPT1_BASE + 2)
@@ -137,9 +121,9 @@ extern int gpib_error;
 /* Structure definitions - optimized member ordering and bit fields */
 #pragma pack(1)
 typedef struct {
-    double far *module_data;     /* Grid-OS: double - keeps full counter resolution */
+    float far *module_data;      /* 4 bytes - far pointer (keep for compatibility) */
     char description[12];        /* 12 bytes - reduced size */
-    double last_reading;         /* Grid-OS: double */
+    float last_reading;          /* 4 bytes */
     unsigned int module_data_count;  /* 4 bytes - Count for this module */
     unsigned int module_data_size;   /* 4 bytes - Size allocated */
     unsigned char module_type;   /* 1 byte */
@@ -147,23 +131,14 @@ typedef struct {
     unsigned char gpib_address;  /* 1 byte */
     unsigned char enabled:1;     /* 1 bit - pack boolean flags */
     unsigned char is_result:1;   /* 1 bit - computed trace (FFT/math): no GPIB, exempt from phantom cleanup */
-    unsigned char time_ok:1;     /* Grid-OS: every stored sample has a measurement-time stamp */
-    unsigned char reserved:5;    /* 5 bits - reserved for future flags */
-    /* Grid-OS: time stamps and averaging when the buffer fills */
-    unsigned long far *sample_t; /* measurement clock (BIOS ticks) of each sample (mean of its group) */
-    unsigned long t_origin;      /* measurement clock at the run's first reading */
-    double acc_v, acc_t;         /* readings waiting to be averaged into the next sample */
-    unsigned int acc_n;
-    unsigned char avg_shift;     /* each stored sample = mean of 2^avg_shift readings */
-    unsigned char src_measured;  /* computed trace: src_seconds came from time stamps */
-    float src_seconds;           /* computed trace (FFT): duration of the measurement used */
+    unsigned char reserved:6;    /* 6 bits - reserved for future flags */
 } tm5000_module;
 #pragma pack()
 
 typedef struct {
     tm5000_module modules[10];   /* 10 * 35 = 350 bytes - largest member first */
     int gpib_devices[10];        /* 40 bytes - second largest array */
-    double far *data_buffer;     /* Grid-OS: double */
+    float far *data_buffer;      /* 4 bytes - far pointer */
     unsigned int buffer_size;    /* 4 bytes */
     unsigned int data_count;     /* 4 bytes */
     int sample_rate;             /* 4 bytes */
@@ -185,8 +160,7 @@ typedef struct {
     unsigned char running:1;  /* 1 bit - pack boolean flags */
     unsigned char use_custom:1; /* 1 bit - 0=use preset, 1=use custom */
     unsigned char monitor_all:1; /* 1 bit - 0=selective, 1=monitor all enabled modules */
-    unsigned char auto_rate:1;   /* 1 bit - 1=AUTO: fastest cycle the instruments allow */
-    unsigned char reserved:4; /* 4 bits - reserved for future flags */
+    unsigned char reserved:5; /* 5 bits - reserved for future flags */
 } control_panel_state;
 
 /* FFT Configuration structure - optimized member ordering and bit fields */
@@ -217,7 +191,7 @@ typedef struct {
 
 typedef struct {
     char label[12];              /* 12 bytes - reduced size */
-    double *data;                /* Grid-OS: double (points at module_data) */
+    float *data;                 /* 4 bytes - pointer (keep for compatibility) */
     float x_scale;               /* 4 bytes - For frequency traces: Hz per sample */
     float x_offset;              /* 4 bytes - X-axis offset (for centering) */
     int data_count;              /* 4 bytes */
@@ -501,7 +475,7 @@ int dm5120_read_all_stored(int address, float far *buffer, int max_samples);
 /* From data.c */
 int allocate_module_buffer(int slot, unsigned int size);
 void free_module_buffer(int slot);
-void store_module_data(int slot, double value);
+void store_module_data(int slot, float value);
 void clear_module_data(int slot);
 void save_data(void);
 void load_data(void);
