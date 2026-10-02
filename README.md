@@ -2,7 +2,7 @@
 
 ## Professional Instrument Control for DOS Systems
 
-![Version](https://img.shields.io/badge/Version-3.6-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
+![Version](https://img.shields.io/badge/Version-3.7-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
 
 <img width="1344" height="1691" alt="Gridcase 1520 with Tektronix TM5006A GPIB measurement system — FFT analysis of precision voltage reference" src="https://github.com/user-attachments/assets/7f70d8ae-4ebc-4a04-a70c-bf06f67a440f" />
 
@@ -15,7 +15,8 @@
 The TM5000 GPIB Control System is an instrument-control and data-acquisition
 platform for DOS systems. Originally developed for the Gridcase 1520 portable
 computer, it provides control of Tektronix TM5000-series instruments over a
-GPIB (IEEE-488) interface, using the Personal488 (IOtech/CEC) driver.
+GPIB (IEEE-488) interface, using the Personal488 (IOtech/CEC) driver — or, as
+TM5000G, the small GRIDGPIB resident driver from the Grid-OS project.
 
 This repository preserves the **entire history** of the project — from the
 earliest binaries through the current modular source — which makes it a useful
@@ -23,26 +24,26 @@ study in how a constrained 16-bit DOS application evolved. The current,
 buildable source is in [`src/`](src); every prior version is kept under
 [`archive/`](archive).
 
-> **Grid-OS / TM5000G:** `src/` also builds `tm5000g.exe`, the same program on
+> **v3.7 / TM5000G:** `src/` also builds `tm5000g.exe`, the same program on
 > the small, fast GRIDGPIB resident driver in [`driver/gridgpib/`](driver/gridgpib)
 > (1.85 KB resident; serial poll 0.5 ms vs 87 ms under Driver488). See the
-> [Grid-OS changelog](docs/changelogs/CHANGELOG_GRIDOS.md).
+> [v3.7 changelog](docs/changelogs/CHANGELOG_v3.7.md).
 
 ### 📁 Repository layout
 
 ```
 TM5000/
-├── src/                 Current canonical source (v3.6) — build from here
+├── src/                 Current canonical source (v3.7) — build from here
 ├── driver/gridgpib/     GRIDGPIB resident GPIB driver + test (used by tm5000g.exe)
 ├── archive/             Frozen historical versions (reference only)
 │   ├── v1-binaries/     V1.8 / V1.9 executables (no source survives)
 │   ├── v2-source/       V2.0–V2.9 monolithic single-file C
-│   └── v3.0/ … v3.5/    Earlier modular releases (each self-contained)
+│   └── v3.0/ … v3.6/    Earlier modular releases (each self-contained)
 ├── docs/
 │   ├── BUILD.md         Toolchain + build/run instructions
-│   ├── ARCHITECTURE.md  Architecture notes (v3.6)
+│   ├── ARCHITECTURE.md  Architecture notes (v3.7)
 │   ├── FINDINGS.md      Cross-version regression analysis (what worked vs broke)
-│   └── changelogs/      Per-version changelogs (v3.5, v3.6) + release notes
+│   └── changelogs/      Per-version changelogs (v3.5, v3.6, v3.7) + release notes
 ├── CHANGELOG.md         Consolidated version history
 ├── CONTRIBUTING.md
 ├── README.md
@@ -62,7 +63,9 @@ TM5000/
 
 #### Data Acquisition
 - Up to **10 instrument slots** simultaneously (single GPIB bus)
-- **1024 samples** per module (v3.4+)
+- **1024 samples** per module, pooled up to **8192** when fewer modules are monitored;
+  a full buffer is averaged in pairs instead of stopping (v3.7)
+- Double-precision samples with per-sample measurement-time stamps (v3.7)
 - Sample intervals from 100 ms to 10 s, plus custom rates
 - Continuous real-time monitoring with live display
 - Dynamic buffer management within the 640 KB DOS budget
@@ -122,12 +125,14 @@ across the files below. Full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md
 | **v3.4** | July 2025 | 1024-sample buffers; ~22% memory reduction |
 | **v3.5** | July 2025 | Configuration profiles; enhanced export; enhanced math |
 | **v3.6** | June 2026 | Regression fixes (FFT, DM5120, stats, import) **+ new math** (polynomial/exponential curve fit, cross-correlation, phase/delay) **+ linker dead-strip** for a smaller binary |
+| **v3.7** | October 2026 | Grid-OS: **TM5000G** on the GRIDGPIB driver, double precision + time stamps, pooled/averaged buffers, auto-detect, AUTO rate, graph/print/FFT fixes |
 
 ### 🔨 Requirements
 
 **To run:** IBM PC-compatible 80286+ · 640 KB RAM (1 MB recommended) · CGA graphics ·
-MS-DOS 3.3+ · a Personal488 (IOtech/CEC) GPIB interface with its DOS driver
-(`DRVR488.EXE`). An 80287 coprocessor and a Microsoft-compatible mouse are
+MS-DOS 3.3+ · a Personal488-compatible (IOtech/CEC) GPIB interface with its DOS driver
+(`DRVR488.EXE`) — or, for `tm5000g.exe`, the GRIDGPIB resident driver
+(`driver/gridgpib/GRIDGPIB.COM`). An 80287 coprocessor and a Microsoft-compatible mouse are
 recommended. The original target was the **Gridcase 1520** portable.
 
 **To build:** OpenWatcom C/C++ 1.9 (16-bit DOS target) plus its assembler.
@@ -152,6 +157,22 @@ Main Menu → Configure Modules → [select instrument] → [set parameters]
           → Measurement → [continuous / single] → [start acquisition]
           → File / Export → [save .tm5 / .cfg / CSV / PostScript]
 ```
+
+### 🆕 New in v3.7
+
+Built on the GRiDCase 1520 bench (TM5006A, DC5009, FG5010, PRS10). Details:
+[docs/changelogs/CHANGELOG_v3.7.md](docs/changelogs/CHANGELOG_v3.7.md).
+
+- **TM5000G**: the same program on the GRIDGPIB resident driver — 23× smaller than
+  Driver488 and ~4× less bus time on the test set; `make` builds both executables.
+- **Precision**: samples in double (1 Hz at 10 MHz was the old float limit), per-sample
+  measurement-time stamps, offset graph axis for small changes on large values.
+- **Long runs**: buffers pooled up to 8192 samples; a full buffer averages in pairs
+  (AVG light) instead of stopping; AUTO sample rate; X axis in time.
+- **Convenience**: auto-detect modules from a bus scan, mouse cursor, P/O printing,
+  FFT up to 8192 points.
+- **Fixes**: printed durations and scales, print report, buffer overruns, monitor
+  display, DM5120 double-stored samples.
 
 ### ✅ Fixed in v3.6
 

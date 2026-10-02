@@ -14,191 +14,54 @@
 #include "data.h"
 #include "modules.h"
 
-unsigned long g_mclock = 0;
-char g_mclock_valid = 0;
-char g_store_suppress = 0;
-
-/* Buffer size per module for the continuous monitor: 0 = AUTO (the
-   memory of ten 1024-sample slots shared by the modules monitored) */
-unsigned g_buffer_samples = 0;
-
-/* ---- Grid-OS: sample buffers up to exactly 64 KB ------------------- */
-#define DOS_BLOCKS 24
-static unsigned dos_seg[DOS_BLOCKS];          /* segments taken from DOS */
-
-void far *alloc_samples(unsigned n, unsigned elsize) {
-    unsigned long bytes = (unsigned long)n * elsize;
-    unsigned seg;
-    int i;
-    if (bytes == 0 || bytes > 65536UL) return NULL;
-    if (bytes <= 65000UL) return _fmalloc((unsigned)bytes);
-    /* 65001-65536 bytes: a whole DOS segment, offset 0, so 16-bit
-       offsets reach every byte and indexes never wrap */
-    for (i = 0; i < DOS_BLOCKS && dos_seg[i]; i++) ;
-    if (i == DOS_BLOCKS) return NULL;
-    if (_dos_allocmem((unsigned)((bytes + 15) >> 4), &seg) != 0) return NULL;
-    dos_seg[i] = seg;
-    return MK_FP(seg, 0);
-}
-
-void free_samples(void far *p) {
-    int i;
-    if (!p) return;
-    if (FP_OFF(p) == 0) {
-        for (i = 0; i < DOS_BLOCKS; i++) {
-            if (dos_seg[i] && dos_seg[i] == FP_SEG(p)) {
-                _dos_freemem(dos_seg[i]);
-                dos_seg[i] = 0;
-                return;
-            }
-        }
-    }
-    _ffree(p);
-}
-
 /* Allocate memory buffer for a module's data */
-static void reset_slot_state(tm5000_module *m) {
-    m->module_data_count = 0;
-    m->acc_v = m->acc_t = 0.0;
-    m->acc_n = 0;
-    m->avg_shift = 0;
-    m->time_ok = 0;               /* set again by the first time-stamped sample */
-    m->src_seconds = 0.0f;
-    m->src_measured = 0;
-}
-
 int allocate_module_buffer(int slot, unsigned int size) {
-    tm5000_module *m;
     if (slot < 0 || slot >= 10) return 0;
-    m = &g_system->modules[slot];
     
-    /* Free existing buffers if present */
-    if (m->module_data) free_samples(m->module_data);
-    if (m->sample_t) free_samples(m->sample_t);
-    m->module_data = NULL;
-    m->sample_t = NULL;
-    if (size > POOLED_MAX) size = POOLED_MAX;
+    /* Free existing buffer if present */
+    if (g_system->modules[slot].module_data) {
+        _ffree(g_system->modules[slot].module_data);
+    }
     
-    /* Allocate new buffer (+4 bytes per sample for its time stamp) */
-    m->module_data = (double far *)alloc_samples(size, sizeof(double));
-    m->sample_t = (unsigned long far *)alloc_samples(size, sizeof(unsigned long));
-    reset_slot_state(m);
-    if (m->module_data) {
-        m->module_data_size = size;
+    /* Allocate new buffer */
+    g_system->modules[slot].module_data = (float far *)_fmalloc(size * sizeof(float));
+    if (g_system->modules[slot].module_data) {
+        g_system->modules[slot].module_data_size = size;
+        g_system->modules[slot].module_data_count = 0;
         return 1;  /* Success */
     }
-    m->module_data_size = 0;
+    
     return 0;  /* Failed */
 }
 
 /* Free memory buffer for a module */
 void free_module_buffer(int slot) {
-    tm5000_module *m;
     if (slot < 0 || slot >= 10) return;
-    m = &g_system->modules[slot];
-    if (m->module_data) {
-        free_samples(m->module_data);
-        m->module_data = NULL;
-        m->module_data_size = 0;
+    
+    if (g_system->modules[slot].module_data) {
+        _ffree(g_system->modules[slot].module_data);
+        g_system->modules[slot].module_data = NULL;
+        g_system->modules[slot].module_data_size = 0;
+        g_system->modules[slot].module_data_count = 0;
     }
-    if (m->sample_t) {
-        free_samples(m->sample_t);
-        m->sample_t = NULL;
-    }
-    reset_slot_state(m);
 }
 
-/* Store a reading in a module's buffer.
- * Grid-OS: when the buffer is full the samples are merged in pairs (mean of
- * values and of times) and from then on each stored sample is the mean of
- * 2, 4, 8 ... readings - the buffer always covers the whole run.          */
-void store_module_data(int slot, double value) {
-    tm5000_module *m;
-    unsigned int f, k, n, cnt;
+/* Store a data value in a module's buffer */
+void store_module_data(int slot, float value) {
     if (slot < 0 || slot >= 10) return;
-    m = &g_system->modules[slot];
-    if (!m->module_data || m->module_data_size == 0) return;
-    if (g_store_suppress) return;            /* the monitor stores this pass itself */
+    if (!g_system->modules[slot].module_data) return;
     
-    m->last_reading = value;
-    cnt = m->module_data_count;
-    if (cnt >= m->module_data_size) return;  /* full and at the averaging limit */
-    if (cnt == 0 && m->acc_n == 0) {         /* first reading of a run */
-        m->time_ok = (m->sample_t != NULL && g_mclock_valid);
-        m->t_origin = g_mclock;
-    } else if (!g_mclock_valid) {
-        m->time_ok = 0;                      /* a reading without a time stamp */
+    if (g_system->modules[slot].module_data_count < g_system->modules[slot].module_data_size) {
+        g_system->modules[slot].module_data[g_system->modules[slot].module_data_count] = value;
+        g_system->modules[slot].module_data_count++;
+        g_system->modules[slot].last_reading = value;
     }
-    m->acc_v += value;
-    m->acc_t += (double)g_mclock;
-    m->acc_n++;
-    f = 1u << m->avg_shift;
-    if (m->acc_n < f) return;                /* group not complete yet */
-    
-    m->module_data[cnt] = m->acc_v / f;
-    if (m->sample_t) m->sample_t[cnt] = (unsigned long)(m->acc_t / f + 0.5);
-    m->acc_v = m->acc_t = 0.0;
-    m->acc_n = 0;
-    cnt++;
-    
-    if (cnt == m->module_data_size && cnt >= 2 && m->avg_shift < 15) {
-        n = cnt / 2;                         /* buffer full: merge pairs */
-        for (k = 0; k < n; k++) {
-            m->module_data[k] = (m->module_data[2*k] + m->module_data[2*k+1]) * 0.5;
-            if (m->sample_t)
-                m->sample_t[k] = m->sample_t[2*k] + (m->sample_t[2*k+1] - m->sample_t[2*k] + 1) / 2;
-        }
-        if (cnt & 1) {                       /* odd size (loaded data): keep the last */
-            m->module_data[n] = m->module_data[cnt - 1];
-            if (m->sample_t) m->sample_t[n] = m->sample_t[cnt - 1];
-            n++;
-        }
-        cnt = n;
-        m->avg_shift++;
-    }
-    m->module_data_count = cnt;
-}
-
-/* Measurement time of sample idx from the run's first reading, in ms
-   (BIOS-tick resolution, 54.9 ms), or -1 when the slot has no time stamps */
-long sample_time_ms(int slot, unsigned int idx) {
-    tm5000_module *m;
-    unsigned long t;
-    if (slot < 0 || slot >= 10) return -1L;
-    m = &g_system->modules[slot];
-    if (!m->sample_t || !m->time_ok || idx >= m->module_data_count) return -1L;
-    t = m->sample_t[idx] - m->t_origin;
-    return (long)((t / 182UL) * 10000UL + ((t % 182UL) * 10000UL) / 182UL);
-}
-
-/* Mean time between a slot's samples in seconds: measured from its time
-   stamps when it has them, else the set rate x averaging */
-double slot_interval_s(int slot) {
-    tm5000_module *m = &g_system->modules[slot];
-    long t = (m->module_data_count > 1) ? sample_time_ms(slot, m->module_data_count - 1) : -1L;
-    if (t > 0) return t / 1000.0 / (m->module_data_count - 1);
-    return g_control_panel.sample_rate_ms / 1000.0 * (1u << m->avg_shift);
-}
-
-/* Give a computed time-domain trace (derivative, integral, smoothing, trace
-   math) the time stamps of the trace it was computed from */
-void copy_time_axis(int dst, int src) {
-    tm5000_module *d = &g_system->modules[dst], *s = &g_system->modules[src];
-    unsigned int k, n;
-    if (dst == src) return;
-    if (!d->sample_t || !s->sample_t || !s->time_ok) { d->time_ok = 0; return; }
-    n = d->module_data_count < s->module_data_count ? d->module_data_count : s->module_data_count;
-    if (n > d->module_data_size) n = d->module_data_size;
-    for (k = 0; k < n; k++) d->sample_t[k] = s->sample_t[k];
-    d->t_origin = s->t_origin;
-    d->avg_shift = s->avg_shift;
-    d->time_ok = (n == d->module_data_count);
 }
 
 /* Clear all data in a module's buffer */
 void clear_module_data(int slot) {
     if (slot < 0 || slot >= 10) return;
-    reset_slot_state(&g_system->modules[slot]);
+    g_system->modules[slot].module_data_count = 0;
 }
 
 /* Save measurement data to file */
@@ -286,7 +149,7 @@ void save_data(void) {
     /* Write global data buffer */
     fprintf(fp, "GlobalData:\n");
     for (i = 0; i < g_system->data_count; i++) {
-        fprintf(fp, "%.12g\n", g_system->data_buffer[i]);
+        fprintf(fp, "%.6e\n", g_system->data_buffer[i]);
     }
     
     /* Write per-module data */
@@ -305,7 +168,7 @@ void save_data(void) {
             /* Only write actual data if it exists */
             if (data_count > 0) {
                 for (j = 0; j < data_count; j++) {
-                    fprintf(fp, "%.12g\n", g_system->modules[i].module_data[j]);
+                    fprintf(fp, "%.6e\n", g_system->modules[i].module_data[j]);
                 }
                 printf("Wrote %u data values for slot %d\n", data_count, i);
             } else {
@@ -336,7 +199,7 @@ void load_data(void) {
     unsigned int count;
     int i, j;
     unsigned int module_count;
-    double value;
+    float value;
     int total_loaded = 0;
     int active_modules = 0;
     
@@ -502,7 +365,7 @@ void load_data(void) {
     }
     
     for (i = 0; i < g_system->data_count && i < g_system->buffer_size; i++) {
-        if (fscanf(fp, "%lf", &value) != 1) break;
+        if (fscanf(fp, "%f", &value) != 1) break;
         
         /* Validate data before storing */
         if (value != value || value == HUGE_VAL || value == -HUGE_VAL) {
@@ -562,7 +425,7 @@ void load_data(void) {
                 printf("Loading %u samples for slot %d...\n", module_count, slot);
                 
                 for (j = 0; j < module_count; j++) {
-                    if (fscanf(fp, "%lf", &value) == 1) {
+                    if (fscanf(fp, "%f", &value) == 1) {
                         /* Safety check for invalid values */
                         if (value != value || value == HUGE_VAL || value == -HUGE_VAL) {
                             printf("Warning: Invalid data value detected in slot %d sample %d, setting to 0.0\n", slot, j);

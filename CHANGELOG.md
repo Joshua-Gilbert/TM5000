@@ -15,29 +15,44 @@ The project evolved through three eras:
 
 ---
 
-## [Unreleased] — Grid-OS: TM5000G (GRIDGPIB), double precision, graph and print fixes
+## [3.7] — 2026-10-01 — Grid-OS: TM5000G (GRIDGPIB), double precision, long runs
 
-Detailed changelog: [docs/changelogs/CHANGELOG_GRIDOS.md](docs/changelogs/CHANGELOG_GRIDOS.md) ·
-Driver: [driver/gridgpib/](driver/gridgpib/)
+Detailed changelog: [docs/changelogs/CHANGELOG_v3.7.md](docs/changelogs/CHANGELOG_v3.7.md) ·
+Driver: [driver/gridgpib/](driver/gridgpib/) · Previous source: [archive/v3.6/](archive/v3.6/)
 
 ### Added
 - **TM5000G** (`tm5000g.exe`): the same program on the GRIDGPIB resident driver
   (1.85 KB resident vs ≈43 KB for Driver488; serial poll 0.5 ms vs 87 ms; test-set
-  bus time 8.5 s vs 34.8 s). `wmake` now builds both executables.
+  bus time 8.5 s vs 34.8 s). `make` builds both executables.
+- **Auto-detect modules** (Configure Modules → A): scans GPIB addresses 1–30, reads
+  each instrument's `ID?` (or `*IDN?`) and adds the TM5000 modules not yet set up to
+  free slots (existing slots are never changed).
+- **Pooled buffers**: the continuous monitor shares 10 × 1024 samples among the
+  modules it reads (one module: 8192); **buffer size** can also be set
+  (Continuous Monitoring Setup → 4: AUTO, 1024 … 8192).
+- **Averaging when a buffer fills** (mean of 2, 4, 8 … readings) with an `AVG xN`
+  light, instead of silently stopping.
 - AUTO sample rate; per-sample measurement-time stamps; X axis in samples or time.
-- Averaging when a buffer fills (mean of 2, 4, 8 … readings) with an `AVG xN`
-  light, instead of silently stopping at 1024 samples.
-- Graph: P prints the screen as shown (PostScript), O print menu, M mouse toggle.
+- Graph: P prints (with the print menu's setting), O print menu, M mouse toggle.
+- FFT input and output up to 8192 points.
 
 ### Changed
 - Samples, statistics and analysis use `double` (counter resolution at 10 MHz+).
 - Graph offset axis for small changes on large values; cursor drawn without full
   redraws; readable footer.
+- FFT and math use the source's measured sample interval; math traces keep its
+  time stamps; FFT printouts show the source measurement's duration.
+- Start-up text and terminal name the driver the build uses.
+- GRIDGPIB build releases the bus with one REN-off on exit.
 
 ### Fixed
-- Printed duration overflowed (16-bit `int`); print report used the wrong buffer;
-  text-graph stack overrun; LPT dropped bytes while the printer was busy.
+- Printed duration overflowed (16-bit `int`); printed scales showed "0" on small
+  ranges; print report used the wrong buffer; text-graph stack overrun; LPT dropped
+  bytes while the printer was busy.
+- FFT/math results written past a reused slot's buffer.
 - DM5120 stored twice per pass in the continuous monitor.
+- Monitor: stale rows looked like duplicated slots; summary printed over them;
+  counter readings below 1 MHz shown as MHz.
 - Buffered text landing at the wrong cursor position (`clrscr`/`gotoxy`).
 
 ---

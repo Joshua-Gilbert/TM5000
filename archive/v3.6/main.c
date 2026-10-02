@@ -92,7 +92,7 @@ measurement_system* init_measurement_system(unsigned int points) {
     
     memset(sys, 0, sizeof(measurement_system));
     sys->buffer_size = points;
-    sys->data_buffer = (double far *)_fmalloc(points * sizeof(double));
+    sys->data_buffer = (float far *)_fmalloc(points * sizeof(float));
     
     if (!sys->data_buffer) {
         free(sys);
@@ -133,21 +133,11 @@ void delay(unsigned int milliseconds) {
 void cleanup(void) {
     int i;
     
-    /* Put all modules in local mode first (GRIDGPIB: REN off does it all) */
-    if (!gpib_release_bus()) {
-        for (i = 0; i < 10; i++) {
-            if (g_system && g_system->modules[i].enabled &&
-                !g_system->modules[i].is_result && g_system->modules[i].gpib_address) {
-                gpib_local(g_system->modules[i].gpib_address);   /* not FFT/math slots */
-            }
+    /* Put all modules in local mode first */
+    for (i = 0; i < 10; i++) {
+        if (g_system && g_system->modules[i].enabled) {
+            gpib_local(g_system->modules[i].gpib_address);
         }
-    }
-    
-    /* Grid-OS: reset the mouse driver (hides the pointer, drops our state) */
-    if (g_mouse.present) {
-        union REGS r;
-        r.x.ax = MOUSE_RESET;
-        int86(MOUSE_INT, &r, &r);
     }
     
     /* Simple v2.9 style cleanup */
@@ -182,7 +172,7 @@ int main(void) {
     
     clrscr();
     printf("TM5000 GPIB Control System v" TM5000_VERSION "\n");
-    printf("GPIB driver: %s\n", gpib_driver_name);
+    printf("For Personal488 Driver V2.2 August 1989\n");
     printf("(C) 2025 - For Gridcase 1520\n\n");
     g_has_287 = 0;  /* Default to no FPU */
     
@@ -228,7 +218,10 @@ int main(void) {
     
     if (init_gpib_system() < 0) {
         printf("Error: GPIB initialization failed\n");
-        gpib_driver_help();
+        printf("\nMake sure:\n");
+        printf("1. DRVR488.EXE is loaded\n");
+        printf("2. Program is compiled in real mode (-mc flag)\n");
+        printf("3. Personal488 hardware is connected\n");
         cleanup();
         return 1;
     }
@@ -238,7 +231,7 @@ int main(void) {
         printf("No mouse detected - keyboard only mode.\n");
     }
     printf("\nSystem initialized successfully.\n");
-    printf("%s", gpib_driver_note);
+    printf("Note: Personal488 enforces strict command/response pairing\n");
     printf("Press any key to continue...");
     getch();
     
