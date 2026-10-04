@@ -1,4 +1,4 @@
-# TM5000 Architecture (as-built, v3.6)
+# TM5000 Architecture (as-built, v3.7)
 
 Technical description of the TM5000 GPIB control system as it is actually built in
 [`src/`](../src). It supersedes the original v3.5 *planning* document. For the build
@@ -19,7 +19,15 @@ limit.
 - **Memory model:** large (`-ml`) — code and data pointers are far; data items ≥100 bytes
   go far automatically (`-zt100`), `const` lives in the code segment (`-zc`).
 - **Display:** CGA 320×200 4-color.
-- **GPIB hardware:** Personal488 (IOtech/CEC) via the vendor `ieeeio` driver shim.
+- **GPIB hardware:** Personal488 (IOtech/CEC) via the vendor `ieeeio` driver shim
+  (`gpib.c`, `tm5000.exe`), or the GRIDGPIB resident driver (`gpib_gg.c` +
+  `gridgpib.c`, `tm5000g.exe`, v3.7). Both back ends implement `gpib.h`; the fixed
+  Driver488 pacing waits are `GPIB_PACE(ms)`, compiled out with `-DGRIDGPIB`.
+- **Samples (v3.7):** `double`, with a per-sample measurement-time stamp
+  (`sample_t`, BIOS ticks). Buffers come from `alloc_samples()` (up to exactly
+  64 KB = 8192 samples, via a DOS segment when `_fmalloc` cannot express it); the
+  continuous monitor pools 10×1024 samples among the modules it reads; a full
+  buffer merges pairs and keeps averaging (`avg_shift`).
 
 ---
 

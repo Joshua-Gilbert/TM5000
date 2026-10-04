@@ -1,4 +1,4 @@
-# Grid-OS changes — TM5000G and shared fixes (2026-09-29 / 30)
+# TM5000 v3.7 — Grid-OS: TM5000G and shared fixes (2026-09-29 – 10-01)
 
 Work done while building Grid-OS for the GRiDCase 1520. Everything was run on
 the real machine (GRiDCase 1520, 286 + 287, TM5006A with DC5009 / DM5120 /
@@ -92,3 +92,31 @@ noted.
   memory, only when changed (smoother on the 1520).
 - `clrscr()` / `gotoxy()` flush `stdout` first (buffered text was landing at the
   new cursor position — duplicated-looking module lines).
+
+## Added after the first Grid-OS merge (PR #2)
+
+- **Auto-detect modules** (Configure Modules → A) using `gpib_probe()` (new in
+  `gpib.h`): GRIDGPIB serial-polls with a 150 ms timeout and queries `ID?` /
+  `*IDN?`; Driver488 uses `TIME OUT 1` around `OUTPUT`/`ENTER`. Tested on the bus.
+- **Pooled buffers**: the monitor shares 10 × 1024 samples among the modules it
+  reads (1 module: 8192 = 8 × 1024); `alloc_samples()` gets a 64 KB block from DOS
+  when `_fmalloc` cannot express the size. Buffer size per module selectable
+  (AUTO, 1024, 2048, 4096, 8192). Tested: 8192 samples, averaging to ×2.
+- **P key** prints with the print menu's setting (PostScript plot by default; text
+  graph or screen copy via menu option 5).
+- **Monitor**: stale rows blanked each pass; summary on a cleared screen; counter
+  readings in Hz/kHz/MHz. Tested.
+- **Printouts**: range and per-division values keep 3 significant digits (a 2 Hz
+  range printed "0 Hz per division"); Y-scale limits get enough decimals; double
+  limits everywhere. Graph settings screen (H) shows double limits.
+- **FFT**: input sizes 64–8192, output up to the input size; double-precision
+  twiddles with a full-precision π; default sample rate from the source's measured
+  interval; FFT/math results reallocate a too-small reused slot (they wrote past
+  it); an FFT result keeps the source measurement's duration for printouts.
+  Derivative/integral/smoothing/trace math copy the source's time stamps and keep
+  double precision.
+- **Start-up text** names the driver the build uses (`gpib_driver_name`,
+  `gpib_driver_help()`).
+- **Exit**: GRIDGPIB build drops REN once (`gpib_release_bus()`) instead of GTL to
+  every slot; FFT/math slots skipped; mouse driver reset.
+- Open: FFT trace cursor readout reported missing on the Grid (not yet diagnosed).

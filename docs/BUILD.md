@@ -4,7 +4,7 @@ TM5000 is a 16-bit MS-DOS application. It is built with the **OpenWatcom
 C/C++ 1.9** toolchain targeting real-mode DOS, and it runs on period hardware
 (or DOSBox / 86Box) — not on a modern OS directly.
 
-The canonical, buildable source tree is [`src/`](../src) (TM5000 v3.6).
+The canonical, buildable source tree is [`src/`](../src) (TM5000 v3.7).
 Historical versions live under [`archive/`](../archive) and are kept for
 reference; this guide describes building the current `src/` tree.
 

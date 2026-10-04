@@ -16,7 +16,6 @@
 
 #include "math_functions.h"
 #include "modules.h"
-#include "data.h"
 #include <dos.h>
 #include <malloc.h>
 
@@ -126,7 +125,6 @@ int perform_dual_trace_operation(int trace1, int trace2, int operation, int resu
     
     /* Update result slot metadata */
     g_system->modules[result_slot].module_data_count = count;
-    copy_time_axis(result_slot, trace1);   /* Grid-OS: X:TIME and durations */
     g_system->modules[result_slot].enabled = 1;
     g_system->modules[result_slot].module_type = MOD_NONE;
     g_system->modules[result_slot].is_result = 1;  /* computed trace - exempt from phantom cleanup */
@@ -164,7 +162,7 @@ int perform_dual_trace_operation(int trace1, int trace2, int operation, int resu
 
 /* Calculate real-time statistics for a trace */
 int calculate_realtime_statistics(int trace_slot, statistics_config *config, statistics_result *result) {
-    double *data;
+    float *data;
     int count;
     
     /* Validate parameters */
@@ -199,50 +197,56 @@ int calculate_realtime_statistics(int trace_slot, statistics_config *config, sta
 }
 
 /* Consolidated statistics calculation - optimized for memory */
-int calculate_basic_statistics(double *data, int count, statistics_result *result) {
+int calculate_basic_statistics(float *data, int count, statistics_result *result) {
     int i;
-    double sum = 0.0, sum_sq = 0.0, d;
-
+    float sum = 0.0, sum_squares = 0.0;
+    float variance;
+    
     if (!data || !result || count <= 0) {
         return MATH_ERROR_INVALID_PARAMS;
     }
-
+    
     /* Initialize result structure */
     memset(result, 0, sizeof(statistics_result));
     result->sample_count = count;
     result->min_value = data[0];
     result->max_value = data[0];
-
-    /* Pass 1: mean, min, max */
+    
+    /* Calculate mean, min, max, and sum of squares */
     for (i = 0; i < count; i++) {
         sum += data[i];
-        if (data[i] < result->min_value) result->min_value = data[i];
-        if (data[i] > result->max_value) result->max_value = data[i];
+        sum_squares += data[i] * data[i];
+        
+        if (data[i] < result->min_value) {
+            result->min_value = data[i];
+        }
+        if (data[i] > result->max_value) {
+            result->max_value = data[i];
+        }
     }
+    
     result->mean = sum / count;
     result->peak_to_peak = result->max_value - result->min_value;
-
-    /* Pass 2: deviations from the mean (Grid-OS: two-pass, so a few Hz of
-       wander on 10 MHz is not lost in the sum of squares) */
-    for (i = 0; i < count; i++) {
-        d = data[i] - result->mean;
-        sum_sq += d * d;
-    }
-    result->std_dev = sqrt(sum_sq / count);
-    result->rms = sqrt(sum_sq / count + result->mean * result->mean);
-
+    
+    /* Calculate RMS */
+    result->rms = sqrt(sum_squares / count);
+    
+    /* Calculate standard deviation */
+    variance = (sum_squares / count) - (result->mean * result->mean);
+    result->std_dev = (variance > 0) ? sqrt(variance) : 0.0;
+    
     /* Memory-efficient median and mode approximation (saves 4KB stack space) */
-    result->median = result->mean;
-    result->mode = result->mean;
-
+    result->median = result->mean;  /* Approximation - good enough for most uses */
+    result->mode = result->mean;    /* Simplified mode calculation */
+    
     return MATH_SUCCESS;
 }
 
 /* Apply digital filter to trace data */
 int apply_digital_filter(int trace_slot, filter_config *config) {
-    double *data;
+    float *data;
     int count;
-    double coefficients[16];  /* Filter coefficients */
+    float coefficients[16];  /* Filter coefficients */
     
     /* Validate parameters */
     if (validate_trace_data(trace_slot) != MATH_SUCCESS || !config) {
@@ -285,7 +289,7 @@ int apply_digital_filter(int trace_slot, filter_config *config) {
 }
 
 /* Design simple lowpass filter */
-int design_lowpass_filter(filter_config *config, double *coefficients) {
+int design_lowpass_filter(filter_config *config, float *coefficients) {
     float omega, alpha;
     
     if (!config || !coefficients) {
@@ -306,7 +310,7 @@ int design_lowpass_filter(filter_config *config, double *coefficients) {
 }
 
 /* Design simple highpass filter */
-int design_highpass_filter(filter_config *config, double *coefficients) {
+int design_highpass_filter(filter_config *config, float *coefficients) {
     float omega, alpha;
     
     if (!config || !coefficients) {
@@ -327,7 +331,7 @@ int design_highpass_filter(filter_config *config, double *coefficients) {
 }
 
 /* Design simple band-pass filter */
-int design_bandpass_filter(filter_config *config, double *coefficients) {
+int design_bandpass_filter(filter_config *config, float *coefficients) {
     float center_freq, bandwidth;
     float low_cutoff, high_cutoff;
     float omega_low, omega_high;
@@ -379,9 +383,9 @@ int design_bandpass_filter(filter_config *config, double *coefficients) {
 }
 
 /* Apply moving average filter */
-int apply_moving_average_filter(double *data, int count, int window_size) {
+int apply_moving_average_filter(float *data, int count, int window_size) {
     int i, j;
-    double sum, *filtered_data;
+    float sum, *filtered_data;
     int start_idx, end_idx, actual_window;  /* C89: Declare at function start */
     
     if (!data || count <= 0 || window_size <= 0 || window_size > count) {
@@ -389,7 +393,7 @@ int apply_moving_average_filter(double *data, int count, int window_size) {
     }
     
     /* Allocate temporary buffer for filtered data */
-    filtered_data = (double *)alloc_samples(count, sizeof(double));
+    filtered_data = (float *)malloc(count * sizeof(float));
     if (!filtered_data) {
         return MATH_ERROR_MEMORY;
     }
@@ -409,16 +413,16 @@ int apply_moving_average_filter(double *data, int count, int window_size) {
     }
     
     /* Copy filtered data back to original array */
-    for (i = 0; i < count; i++) data[i] = filtered_data[i];   /* count*8 can be 64 KB */
-    free_samples(filtered_data);
+    memcpy(data, filtered_data, count * sizeof(float));
+    free(filtered_data);
     
     return MATH_SUCCESS;
 }
 
 /* Apply IIR filter */
-int apply_iir_filter(double *data, int count, double *coefficients, int order) {
+int apply_iir_filter(float *data, int count, float *coefficients, int order) {
     int i, j;
-    double *x_history, *y_history;
+    float *x_history, *y_history;
     float output;
     
     if (!data || !coefficients || count <= 0 || order <= 0 || order > 8) {
@@ -426,8 +430,8 @@ int apply_iir_filter(double *data, int count, double *coefficients, int order) {
     }
     
     /* Allocate history buffers */
-    x_history = (double *)calloc(order + 1, sizeof(double));
-    y_history = (double *)calloc(order + 1, sizeof(double));
+    x_history = (float *)calloc(order + 1, sizeof(float));
+    y_history = (float *)calloc(order + 1, sizeof(float));
     
     if (!x_history || !y_history) {
         if (x_history) free(x_history);
@@ -476,10 +480,10 @@ int apply_iir_filter(double *data, int count, double *coefficients, int order) {
 }
 
 /* Perform linear regression curve fitting */
-int fit_linear_regression(double *x_data, double *y_data, int count, curve_fit_result *result) {
+int fit_linear_regression(float *x_data, float *y_data, int count, curve_fit_result *result) {
     int i;
-    double sum_x = 0.0, sum_y = 0.0, sum_xy = 0.0, sum_x2 = 0.0;
-    double mean_x, mean_y, slope, intercept;
+    float sum_x = 0.0, sum_y = 0.0, sum_xy = 0.0, sum_x2 = 0.0;
+    float mean_x, mean_y, slope, intercept;
     float ss_tot = 0.0, ss_res = 0.0, y_pred;
     
     if (!x_data || !y_data || !result || count < 2) {
@@ -504,7 +508,7 @@ int fit_linear_regression(double *x_data, double *y_data, int count, curve_fit_r
     
     /* Calculate slope and intercept */
     {
-        double denominator = sum_x2 - (sum_x * sum_x) / count;
+        float denominator = sum_x2 - (sum_x * sum_x) / count;
         if (fabs(denominator) < 1e-10) {
             return MATH_ERROR_DIVISION_BY_ZERO;
         }
@@ -539,7 +543,7 @@ int fit_linear_regression(double *x_data, double *y_data, int count, curve_fit_r
 }
 
 /* Polynomial curve fitting (2nd order for v3.5, higher orders in v3.6) */
-int fit_polynomial(double *x_data, double *y_data, int count, int order, curve_fit_result *result) {
+int fit_polynomial(float *x_data, float *y_data, int count, int order, curve_fit_result *result) {
     int i, j, k;
     float matrix[4][5]; /* Max 3rd order (4x5 augmented matrix) for v3.5 */
     float temp;
@@ -561,7 +565,7 @@ int fit_polynomial(double *x_data, double *y_data, int count, int order, curve_f
        unchanged. (Coefficients are therefore in the normalized domain - they are not
        displayed, only the equation form / R^2 / RMS are.) (review #5) */
     {
-        double x_min = x_data[0], x_max = x_data[0];
+        float x_min = x_data[0], x_max = x_data[0];
         for (k = 0; k < count; k++) {
             if (x_data[k] < x_min) x_min = x_data[k];
             if (x_data[k] > x_max) x_max = x_data[k];
@@ -699,8 +703,8 @@ int fit_polynomial(double *x_data, double *y_data, int count, int order, curve_f
 }
 
 /* Exponential curve fitting (y = a * exp(b * x)) */
-int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result *result) {
-    double *ln_y_data;
+int fit_exponential(float *x_data, float *y_data, int count, curve_fit_result *result) {
+    float *ln_y_data;
     int i;
     int fit_result;
     curve_fit_result linear_result;
@@ -717,7 +721,7 @@ int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result 
     }
     
     /* Allocate temporary array for ln(y) */
-    ln_y_data = (double *)alloc_samples(count, sizeof(double));
+    ln_y_data = (float *)malloc(count * sizeof(float));
     if (!ln_y_data) {
         return MATH_ERROR_MEMORY;
     }
@@ -730,7 +734,7 @@ int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result 
     /* Perform linear regression on transformed data */
     fit_result = fit_linear_regression(x_data, ln_y_data, count, &linear_result);
     
-    free_samples(ln_y_data);
+    free(ln_y_data);
     
     if (fit_result != MATH_SUCCESS) {
         return fit_result;
@@ -775,7 +779,7 @@ int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result 
 }
 
 /* Calculate fit quality assessment */
-int calculate_fit_quality(double *y_data, double *y_fitted, int count, curve_fit_result *result) {
+int calculate_fit_quality(float *y_data, float *y_fitted, int count, curve_fit_result *result) {
     int i;
     float ss_res = 0.0, ss_tot = 0.0;
     float y_mean = 0.0;
@@ -806,11 +810,11 @@ int calculate_fit_quality(double *y_data, double *y_fitted, int count, curve_fit
 
 /* Calculate correlation between two traces */
 int calculate_correlation(int trace1, int trace2, correlation_result *result) {
-    double *data1, *data2;
+    float *data1, *data2;
     int count1, count2, count;
     int i;
-    double sum1 = 0.0, sum2 = 0.0, sum12 = 0.0, sum1_sq = 0.0, sum2_sq = 0.0;
-    double mean1, mean2, num, den1, den2;
+    float sum1 = 0.0, sum2 = 0.0, sum12 = 0.0, sum1_sq = 0.0, sum2_sq = 0.0;
+    float mean1, mean2, num, den1, den2;
     
     if (!result) {
         return MATH_ERROR_INVALID_PARAMS;
@@ -873,20 +877,20 @@ int calculate_correlation(int trace1, int trace2, correlation_result *result) {
    traces (review #7); the mean-centred series are built once rather than re-subtracted
    on every lag (review #13). correlation[] (caller-allocated, count floats) receives
    r[lag]; r[0] is the Pearson coefficient. O(count^2). (v3.6) */
-int calculate_cross_correlation(double *data1, double *data2, int count, double *correlation) {
+int calculate_cross_correlation(float *data1, float *data2, int count, float *correlation) {
     int i, lag, max_lag;
     double mean1 = 0.0, mean2 = 0.0, sxy, sxx, syy;
-    double *c1, *c2;
+    float *c1, *c2;
 
     if (!data1 || !data2 || !correlation || count < 2) {
         return MATH_ERROR_INVALID_PARAMS;
     }
 
-    c1 = (double *)alloc_samples(count, sizeof(double));
-    c2 = (double *)alloc_samples(count, sizeof(double));
+    c1 = (float *)malloc(count * sizeof(float));
+    c2 = (float *)malloc(count * sizeof(float));
     if (!c1 || !c2) {
-        if (c1) free_samples(c1);
-        if (c2) free_samples(c2);
+        if (c1) free(c1);
+        if (c2) free(c2);
         return MATH_ERROR_INVALID_PARAMS;   /* out of memory */
     }
 
@@ -917,8 +921,8 @@ int calculate_cross_correlation(double *data1, double *data2, int count, double 
         }
     }
 
-    free_samples(c1);
-    free_samples(c2);
+    free(c1);
+    free(c2);
     return MATH_SUCCESS;
 }
 
@@ -926,7 +930,7 @@ int calculate_cross_correlation(double *data1, double *data2, int count, double 
    aligns with trace1 (peak cross-correlation), or -1 on error. The caller converts
    the lag to a time/phase using sample_rate. (v3.6) */
 int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
-    double *data1, *data2, *corr;
+    float *data1, *data2, *corr;
     int count, count1, count2, lag, best_lag = 0;
     float best = -2.0;
 
@@ -946,13 +950,13 @@ int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
         return -1;
     }
 
-    corr = (double *)alloc_samples(count, sizeof(double));
+    corr = (float *)malloc(count * sizeof(float));
     if (!corr) {
         return -1;
     }
 
     if (calculate_cross_correlation(data1, data2, count, corr) != MATH_SUCCESS) {
-        free_samples(corr);
+        free(corr);
         return -1;
     }
 
@@ -965,7 +969,7 @@ int calculate_phase_shift(int trace1, int trace2, float sample_rate) {
         }
     }
 
-    free_samples(corr);
+    free(corr);
     return best_lag;
 }
 
@@ -1016,9 +1020,9 @@ int validate_filter_config(filter_config *config) {
 }
 
 /* Remove DC offset from signal */
-int remove_dc_offset(double *data, int count) {
+int remove_dc_offset(float *data, int count) {
     int i;
-    double sum = 0.0, mean;
+    float sum = 0.0, mean;
     
     if (!data || count <= 0) {
         return MATH_ERROR_INVALID_PARAMS;
@@ -1039,10 +1043,10 @@ int remove_dc_offset(double *data, int count) {
 }
 
 /* Find peaks in data */
-int find_peaks(double *data, int count, int *peak_indices, int max_peaks) {
+int find_peaks(float *data, int count, int *peak_indices, int max_peaks) {
     int i, peak_count = 0;
     float threshold;
-    double sum = 0.0, mean, std_dev = 0.0;
+    float sum = 0.0, mean, std_dev = 0.0;
     
     if (!data || !peak_indices || count < 3 || max_peaks <= 0) {
         return 0;
@@ -1074,7 +1078,7 @@ int find_peaks(double *data, int count, int *peak_indices, int max_peaks) {
 
 /* Calculate statistics for most recent samples in a trace (simplified rolling stats) */
 int calculate_rolling_statistics(int trace_slot, int window_size) {
-    double *data;
+    float *data;
     int count, start_index, samples_to_use;
     statistics_result result;
     
@@ -1122,9 +1126,9 @@ int get_statistics_result(int trace_slot, statistics_result *result) {
 }
 
 /* Calculate histogram for data array */
-int calculate_histogram(double *data, int count, double *bins, int bin_count) {
+int calculate_histogram(float *data, int count, float *bins, int bin_count) {
     int i, bin_index;
-    double min_val, max_val, range, bin_width;
+    float min_val, max_val, range, bin_width;
     
     if (!data || !bins || count <= 0 || bin_count <= 0) {
         return MATH_ERROR_INVALID_PARAMS;
@@ -1166,7 +1170,7 @@ int calculate_histogram(double *data, int count, double *bins, int bin_count) {
 }
 
 /* Calculate median of data array (requires sorting) */
-int calculate_median(double *data, int count) {
+int calculate_median(float *data, int count) {
     float sorted_data[1024];
     int i, j;
     float median;
@@ -1179,8 +1183,8 @@ int calculate_median(double *data, int count) {
         return MATH_ERROR_BUFFER_OVERFLOW;
     }
     
-    /* Copy data for sorting (float copy - the buffer is float[1024]) */
-    for (i = 0; i < count; i++) sorted_data[i] = (float)data[i];
+    /* Copy data for sorting */
+    memcpy(sorted_data, data, count * sizeof(float));
     
     /* Simple bubble sort */
     for (i = 0; i < count - 1; i++) {
@@ -1204,7 +1208,7 @@ int calculate_median(double *data, int count) {
 }
 
 /* Calculate mode (most frequent value) */
-int calculate_mode(double *data, int count) {
+int calculate_mode(float *data, int count) {
     float tolerance = 0.001;  /* Tolerance for floating point comparison */
     float mode_value = data[0];
     int max_frequency = 1;
@@ -1233,7 +1237,7 @@ int calculate_mode(double *data, int count) {
 }
 
 /* Perform frequency analysis on data */
-int calculate_frequency_analysis(double *data, int count, float sample_rate) {
+int calculate_frequency_analysis(float *data, int count, float sample_rate) {
     /* This is a simplified frequency analysis - full implementation deferred to v3.6 */
     /* For now, just calculate the dominant frequency using zero crossings */
     int zero_crossings = 0;

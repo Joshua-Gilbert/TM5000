@@ -15,7 +15,6 @@
 #include "tm5000.h"
 #include "math_functions.h"
 #include "ui.h"
-#include "data.h"
 
 /* Dual-trace operations menu */
 void dual_trace_operations_menu(void) {
@@ -294,7 +293,7 @@ void curve_fitting_menu(void) {
     int done = 0;
     int trace_slot;
     curve_fit_result result;
-    double *y_data, *x_data;
+    float *y_data, *x_data;
     int count, i, fit_result;
     
     while (!done) {
@@ -339,10 +338,10 @@ void curve_fitting_menu(void) {
                     count = g_system->modules[trace_slot].module_data_count;
 
                     /* Generate X data as sample indices */
-                    x_data = (double *)alloc_samples(count, sizeof(double));
+                    x_data = (float *)malloc(count * sizeof(float));
                     if (x_data) {
                         for (i = 0; i < count; i++) {
-                            x_data[i] = (double)i;
+                            x_data[i] = (float)i;
                         }
 
                         if (method == 1) {
@@ -380,7 +379,7 @@ void curve_fitting_menu(void) {
                             }
                         }
 
-                        free_samples(x_data);
+                        free(x_data);
                     } else {
                         printf("\nError: Insufficient memory\n");
                     }
@@ -471,7 +470,7 @@ void correlation_analysis_menu(void) {
                 
             case '2': {  /* Cross-correlation */
                 int count1, count2, count, lag, best_lag = 0;
-                double *d1, *d2, *corr, best = -2.0;
+                float *d1, *d2, *corr, best = -2.0;
                 printf("\n\nCross-Correlation\n");
                 printf("Enter first trace slot (0-9): ");
                 scanf("%d", &trace1);
@@ -487,7 +486,7 @@ void correlation_analysis_menu(void) {
                     count1 = g_system->modules[trace1].module_data_count;
                     count2 = g_system->modules[trace2].module_data_count;
                     count = (count1 < count2) ? count1 : count2;
-                    corr = (double *)alloc_samples(count, sizeof(double));
+                    corr = (float *)malloc(count * sizeof(float));
 
                     if (count >= 2 && corr) {
                         printf("Computing cross-correlation (%d points)...\n", count);  /* O(n^2) - can be slow (review #12) */
@@ -512,7 +511,7 @@ void correlation_analysis_menu(void) {
                     } else {
                         printf("\nError: insufficient data or memory\n");
                     }
-                    if (corr) free_samples(corr);
+                    if (corr) free(corr);
                 } else {
                     printf("\nError: Invalid trace slots\n");
                 }

@@ -122,7 +122,7 @@ static int d488_command(const char *line)
         sprintf(buf, "CS21 GRIDGPIB %s\r\n", last_err[0] ? last_err : "OK");
         pend_set(buf, strlen(buf));
     } else if ((q = kw(p, "HELLO")) != NULL) {
-        static const char h[] = "GRIDGPIB 1.0 (Driver488 command subset) Grid-OS\r\n";
+        static const char h[] = "GRIDGPIB 1.1 (Driver488 command subset) Grid-OS\r\n";
         pend_set(h, sizeof(h) - 1);
     } else if (kw(p, "ABORT") || kw(p, "RESET")) {
         last_err[0] = '\0';
@@ -222,6 +222,45 @@ int gpib_check_srq(int address)
     unsigned char st;
     if (gg_spoll(address, &st)) return 0;
     return st;
+}
+
+const char gpib_driver_name[] = "GRIDGPIB";
+const char gpib_driver_note[] = "";
+
+/* GRIDGPIB build: on exit drop REN - every device returns to local in one
+   register write, instead of addressing each slot (GTL), which waited on
+   command-byte timeouts when the bus was left in an odd state */
+int gpib_release_bus(void)
+{
+    gg_local(GG_ALL);
+    return 1;
+}
+
+void gpib_driver_help(void)
+{
+    printf("\nMake sure:\n");
+    printf("1. GRIDGPIB.COM is loaded (not together with DRVR488)\n");
+    printf("2. The GPIB cable is connected\n");
+}
+
+int gpib_probe(int address, char *id, int maxlen)
+{
+    unsigned char st;
+    int old, n;
+    id[0] = '\0';
+    old = gg_timeout(150);                 /* a real instrument polls in <1 ms */
+    if (gg_spoll(address, &st)) {
+        if (old > 0) gg_timeout((unsigned)old);
+        return 0;                          /* nothing at this address */
+    }
+    gg_timeout(1500);
+    n = gg_query(address, "ID?", id, maxlen);          /* Tektronix */
+    if (n <= 0 || strncmp(id, "ID", 2) != 0) {
+        n = gg_query(address, "*IDN?", id, maxlen);    /* IEEE 488.2 */
+        if (n <= 0) id[0] = '\0';
+    }
+    if (old > 0) gg_timeout((unsigned)old);
+    return 1;
 }
 
 int ieee_spoll(int address, unsigned char *status)
