@@ -54,6 +54,9 @@ Driver: [driver/gridgpib/](driver/gridgpib/) · Previous source: [archive/v3.6/]
 - Monitor: stale rows looked like duplicated slots; summary printed over them;
   counter readings below 1 MHz shown as MHz.
 - Buffered text landing at the wrong cursor position (`clrscr`/`gotoxy`).
+- Mouse pointer gone after a menu was left by a key: the main, Measurement and
+  File Operations menus hid it twice (in the key branch and after the loop) but
+  showed it once, and the INT 33h driver counts hides, so it stayed hidden.
 
 ---
 
