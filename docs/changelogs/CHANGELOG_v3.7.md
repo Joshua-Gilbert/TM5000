@@ -120,3 +120,14 @@ noted.
 - **Exit**: GRIDGPIB build drops REN once (`gpib_release_bus()`) instead of GTL to
   every slot; FFT/math slots skipped; mouse driver reset.
 - Open: FFT trace cursor readout reported missing on the Grid (not yet diagnosed).
+
+## Mouse pointer after a key (Grid-OS 0.3.1, 2026-10-06)
+
+- Grid-OS 0.3.1 gives DOS programs the mouse (INT 33h), so TM5000G now finds it.
+  Its review found that the main, Measurement and File Operations menus called
+  `hide_mouse()` twice when left by a key (once before `getch()`, once after the
+  loop) but `show_mouse()` once. An INT 33h driver counts hides, as Microsoft's
+  does, so after the first keyboard choice the pointer never came back. The
+  inner `hide_mouse()` is gone; the one after the loop covers both the key and
+  the click. Tested in Grid-OS's emulator: after a key choice and back, the
+  pointer shows again.

@@ -81,8 +81,7 @@ void main_menu(void) {
         choice = 0;
         if (g_mouse.present) {
             while (choice == 0) {
-                if (kbhit()) {
-                    hide_mouse();
+                if (kbhit()) {                  /* (hidden once, after the loop) */
                     choice = getch();
                     break;
                 }
@@ -236,8 +235,7 @@ void measurement_menu(void) {
         choice = 0;
         if (g_mouse.present) {
             while (choice == 0) {
-                if (kbhit()) {
-                    hide_mouse();
+                if (kbhit()) {                  /* (hidden once, after the loop) */
                     choice = getch();
                     break;
                 }
@@ -357,8 +355,7 @@ void file_operations_menu(void) {
         choice = 0;
         if (g_mouse.present) {
             while (choice == 0) {
-                if (kbhit()) {
-                    hide_mouse();
+                if (kbhit()) {                  /* (hidden once, after the loop) */
                     choice = getch();
                     break;
                 }
