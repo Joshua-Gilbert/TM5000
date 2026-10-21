@@ -106,8 +106,8 @@ unsigned char inportb(unsigned int port);
 #endif
 
 /* Global handles */
-extern int ieee_out;  /* Handle for writing to GPIB */
-extern int ieee_in;   /* Handle for reading from GPIB */
+extern int ieee_out;
+extern int ieee_in;
 extern int gpib_error;
 
 #pragma pack(1)
