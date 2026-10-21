@@ -40,8 +40,9 @@ int dm5120_query_buffer_size(int address);
 /* DM5120 timing */
 float dm5120_get_measurement_rate(int slot, int trigger_mode);
 int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_count);
+#define DM5120_STOINT_BAD_SLOT (-6)
 int dm5120_validate_stoint_settings(int slot, int interval_ms);
-void dm5120_set_storage_interval(int address, int slot, int interval_ms);
+int dm5120_set_storage_interval(int address, int slot, int interval_ms);
 
 /* DM5120 SRQ events */
 void dm5120_configure_srq_events(int address, int enable_full, int enable_half, int enable_rdy, int enable_opc);
@@ -128,8 +129,8 @@ void dc5009_stop_measurement(int address);
 double dc5009_read_measurement(int address);
 int dc5009_check_overflow(int address);
 void dc5009_clear_overflow(int address);
-void dc5009_query_function(int address, char *buffer);
-void dc5009_query_id(int address, char *buffer);
+void dc5009_query_function(int address, char *buffer, int size);
+void dc5009_query_id(int address, char *buffer, int size);
 int dc5009_query_error(int address);
 void dc5009_set_preset(int address, int enabled);
 void dc5009_manual_timing(int address);
@@ -159,8 +160,8 @@ void dc5010_clear_overflow(int address);
 void dc5010_set_burst_mode(int address, int enabled);
 void dc5010_measure_rise_time(int address);
 void dc5010_measure_fall_time(int address);
-void dc5010_query_function(int address, char *buffer);
-void dc5010_query_id(int address, char *buffer);
+void dc5010_query_function(int address, char *buffer, int size);
+void dc5010_query_id(int address, char *buffer, int size);
 int dc5010_query_error(int address);
 void dc5010_set_preset(int address, int enabled);
 void dc5010_manual_timing(int address);
@@ -189,7 +190,7 @@ void fg5010_set_invert(int address, int enable);
 void fg5010_set_phase(int address, float phase);
 void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth);
 void fg5010_set_burst(int address, int enable, int count, float period);
-int test_fg5010_comm(int address);
+int test_fg5010_comm(int address);  /* 0 = pass, -1 = fail, 1 = declined (not run) */
 float fg5010_read_frequency(int address);
 int fg5010_read_output_status(int address);
 

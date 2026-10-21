@@ -354,14 +354,14 @@ void file_operations_menu(void) {
                         delay(10);
                     }
                     
-                    if (g_mouse.y == 3) { choice = '1'; break; }   /* Save Data */
-                    if (g_mouse.y == 5) { choice = '2'; break; }   /* Load Data */
-                    if (g_mouse.y == 7) { choice = '3'; break; }  /* Save Settings */
-                    if (g_mouse.y == 9) { choice = '4'; break; }  /* Load Settings */
-                    if (g_mouse.y == 11) { choice = '5'; break; }  /* Print Report */
-                    if (g_mouse.y == 13) { choice = '6'; break; }  /* Configuration Profiles */
-                    if (g_mouse.y == 15) { choice = '7'; break; }  /* Export Data */
-                    if (g_mouse.y == 17) { choice = '0'; break; }  /* Return */
+                    if (g_mouse.y == 5) { choice = '1'; break; }   /* Save Data */
+                    if (g_mouse.y == 7) { choice = '2'; break; }   /* Load Data */
+                    if (g_mouse.y == 9) { choice = '3'; break; }  /* Save Settings */
+                    if (g_mouse.y == 11) { choice = '4'; break; }  /* Load Settings */
+                    if (g_mouse.y == 13) { choice = '5'; break; }  /* Print Report */
+                    if (g_mouse.y == 15) { choice = '6'; break; }  /* Configuration Profiles */
+                    if (g_mouse.y == 17) { choice = '7'; break; }  /* Export Data */
+                    if (g_mouse.y == 19) { choice = '0'; break; }  /* Return */
                 }
                 
                 delay(10);
@@ -411,12 +411,29 @@ void file_operations_menu(void) {
 void configuration_profiles_menu(void) {
     int choice;
     int done = 0;
-    profile_list_entry profiles[MAX_CONFIG_PROFILES];
+    static profile_list_entry profiles[MAX_CONFIG_PROFILES];  /* ~1 KB: too big for the 2 KB stack */
     int profile_count;
     char profile_name[PROFILE_NAME_LENGTH];
     char profile_desc[PROFILE_DESC_LENGTH];
-    int i, selected_index;
-    
+    int i, selected_index, result;
+
+    result = init_profile_system();
+    if (result != PROFILE_SUCCESS) {
+        if (result == PROFILE_ERROR_CORRUPT) {
+            printf("\nPROFILES.DAT in the current directory is not a TM5000 profile file.\n");
+            printf("Rename or delete it to start a new one.\n");
+        } else if (result == PROFILE_ERROR_VERSION) {
+            printf("\nPROFILES.DAT in the current directory was written by a different\n");
+            printf("TM5000 version. The file was left unchanged; use that version, or\n");
+            printf("rename it to start a new one here.\n");
+        } else {
+            printf("\nCannot create or read PROFILES.DAT in the current directory.\n");
+        }
+        printf("Press any key to continue...");
+        getch();
+        return;
+    }
+
     while (!done) {
         clrscr();
         display_header("Configuration Profiles");
@@ -640,7 +657,7 @@ void enhanced_export_menu(void) {
                     
                     if (export_data_enhanced(filename, &config) == EXPORT_SUCCESS) {
                         printf("Export successful: %s\n", filename);
-                        printf("File size: %d bytes\n", get_export_file_size(filename));
+                        printf("File size: %ld bytes\n", (long)get_export_file_size(filename));
                     } else {
                         display_error("Export failed");
                     }
@@ -763,6 +780,7 @@ void sample_rate_menu(void) {
         getch();
     } else if (choice == '8') {
         printf("\nEnter custom rate (10-60000 ms): ");
+        custom_rate = 0;  /* stays invalid if scanf fails */
         scanf("%d", &custom_rate);
         if (custom_rate >= 10 && custom_rate <= 60000) {
             g_control_panel.sample_rate_ms = custom_rate;
@@ -915,6 +933,7 @@ void calculate_statistics(void) {
     printf("===============================\n\n");
     
     printf("Select source slot (0-9): ");
+    slot = -1;  /* stays invalid if scanf fails */
     scanf("%d", &slot);
     
     if (slot < 0 || slot > 9 || !g_system->modules[slot].enabled ||
@@ -1076,7 +1095,7 @@ void module_selection_menu(void) {
                 g_control_panel.monitor_all = 0;  /* any toggle means selective mode */
             }
         } else if (toupper(key) == 'A') {
-            g_control_panel.monitor_mask = 0xFF;
+            g_control_panel.monitor_mask = 0x3FF;  /* slots 0-9 */
             g_control_panel.monitor_all = 1;
         } else if (toupper(key) == 'N') {
             g_control_panel.monitor_mask = 0;
@@ -1133,6 +1152,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1169,6 +1189,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1205,6 +1226,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1241,6 +1263,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1330,6 +1353,7 @@ void module_functions_menu(void) {
                 
             case '3':
                 printf("\n\nEnter GPIB address to test (1-30): ");
+                i = 0;  /* i is 10 from the slot loop; a failed scanf would test address 10 */
                 scanf("%d", &i);
                 
                 if (i < 1 || i > 30) {
@@ -1908,7 +1932,7 @@ void graph_display(void) {
                             if (g_traces[i].enabled) active_traces++;
                         }
                         
-                        if (!g_traces[selected_trace].enabled) {
+                        if (selected_trace < 0 || !g_traces[selected_trace].enabled) {
                             selected_trace = -1;
                             for (i = 0; i < 10; i++) {
                                 if (g_traces[i].enabled) {
@@ -2348,7 +2372,7 @@ void graph_display(void) {
                                             if (g_traces[i].enabled) active_traces++;
                                         }
                                         
-                                        if (!g_traces[selected_trace].enabled) {
+                                        if (selected_trace < 0 || !g_traces[selected_trace].enabled) {
                                             selected_trace = -1;
                                             for (i = 0; i < 10; i++) {
                                                 if (g_traces[i].enabled) {
@@ -2429,7 +2453,6 @@ void graph_display(void) {
                     break;
                     
                 case 'F':  /* Toggle fine/coarse cursor mode */
-                case 'f':
                     fine_cursor_mode = !fine_cursor_mode;
                     cursor_mode_changed = 1;
                     /* resync current_frequency to the cursor's sample so the FFT cursor stays put */
@@ -2441,7 +2464,6 @@ void graph_display(void) {
                     break;
                     
                 case 'H':  /* Help/Config menu */
-                case 'h':
                     ptr_hide();
                     text_mode();
                     graph_config_menu();
@@ -2450,7 +2472,6 @@ void graph_display(void) {
                     break;
                     
                 case 'T':  /* Trace selection menu */
-                case 't':
                     ptr_hide();
                     text_mode();
                     display_trace_selection_menu();

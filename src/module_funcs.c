@@ -46,6 +46,8 @@ void send_custom_command(void) {
             slot = input - '0';
         } else {
             printf("\nInvalid input!\n");
+            printf("Press any key to continue...");
+            getch();
             return;
         }
     }
@@ -78,32 +80,39 @@ void send_custom_command(void) {
         if (fgets(command, sizeof(command), stdin) == NULL) {
             continue;
         }
-        
+
+        /* An over-long line: drop the rest, else it would go out as a command of its own. */
+        if (strchr(command, '\n') == NULL && !feof(stdin)) {
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF) ;
+            printf("Command too long, not sent\n");
+            continue;
+        }
+
         command[strcspn(command, "\r\n")] = 0;
-        
+
         if (strcasecmp(command, "EXIT") == 0) {
             done = 1;
             continue;
         }
-        
+
         if (strlen(command) == 0) {
             continue;
         }
-        
+
         printf("Sending: '%s'\n", command);
-        
+
         ieee_write("fill off\r\n");
         GPIB_PACE(50);
-        
-        gpib_write(g_system->modules[slot].gpib_address, command);
-        
-        if (strchr(command, '?') != NULL || 
+
+        if (gpib_write(g_system->modules[slot].gpib_address, command) != 0) {
+            printf("Command not sent\n");
+        } else if (strchr(command, '?') != NULL ||
             strcasecmp(command, "X") == 0 ||
-            strcasecmp(command, "SEND") == 0 ||
-            strncasecmp(command, "F", 1) == 0) {
-            
+            strcasecmp(command, "SEND") == 0) {
+
             printf("Reading response...\n");
-            delay(200);
+            GPIB_PACE(200);
             
             memset(response, 0, sizeof(response));
             
@@ -954,21 +963,29 @@ void gpib_terminal_mode(void) {
         printf("\nGPIB> ");
         fflush(stdout);
         
-        if (fgets(command, sizeof(command), stdin) == NULL) {
+        /* 2 bytes kept for the CRLF appended below */
+        if (fgets(command, sizeof(command) - 2, stdin) == NULL) {
             continue;
         }
-        
+
+        if (strchr(command, '\n') == NULL && !feof(stdin)) {
+            int c;
+            while ((c = getchar()) != '\n' && c != EOF) ;
+            printf("Command too long, not sent\n");
+            continue;
+        }
+
         command[strcspn(command, "\r\n")] = 0;
-        
+
         if (strcasecmp(command, "EXIT") == 0) {
             done = 1;
             continue;
         }
-        
+
         if (strlen(command) == 0) {
             continue;
         }
-        
+
         printf("Sending: '%s'\n", command);
         strcat(command, "\r\n");
         ieee_write(command);
@@ -990,8 +1007,8 @@ void gpib_terminal_mode(void) {
         } else {
             printf("No response received\n");
         }
-        
-        delay(50);
+
+        GPIB_PACE(50);
     }
 }
 
@@ -1093,12 +1110,13 @@ static const char* __far stoint_opts[] = {
 static const int __far test_intervals[] = {1, 5, 10, 20, 100};
 static const char* __far conflict_msgs[] = {
     "OHMS conflict", "AUTO range conflict", "CIRCULAR conflict", 
-    "5-6 digit conflict", "4+ digit conflict"
+    "5-6 digit conflict", "4+ digit conflict", "invalid slot"   /* -1..-5, DM5120_STOINT_BAD_SLOT */
 };
 
 void dm5120_stoint_menu(int address, int slot) {
     char choice;
     int interval, current_interval;
+    long entered;
     char done = 0;
     int validation_result, i;
     dm5120_config *cfg = &g_dm5120_config[slot];
@@ -1129,14 +1147,21 @@ void dm5120_stoint_menu(int address, int slot) {
                 printf("\nSTOINT set to ONE\n");
                 break;
             case '2':
-                printf("\nEnter ms (1-999999): ");
-                scanf("%d", &interval);
-                if (interval >= 1 && interval <= 999999) {
-                    dm5120_set_storage_interval(address, slot, interval);
-                    printf("Set to %d ms\n", interval);
-                    validation_result = dm5120_validate_stoint_settings(slot, interval);
-                    if (validation_result < 0) {
-                        printf("WARNING: %s\n", conflict_msgs[-validation_result-1]);
+                /* long so an out-of-range entry cannot wrap into a valid int; capped at
+                   what dm5120_set_storage_interval's int carries */
+                printf("\nEnter ms (1-32767): ");
+                entered = 0;
+                scanf("%ld", &entered);
+                if (entered >= 1 && entered <= 32767) {
+                    interval = (int)entered;
+                    if (dm5120_set_storage_interval(address, slot, interval) == 0) {
+                        printf("Set to %d ms\n", interval);
+                        validation_result = dm5120_validate_stoint_settings(slot, interval);
+                        if (validation_result < 0) {
+                            printf("WARNING: %s\n", conflict_msgs[-validation_result-1]);
+                        }
+                    } else {
+                        printf("STOINT not set\n");
                     }
                 } else {
                     printf("Invalid range\n");

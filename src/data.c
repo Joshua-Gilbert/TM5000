@@ -61,27 +61,30 @@ static void reset_slot_state(tm5000_module *m) {
 
 /* Replaces the slot's value and time-stamp buffers, capped at POOLED_MAX.
    Returns 1 if the value buffer was allocated; without the time-stamp buffer
-   the slot just has no time axis. */
+   the slot just has no time axis. On failure the old buffers, size and
+   count are left untouched. */
 int allocate_module_buffer(int slot, unsigned int size) {
     tm5000_module *m;
+    double far *new_data;
     if (slot < 0 || slot >= 10) return 0;
     m = &g_system->modules[slot];
-
-    if (m->module_data) free_samples(m->module_data);
-    if (m->sample_t) free_samples(m->sample_t);
-    m->module_data = NULL;
-    m->sample_t = NULL;
     if (size > POOLED_MAX) size = POOLED_MAX;
 
-    m->module_data = (double far *)alloc_samples(size, sizeof(double));
+    new_data = (double far *)alloc_samples(size, sizeof(double));
+    if (!new_data) return 0;
+
+    /* A trace may alias the old buffer; repoint it before the free */
+    if (m->module_data && g_traces[slot].data == m->module_data) {
+        g_traces[slot].data = new_data;
+        g_traces[slot].data_count = 0;
+    }
+    if (m->module_data) free_samples(m->module_data);
+    if (m->sample_t) free_samples(m->sample_t);   /* before the new one: lower peak */
+    m->module_data = new_data;
     m->sample_t = (unsigned long far *)alloc_samples(size, sizeof(unsigned long));
     reset_slot_state(m);
-    if (m->module_data) {
-        m->module_data_size = size;
-        return 1;
-    }
-    m->module_data_size = 0;
-    return 0;
+    m->module_data_size = size;
+    return 1;
 }
 
 void free_module_buffer(int slot) {
@@ -89,6 +92,10 @@ void free_module_buffer(int slot) {
     if (slot < 0 || slot >= 10) return;
     m = &g_system->modules[slot];
     if (m->module_data) {
+        if (g_traces[slot].data == m->module_data) {
+            g_traces[slot].data = NULL;
+            g_traces[slot].data_count = 0;
+        }
         free_samples(m->module_data);
         m->module_data = NULL;
         m->module_data_size = 0;
@@ -204,9 +211,9 @@ void save_data(void) {
     printf("=========\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%s", filename);
+    scanf("%75s", filename);  /* leave room for the 4-char extension */
     strcat(filename, ".tm5");
-    
+
     fp = fopen(filename, "w");
     if (!fp) {
         printf("Error: Cannot create file\n");
@@ -312,7 +319,7 @@ void save_data(void) {
 void load_data(void) {
     FILE *fp;
     char filename[80];
-    char line[100];
+    char line[GPIB_BUFFER_SIZE];  /* also the buffer the load_*_config readers use */
     char desc[20];
     int slot, type, addr;
   
@@ -328,9 +335,9 @@ void load_data(void) {
     printf("=========\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%s", filename);
+    scanf("%75s", filename);  /* leave room for the 4-char extension */
     strcat(filename, ".tm5");
-    
+
     fp = fopen(filename, "r");
     if (!fp) {
         /* Try without extension */
@@ -423,7 +430,12 @@ void load_data(void) {
                 if (count > 0) {
                     if (!allocate_module_buffer(slot, count + 100)) {
                         printf("Error: Failed to allocate memory for module %d (%u samples)\n", slot, count);
-                        printf("Module %d will remain configured but without data buffer\n", slot);
+                        if (g_system->modules[slot].module_data) {
+                            printf("Module %d keeps its existing %u-sample buffer\n",
+                                   slot, g_system->modules[slot].module_data_size);
+                        } else {
+                            printf("Module %d will remain configured but without data buffer\n", slot);
+                        }
                     } else {
                     }
                 } else {
@@ -435,34 +447,43 @@ void load_data(void) {
     }
     
     if (strncmp(line, "ModuleConfigs:", 14) == 0) {
+        int have_line = 0;  /* line already holds the header a reader stopped at */
+
         printf("Loading module configurations...\n");
-        while (fgets(line, sizeof(line), fp)) {
+        while (have_line || fgets(line, sizeof(line), fp)) {
+            have_line = 0;
             if (strncmp(line, "GlobalData:", 11) == 0) break;
-            
+
             /* Parse module config header like "Slot2:DM5120" */
             if (sscanf(line, "Slot%d:%*s", &slot) == 1) {
-                if (slot >= 0 && slot < 10 && g_system->modules[slot].enabled) {
+                if (slot < 0 || slot >= 10 || !g_system->modules[slot].enabled) {
+                    printf("Warning: Config block for slot %d skipped (no such module)\n", slot);
+                } else {
                     switch (g_system->modules[slot].module_type) {
                         case MOD_DM5120:
-                            load_dm5120_config(fp, slot);
+                            have_line = load_dm5120_config(fp, slot, line, sizeof(line));
                             break;
                         case MOD_DM5010:
-                            load_dm5010_config(fp, slot);
+                            have_line = load_dm5010_config(fp, slot, line, sizeof(line));
                             break;
                         case MOD_PS5004:
-                            load_ps5004_config(fp, slot);
+                            have_line = load_ps5004_config(fp, slot, line, sizeof(line));
                             break;
                         case MOD_PS5010:
-                            load_ps5010_config(fp, slot);
+                            have_line = load_ps5010_config(fp, slot, line, sizeof(line));
                             break;
                         case MOD_DC5009:
-                            load_dc5009_config(fp, slot);
+                            have_line = load_dc5009_config(fp, slot, line, sizeof(line));
                             break;
                         case MOD_DC5010:
-                            load_dc5010_config(fp, slot);
+                            have_line = load_dc5010_config(fp, slot, line, sizeof(line));
                             break;
                         case MOD_FG5010:
-                            load_fg5010_config(fp, slot);
+                            have_line = load_fg5010_config(fp, slot, line, sizeof(line));
+                            break;
+                        default:
+                            printf("Warning: Config block for slot %d skipped (module type %d)\n",
+                                   slot, g_system->modules[slot].module_type);
                             break;
                     }
                 }
@@ -610,9 +631,9 @@ void save_settings(void) {
     printf("===========================\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%s", filename);
+    scanf("%75s", filename);  /* leave room for the 4-char extension */
     strcat(filename, ".cfg");
-    
+
     fp = fopen(filename, "w");
     if (!fp) {
         printf("Error: Cannot create file\n");
@@ -689,9 +710,9 @@ void load_settings(void) {
     printf("===========================\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%s", filename);
+    scanf("%75s", filename);  /* leave room for the 4-char extension */
     strcat(filename, ".cfg");
-    
+
     fp = fopen(filename, "r");
     if (!fp) {
         printf("Error: Cannot open file '%s'\n", filename);
@@ -810,6 +831,9 @@ void load_settings(void) {
                             case MOD_PS5010:
                                 init_ps5010_config(slot);
                                 break;
+                            case MOD_FG5010:
+                                init_fg5010_config(slot);
+                                break;
                         }
                         
                         if (!allocate_module_buffer(slot, MAX_SAMPLES_PER_MODULE)) {
@@ -827,6 +851,7 @@ void load_settings(void) {
         if (strcmp(line, "[ModuleConfigs]") == 0) {
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') {
+                    line[strcspn(line, "\r\n")] = 0;  /* matched by the [GraphScale] check below */
                     break;
                 }
                 if (sscanf(line, "%[^=]=%s", key, value) == 2) {
@@ -1023,17 +1048,17 @@ void save_fg5010_config(FILE *fp, int slot) {
             cfg->units_freq, cfg->units_time, cfg->lf_termination);
 }
 
-/* The load_*_config readers stop at the next "Slot" or "GlobalData:" line and
-   consume it (no fseek back), so the caller never sees that line. */
-void load_dm5120_config(FILE *fp, int slot) {
+/* The load_*_config readers read into the caller's line buffer and stop at the
+   next "Slot" or "GlobalData:" line (no fseek back). They return 1 with that
+   header left in line for the caller to handle, or 0 at end of file. */
+int load_dm5120_config(FILE *fp, int slot, char *line, int line_size) {
     dm5120_config *cfg = &g_dm5120_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
 
-    while (fgets(line, sizeof(line), fp)) {
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
 
         token = strtok(line, "|");
@@ -1060,17 +1085,17 @@ void load_dm5120_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }
 
-void load_dm5010_config(FILE *fp, int slot) {
+int load_dm5010_config(FILE *fp, int slot, char *line, int line_size) {
     dm5010_config *cfg = &g_dm5010_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    while (fgets(line, sizeof(line), fp)) {
+
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
         
         token = strtok(line, "|");
@@ -1101,17 +1126,17 @@ void load_dm5010_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }
 
-void load_ps5004_config(FILE *fp, int slot) {
+int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
     ps5004_config *cfg = &g_ps5004_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    while (fgets(line, sizeof(line), fp)) {
+
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
         
         token = strtok(line, "|");
@@ -1132,17 +1157,17 @@ void load_ps5004_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }
 
-void load_ps5010_config(FILE *fp, int slot) {
+int load_ps5010_config(FILE *fp, int slot, char *line, int line_size) {
     ps5010_config *cfg = &g_ps5010_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    while (fgets(line, sizeof(line), fp)) {
+
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
         
         token = strtok(line, "|");
@@ -1175,17 +1200,17 @@ void load_ps5010_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }
 
-void load_dc5009_config(FILE *fp, int slot) {
+int load_dc5009_config(FILE *fp, int slot, char *line, int line_size) {
     dc5009_config *cfg = &g_dc5009_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    while (fgets(line, sizeof(line), fp)) {
+
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
         
         token = strtok(line, "|");
@@ -1215,17 +1240,17 @@ void load_dc5009_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }
 
-void load_dc5010_config(FILE *fp, int slot) {
+int load_dc5010_config(FILE *fp, int slot, char *line, int line_size) {
     dc5010_config *cfg = &g_dc5010_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    while (fgets(line, sizeof(line), fp)) {
+
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
         
         token = strtok(line, "|");
@@ -1257,17 +1282,17 @@ void load_dc5010_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }
 
-void load_fg5010_config(FILE *fp, int slot) {
+int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
     fg5010_config *cfg = &g_fg5010_config[slot];
-    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    while (fgets(line, sizeof(line), fp)) {
+
+    while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            break;
+            return 1;
         }
         
         token = strtok(line, "|");
@@ -1304,4 +1329,5 @@ void load_fg5010_config(FILE *fp, int slot) {
             token = strtok(NULL, "|");
         }
     }
+    return 0;
 }

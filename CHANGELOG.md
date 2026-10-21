@@ -15,6 +15,93 @@ The project has three eras:
 
 ---
 
+## [Unreleased] — Audit fixes
+
+Built clean with OpenWatcom 2.0 (no new warnings), both executables; not yet run on
+hardware.
+
+### Fixed — memory safety
+- **Printing:** legend and spectrum lines overran `label[40]` (text) and `label[80]`
+  (PostScript), the screen-print caption overran `hdr[96]`, and a custom header over 63
+  characters overran `g_custom_header_text`. Headers are now cut to 63.
+- **Stack:** the profile functions kept up to 5 KB of locals on the 2 KB stack, so
+  delete, save and first use aborted with "Stack Overflow!". Those buffers are now
+  static. The GPIB terminal's 128-byte line plus CRLF wrote past its buffer, and
+  over-long console lines are now refused instead of being sent in pieces.
+- **GPIB:** a command too long for the 128-byte bus buffer is refused with an
+  error instead of overflowing it. `gpib_write`, `gpib_write_dm5120` and
+  `gpib_write_dm5010` return -1 when a command was refused or the write failed. A long
+  driver status is cut to fit `g_error_msg`.
+- **Buffers:** `allocate_module_buffer` allocates before freeing, so a failed
+  allocation leaves the old data intact. FFT, derivative, integral, smoothing and
+  dual-trace results grow a too-small target buffer instead of writing past it.
+- `ieeescnf` read 256 bytes into a 128-byte buffer.
+
+### Fixed — files and profiles
+- **`.tm5` load** lost every other module's config, the global data and the module
+  data: each config reader consumed the next header line. Skipped config blocks now
+  print a warning. The file format is unchanged.
+- **`.cfg` load** never applied `[GraphScale]`, and FG5010 slots got no default config.
+- **Profiles:** the checksum covered its own low byte, so about 255 of 256 saved
+  profiles failed verification and vanished from the list. Existing `PROFILES.DAT`
+  files verify again with no version bump. After a delete, load, delete and overwrite
+  acted on the wrong profile. The menu never opened `PROFILES.DAT` at all, because
+  `init_profile_system` had no caller. It now tells I/O, not-a-profile-file and
+  version-mismatch errors apart.
+- Export file sizes of 32 KB and up were truncated to 16 bits. In scientific
+  notation, zero now follows the precision setting.
+- **PostScript:** the graph title and trace labels are escaped, so `(`, `)` or `\` in
+  them no longer breaks the print job. The `%%Creator` line reports the real version.
+  A print that spans midnight while the printer is busy no longer times out at once.
+
+### Fixed — math
+- **Digital filters** ran the wrong recurrence (feedback read from `a0`, and the
+  highpass `a1` was wrong). *Order* now cascades that many sections, and the
+  accumulator is double, so a 10 MHz counter trace keeps sub-Hz detail.
+- **FFT** no longer scrubs NaNs and clips extremes in the source measurement itself;
+  it works on its copy.
+- The **no-287 FFT** used small-angle cos/sin approximations over the whole circle,
+  and windowed a longer record than it transformed.
+- Derivative, integral and smoothing gave wrong results when overwriting their own
+  source slot. The integral trace now sets up its axes like the derivative.
+- Removed `calculate_median`, `calculate_mode` and `calculate_frequency_analysis`: they
+  were never called, and they returned scaled values in a 16-bit int.
+
+### Fixed — instruments and UI
+- **FG5010 communication test** reprograms frequency, amplitude and waveform and
+  briefly enables the output. It now asks first, and always switches the output off
+  again, even if the read-back times out. Ctrl-C/Ctrl-Break are ignored while the
+  output is on. If the `OUTP OFF` write fails, a front-panel warning is shown. It also
+  runs from the slot-setup "Test communication?" prompt.
+- **DM5120:** the buffered fill sent `STOINT` as readings/s × 1000 (10 r/s sent
+  `STOINT 10000`). The conflict check now tests the configured interval and refuses
+  an invalid slot.
+- **DM5120 bus handling** keyed off `address − 10` for addresses 10–17 only.
+  Addresses are user-assigned, so the SRQ poll and longer settle now apply to every
+  enabled DM5120, which adds about 200 ms per command to a DM5120 at any other
+  address.
+- **DM5010 advanced config** sent an uninitialized buffer instead of the command it
+  had just built: all nine `dm5010_set_*` setters. They now send the real command.
+- The DC5010 communication test ran the DC5009 test. The DC5009/DC5010 query
+  functions now fill the caller's buffer.
+- The FPU probe began with a waiting `fclex`, which can hang a machine with no 287,
+  and read its control word uninitialized.
+- The STOINT menu read a 16-bit int but accepted up to 999999, so 70000 wrapped to
+  4464 and was sent. It now accepts 1–32767.
+- "Select all" left slots 8–9 unselected. ALT-toggle could index `g_traces[-1]`.
+  File-menu mouse clicks picked the item above the one clicked. Trace visibility
+  survives the monitor's buffer-pool resize.
+- Two fixed Driver488 settle waits in the custom-command and terminal screens now
+  compile away in the GRIDGPIB build, like the other pacing waits.
+- Custom GPIB commands starting with `F` (e.g. `FUNCT DCV`) triggered a read and a
+  SEQUENCE error. Only queries (`?`) read now.
+
+### Build
+- Makefile dependencies list each file's direct includes, including the GRIDGPIB
+  objects, and `clean` also removes `.err` and `.map`.
+
+---
+
 ## [3.7] — 2026-10-01 — TM5000G on GRIDGPIB, double precision, long runs
 
 Detailed changelog: [docs/changelogs/CHANGELOG_v3.7.md](docs/changelogs/CHANGELOG_v3.7.md) ·

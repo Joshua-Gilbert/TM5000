@@ -128,19 +128,21 @@ int _ieeerd(handle,chars,size)
 
 /*
  * ieeeprtf()/ieeescnf() are printf/scanf to and from Personal488.
- * ieeeprtf formats into 128 bytes; ieeescnf takes at most 5 arguments.
+ * ieeeprtf sends at most 127 chars and refuses (-1) anything longer rather than
+ * send it truncated; ieeescnf reads at most 127 bytes and takes at most 5 arguments.
  */
 
 int ieeeprtf(char *format, ...)
-{ 
+{
   char buffer[128];
   va_list arg_ptr;
-  int result;
+  int len;
 
   va_start(arg_ptr, format);
-  vsprintf(buffer, format, arg_ptr);
+  len = vsnprintf(buffer, sizeof(buffer), format, arg_ptr);
   va_end(arg_ptr);
-  
+  if (len < 0 || len >= (int)sizeof(buffer)) return -1;
+
   return _ieeewt(ieee, buffer);
 }
 
@@ -148,8 +150,8 @@ int ieeescnf(format,a,b,c,d,e)
 char *format,*a,*b,*c,*d,*e;
 { char buffer[128];
   int  readst;
-  if ( (readst=_ieeerd(ieee,buffer,256)) < 0 ) { return readst; }
-  buffer[256]=(char)0;
+  if ( (readst=_ieeerd(ieee,buffer,sizeof(buffer)-1)) < 0 ) { return readst; }
+  buffer[readst]=(char)0;
   return sscanf(buffer,format,a,b,c,d,e);
 }
 

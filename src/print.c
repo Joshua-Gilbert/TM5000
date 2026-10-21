@@ -23,13 +23,15 @@ static unsigned lpt_base(void) {
 
 void lpt_send_byte(unsigned char data) {
     unsigned base = lpt_base();
-    unsigned long t0;
-    
+    unsigned long t0, now;
+
     if (g_lpt_error) return;
     if (!(inportb(base + 1) & 0x80)) {               /* BUSY */
         t0 = *(unsigned long far *)0x0040006CL;
         while (!(inportb(base + 1) & 0x80)) {
-            if (*(unsigned long far *)0x0040006CL - t0 > 182UL) {
+            now = *(unsigned long far *)0x0040006CL;
+            if (now < t0) now += 0x1800B0UL;         /* BIOS count restarts at 0 at midnight */
+            if (now - t0 > 182UL) {
                 g_lpt_error = 1;                     /* printer not ready */
                 return;
             }
@@ -40,6 +42,22 @@ void lpt_send_byte(unsigned char data) {
     outportb(base + 2, 0x0C);
 }
 
+/* Send a string for use inside a PostScript ( ) literal, escaping ( ) and \.
+   Control bytes become spaces so a stray CR/LF cannot break the line. */
+static void ps_print_escaped(const char *str) {
+    unsigned char c;
+
+    while (*str) {
+        c = (unsigned char)*str++;
+        if (c < 0x20) {
+            c = ' ';
+        } else if (c == '(' || c == ')' || c == '\\') {
+            lpt_send_byte('\\');
+        }
+        lpt_send_byte(c);
+    }
+}
+
 /* Print what the graph screen shows: rows 0-185 of the CGA 320x200
  * four-level screen (graph and labels, not the key-help footer) as a
  * PostScript 2-bit grey image on white, with the caption under it.
@@ -47,7 +65,7 @@ void lpt_send_byte(unsigned char data) {
 int print_screen_ps(const char *caption) {
     static const char hx[] = "0123456789ABCDEF";
     char line[168];
-    char hdr[96];
+    char hdr[128];
     unsigned char far *row;
     unsigned char b;
     int y, x, n;
@@ -57,13 +75,13 @@ int print_screen_ps(const char *caption) {
     g_lpt_error = 0;
     time(&now);
     tmv = localtime(&now);
-    sprintf(hdr, "(%s   %04d-%02d-%02d %02d:%02d:%02d) show\r\n",
-            (g_use_custom_header && g_custom_header_text[0]) ? g_custom_header_text : "TM5000G graph",
+    sprintf(hdr, "   %04d-%02d-%02d %02d:%02d:%02d) show\r\n",
             tmv->tm_year + 1900, tmv->tm_mon + 1, tmv->tm_mday,
             tmv->tm_hour, tmv->tm_min, tmv->tm_sec);
-    
+
     print_string("%!PS-Adobe-3.0\r\n%%Title: TM5000G screen\r\n%%Pages: 1\r\n%%EndComments\r\n");
-    print_string("%%Page: 1 1\r\n/Times-Roman findfont 12 scalefont setfont\r\n36 750 moveto\r\n");
+    print_string("%%Page: 1 1\r\n/Times-Roman findfont 12 scalefont setfont\r\n36 750 moveto\r\n(");
+    ps_print_escaped((g_use_custom_header && g_custom_header_text[0]) ? g_custom_header_text : "TM5000G graph");
     print_string(hdr);
     /* Square pixels: 540 pt / 320 = 1.6875 pt, and 186 rows x 1.6875 = 313.875 pt */
     print_string("gsave 36 420 translate 540 313.875 scale\r\n/ln 80 string def\r\n");
@@ -325,7 +343,8 @@ void print_graph_menu(void) {
                 if (fgets(input_buffer, sizeof(input_buffer), stdin)) {
                     input_buffer[strcspn(input_buffer, "\n")] = '\0';
                     if (strlen(input_buffer) > 0) {
-                        strcpy(g_custom_header_text, input_buffer);
+                        strncpy(g_custom_header_text, input_buffer, sizeof(g_custom_header_text) - 1);
+                        g_custom_header_text[sizeof(g_custom_header_text) - 1] = '\0';
                         g_use_custom_header = 1;
                     }
                 }
@@ -344,7 +363,7 @@ void print_graph_text(void) {
     double value, y_range;
     int y_pos;
     int samples_to_print;
-    char label[40];
+    char label[128];
     int trace_count = 0;
     int max_samples = 0;
     int dominant_trace = -1;
@@ -485,7 +504,11 @@ void print_graph_text(void) {
         
         {
             char *range_postscript_unit;
-            get_print_units(y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
+            if (dominant_trace >= 0) {
+                get_trace_print_units(dominant_trace, y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
+            } else {
+                get_print_units(y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
+            }
             range_unit_str = range_postscript_unit;
         }
 
@@ -564,7 +587,11 @@ void print_graph_text(void) {
             double per_div_scale;
             int per_div_decimal;
             char *per_div_ps_unit;
-            get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
+            if (dominant_trace >= 0) {
+                get_trace_print_units(dominant_trace, fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
+            } else {
+                get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
+            }
             sprintf(label, "Units per div: %.*f %s, Auto Scale: %s\r\n",
                     sig_dec(per_div_decimal, per_div * per_div_scale),
                     per_div * per_div_scale, per_div_ps_unit,
@@ -667,7 +694,7 @@ void print_graph_text(void) {
         int has_fft_trace = 0;
         int fft_trace_idx = -1;
         for (i = 0; i < 10; i++) {
-            if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == 2) {
+            if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_DB) {
                 has_fft_trace = 1;
                 fft_trace_idx = i;
                 break;
@@ -832,7 +859,7 @@ void print_graph_text(void) {
 void print_graph_postscript(void) {
     int i, j, x, y;
     double value, y_range;
-    char label[80];
+    char label[128];
     int trace_count = 0;
     int dominant_trace = -1;
     double x_scale, y_scale;
@@ -947,7 +974,7 @@ void print_graph_postscript(void) {
     
     print_string("%!PS-Adobe-3.0\r\n");
     print_string("%%Title: TM5000 High-Precision Measurement Graph\r\n");
-    print_string("%%Creator: TM5000 Control System v3.2\r\n");
+    print_string("%%Creator: TM5000 Control System v" TM5000_VERSION "\r\n");
     print_string("%%BoundingBox: 0 0 612 792\r\n");
     print_string("%%DocumentNeededResources: font Times-Roman\r\n");
     print_string("%%Pages: 1\r\n");
@@ -977,7 +1004,7 @@ void print_graph_postscript(void) {
         
         print_string("72 720 moveto\r\n");
         print_string("(");
-        print_string(graph_title);
+        ps_print_escaped(graph_title);
         print_string(") show\r\n");
     }
     
@@ -1204,7 +1231,7 @@ void print_graph_postscript(void) {
         int has_fft_trace = 0;
         int fft_trace_idx = -1;
         for (j = 0; j < 10; j++) {
-            if (g_traces[j].enabled && g_traces[j].data_count > 0 && g_traces[j].unit_type == 2) {
+            if (g_traces[j].enabled && g_traces[j].data_count > 0 && g_traces[j].unit_type == UNIT_DB) {
                 has_fft_trace = 1;
                 fft_trace_idx = j;
                 break;
@@ -1282,24 +1309,16 @@ void print_graph_postscript(void) {
     print_string("90 rotate\r\n");
     print_string("0 0 moveto\r\n");
     
-    /* Y-axis label from the first enabled trace, not the unit-priority trace above */
+    /* Y-axis name from the same unit-priority trace as the unit_str it is printed with */
     {
-        int dominant_trace = -1;
         char *y_label = "Measurement";
-        
-        for (j = 0; j < 10; j++) {
-            if (g_traces[j].enabled && g_traces[j].data_count > 0) {
-                dominant_trace = j;
-                break;
-            }
-        }
-        
+
         if (dominant_trace >= 0) {
             switch (g_traces[dominant_trace].unit_type) {
-                case 1:  /* UNIT_FREQUENCY */
+                case UNIT_FREQUENCY:
                     y_label = "Frequency";
                     break;
-                case 2:  /* UNIT_DB */
+                case UNIT_DB:
                     y_label = "Magnitude";
                     break;
                 default: /* voltage, current, resistance, derivative, power */
@@ -1339,7 +1358,7 @@ void print_graph_postscript(void) {
             
             print_string("newpath\r\n");
             
-            x_scale = graph_width / (double)(g_traces[i].data_count - 1);
+            x_scale = (g_traces[i].data_count > 1) ? graph_width / (double)(g_traces[i].data_count - 1) : 0.0;
             y_scale = graph_height / y_range;
             
             value = g_traces[i].data[0];
@@ -1405,8 +1424,10 @@ void print_graph_postscript(void) {
             print_string("0 0 0 setrgbcolor\r\n");
             sprintf(label, "120 %d moveto\r\n", y);
             print_string(label);
-            sprintf(label, "(Slot %d: %s - %d samples) show\r\n", 
-                    i, g_traces[i].label, g_traces[i].data_count);
+            sprintf(label, "(Slot %d: ", i);
+            print_string(label);
+            ps_print_escaped(g_traces[i].label);
+            sprintf(label, " - %d samples) show\r\n", g_traces[i].data_count);
             print_string(label);
             
             print_string("/Times-Roman findfont 8 scalefont setfont\r\n");
