@@ -161,7 +161,7 @@ control size:
   has no identical-code folding, so duplicate functions are consolidated in source instead
   (e.g. the DC5009/DC5010 forwarders).
 
-`tm5000.exe` is 275,948 bytes (~270 KB), leaving room in 640 KB for the 1024-sample ×
+`tm5000.exe` is 280,284 bytes (~274 KB), leaving room in 640 KB for the 1024-sample ×
 10-module far buffers.
 
 ---

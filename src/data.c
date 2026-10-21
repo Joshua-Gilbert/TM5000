@@ -227,7 +227,7 @@ void load_data(void) {
     for (i = 0; i < 10; i++) {
         clear_module_data(i);
         g_system->modules[i].enabled = 0;
-        g_system->modules[i].is_result = 0;  /* stale computed-trace flag */
+        g_system->modules[i].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
     }
     g_system->data_count = 0;
 
@@ -369,7 +369,7 @@ void load_data(void) {
     }
     
     /* Scan forward to the "ModuleData:" marker: the fscanf above leaves the stream
-       mid-line, and a wrong global count would otherwise desync every slot. */
+       mid-line, and a wrong global count would otherwise desync every slot. (FINDINGS #5) */
     {
         int found_marker = 0;
         while (fgets(line, sizeof(line), fp)) {
@@ -637,7 +637,7 @@ void load_settings(void) {
             /* Only modules listed in the file stay enabled */
             for (slot = 0; slot < 10; slot++) {
                 g_system->modules[slot].enabled = 0;
-                g_system->modules[slot].is_result = 0;  /* stale computed-trace flag */
+                g_system->modules[slot].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
             }
 
 

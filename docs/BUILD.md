@@ -68,11 +68,11 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (275,948 bytes, ~270 KB).
+Output: `tm5000.exe` (280,284 bytes, ~274 KB).
 
 Other makefile targets:
 
-- `wmake clean` — remove `*.obj` and the executable
+- `wmake clean` — remove `*.obj`, `*.err`, `*.map` and the executable
 - `wmake help`  — print build help
 
 The `wcl` target is **incomplete**: it omits `math_enhanced.c`,

@@ -563,7 +563,7 @@ void execute_fft_with_config(void) {
         int b, b0, b1;
         float m;
 
-        /* Map the full 0..Nyquist span onto op bins, each taking the peak of its
+        /* FINDINGS #6: map the full 0..Nyquist span onto op bins, each taking the peak of its
            source group so narrow lines survive; x axis scaled to match. */
         out_bin_hz = (op > 0) ? (freq_resolution * (float)half / (float)op) : freq_resolution;
 
@@ -582,7 +582,7 @@ void execute_fft_with_config(void) {
 
             switch(g_fft_config.output_format) {
                 case 0: /* dB Magnitude */
-                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude bins still display */
+                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude bins still display (FINDINGS #2) */
                         magnitude[i] = 20.0 * log10(mag_linear);
                     } else {
                         magnitude[i] = -240.0;  /* = 20*log10(1e-12) */
