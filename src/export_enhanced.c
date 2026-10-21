@@ -98,10 +98,16 @@ int export_data_enhanced(char *filename, export_config *config) {
     }
     
     for (i = 0; i < total_samples; i++) {
-        /* Reconstructed from start time + nominal sample rate, not recorded per sample */
         if (config->flags & EXPORT_FLAG_TIMESTAMPS) {
-            time_t sample_time = config->export_start_time + 
-                               (i * (g_control_panel.sample_rate_ms / 1000.0));
+            time_t sample_time;
+            {   /* Offset from export_start_time: measured, from the first slot
+                   with time stamps, else index x nominal sample rate */
+                int s;
+                long t = -1L;
+                for (s = 0; s < 10 && t < 0; s++) t = sample_time_ms(s, i);
+                sample_time = config->export_start_time + (t >= 0 ? t / 1000L :
+                              (long)(i * (g_control_panel.sample_rate_ms / 1000.0)));
+            }
             format_timestamp(timestamp_str, sizeof(timestamp_str), sample_time, config);
             fprintf(file, "%s%c", timestamp_str, config->delimiter);
         }
@@ -110,7 +116,7 @@ int export_data_enhanced(char *filename, export_config *config) {
 
         for (j = 0; j < enabled_count; j++) {
             int slot = enabled_modules[j];
-            float value = 0.0;
+            double value = 0.0;
 
             if (i < g_system->modules[slot].module_data_count) {
                 value = g_system->modules[slot].module_data[i];
@@ -196,7 +202,7 @@ int start_realtime_export(char *filename_template, export_config *config) {
     return EXPORT_SUCCESS;
 }
 
-int update_realtime_export(int slot, float value, time_t timestamp) {
+int update_realtime_export(int slot, double value, time_t timestamp) {
     char timestamp_str[32];
     char value_str[32];
 
@@ -217,7 +223,7 @@ int update_realtime_export(int slot, float value, time_t timestamp) {
             g_realtime_export.config.delimiter, slot,
             g_realtime_export.config.delimiter, value_str);
     
-    /* Flush every row so a crash or power loss keeps what was captured */
+    /* Flush per row: a stream can run for hours, and a crash would lose the stdio buffer */
     fflush(g_realtime_export.file);
     
     g_realtime_export.samples_exported++;
@@ -244,7 +250,7 @@ int stop_realtime_export(void) {
         compress_export_file(g_realtime_export.current_filename);
     }
 
-    update_export_statistics(g_realtime_export.samples_exported, 
+    update_export_statistics(g_realtime_export.samples_exported,
                            get_export_file_size(g_realtime_export.current_filename),
                            (float)(time(NULL) - g_realtime_export.session_start));
 
@@ -334,7 +340,7 @@ int export_measurement_conditions(FILE *file, export_config *config) {
     return EXPORT_SUCCESS;
 }
 
-int format_data_value(char *buffer, int buffer_size, float value, export_config *config) {
+int format_data_value(char *buffer, int buffer_size, double value, export_config *config) {
     if (!buffer || buffer_size < 32) {
         return EXPORT_ERROR_MEMORY;
     }
@@ -362,16 +368,16 @@ int format_timestamp(char *buffer, int buffer_size, time_t timestamp, export_con
     return EXPORT_SUCCESS;
 }
 
-int format_scientific_notation(char *buffer, int buffer_size, float value, int precision) {
+int format_scientific_notation(char *buffer, int buffer_size, double value, int precision) {
     int exponent = 0;
-    float mantissa = value;
+    double mantissa = value;
     
     if (!buffer || buffer_size < 32) {
         return EXPORT_ERROR_MEMORY;
     }
     
     if (value == 0.0) {
-        snprintf(buffer, buffer_size, "%.*fE+00", precision, 0.0);
+        snprintf(buffer, buffer_size, "0.000000E+00");
         return EXPORT_SUCCESS;
     }
     
@@ -476,7 +482,7 @@ int validate_export_config(export_config *config) {
     return EXPORT_SUCCESS;
 }
 
-long get_export_file_size(char *filename) {
+int get_export_file_size(char *filename) {
     FILE *file;
     long size;
     
@@ -492,8 +498,8 @@ long get_export_file_size(char *filename) {
     fseek(file, 0, SEEK_END);
     size = ftell(file);
     fclose(file);
-
-    return (size < 0) ? 0 : size;
+    
+    return (int)size;
 }
 
 int update_export_statistics(unsigned long samples, unsigned long bytes, float duration) {

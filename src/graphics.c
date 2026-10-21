@@ -1,9 +1,11 @@
 /*
- * CGA mode-4 graphics, BIOS text helpers, mouse, graph grid/unit scaling,
- * and the 5x7 bitmap font.
+ * CGA mode-4 graphics, BIOS and direct-video text helpers, mouse, graph
+ * grid/axis scaling (time axis, offset labels), and the 5x7 and 3x5 bitmap fonts.
  */
 
 #include "graphics.h"
+#include "data.h"
+#include <math.h>
 
 /* Implemented in cga_asm.asm / mem286.asm; not called from this file. */
 extern void cga_init_asm(int mode);
@@ -20,7 +22,7 @@ void init_graphics(void) {
     regs.h.ah = 0x00;
     regs.h.al = 0x04;  /* 320x200 4-color CGA graphics */
     int86(0x10, &regs, &regs);
-    
+
     /* Color-select register: palette 1 (cyan/magenta/white), high intensity */
     outportb(0x3D9, 0x30);
 }
@@ -34,7 +36,8 @@ void text_mode(void) {
 
 void clrscr(void) {
     union REGS regs;
-    regs.w.ax = 0x0600;  /* Scroll window up */
+    fflush(stdout);      /* printf is buffered: flush before the screen changes */
+    regs.w.ax = 0x0600;  /* AL=0: blank the whole window */
     regs.h.bh = 0x07;    /* White on black */
     regs.h.ch = 0;       /* Top row */
     regs.h.cl = 0;       /* Left column */
@@ -45,9 +48,52 @@ void clrscr(void) {
     gotoxy(1, 1);
 }
 
+/* Write text straight into text-mode video memory at row/col (1-based),
+ * padded or cut to 'width' characters; attributes are left as they are.
+ * Avoids the slow, flickering DOS/BIOS teletype path that printf takes.
+ * Falls back to gotoxy+printf in graphics modes.                        */
+void vputs(int row, int col, const char *s, int width)
+{
+    unsigned char mode = *(unsigned char far *)0x00400049L;
+    unsigned cols = *(unsigned far *)0x0040004AL;
+    unsigned page = *(unsigned far *)0x0040004EL;
+    unsigned char far *vm;
+    unsigned off;
+    int i;
+
+    if (mode > 3 && mode != 7) {
+        gotoxy(col, row);
+        printf("%-*.*s", width, width, s);
+        return;
+    }
+    fflush(stdout);
+    vm = (unsigned char far *)((mode == 7) ? 0xB0000000L : 0xB8000000L);
+    off = page + ((row - 1) * cols + (col - 1)) * 2;
+    for (i = 0; i < width; i++) {
+        vm[off] = *s ? (unsigned char)*s++ : ' ';
+        off += 2;
+    }
+}
+
+/* Set the attribute of a run of text cells, leaving the characters,
+   e.g. 0x70 reverse video for an indicator "light" */
+void vattr(int row, int col, int width, unsigned char attr)
+{
+    unsigned char mode = *(unsigned char far *)0x00400049L;
+    unsigned cols = *(unsigned far *)0x0040004AL;
+    unsigned page = *(unsigned far *)0x0040004EL;
+    unsigned char far *vm;
+    unsigned off;
+    if (mode > 3 && mode != 7) return;
+    vm = (unsigned char far *)((mode == 7) ? 0xB0000000L : 0xB8000000L);
+    off = page + ((row - 1) * cols + (col - 1)) * 2 + 1;
+    while (width-- > 0) { vm[off] = attr; off += 2; }
+}
+
 /* 1-based column/row */
 void gotoxy(int x, int y) {
     union REGS regs;
+    fflush(stdout);      /* else buffered text lands at the new cursor position */
     regs.h.ah = 0x02;
     regs.h.bh = 0;       /* Video page 0 */
     regs.h.dh = y - 1;   /* Row (0-based) */
@@ -57,8 +103,8 @@ void gotoxy(int x, int y) {
 
 void textattr(unsigned char attr) {
     union REGS regs;
-    regs.h.ah = 0x09;    /* Write character and attribute */
-    regs.h.bl = attr;    /* Attribute */
+    regs.h.ah = 0x09;
+    regs.h.bl = attr;
     regs.w.cx = 0;       /* Don't write any characters */
     regs.h.bh = 0;       /* Video page 0 */
     int86(0x10, &regs, &regs);
@@ -74,9 +120,9 @@ void clreol(void) {
     int86(0x10, &regs, &regs);
     x = regs.h.dl;
     y = regs.h.dh;
-    
-    regs.h.ah = 0x09;     /* Write character and attribute */
-    regs.h.al = ' ';      /* Space character */
+
+    regs.h.ah = 0x09;
+    regs.h.al = ' ';
     regs.h.bh = 0;        /* Video page 0 */
     regs.h.bl = 0x07;     /* Normal attribute (white on black) */
     regs.w.cx = 80 - x;   /* Number of characters to end of line */
@@ -178,10 +224,10 @@ void draw_line_aa(int x1, int y1, int x2, int y2, unsigned char color) {
 /* INT 33h reset; returns 1 if a driver is installed */
 int init_mouse(void) {
     union REGS regs;
-    
+
     regs.w.ax = MOUSE_RESET;
     int86(MOUSE_INT, &regs, &regs);
-    
+
     if (regs.w.ax == 0xFFFF) {
         g_mouse.present = 1;
         return 1;
@@ -223,13 +269,37 @@ void get_mouse_status(void) {
     g_mouse.right_button = (regs.w.bx & 2) >> 1;
 }
 
+/* Double-precision copy of the graph's Y limits. graph_scale keeps floats
+ * (it is saved in the profile file), but a float holds ~7 digits: at 10 MHz
+ * it cannot resolve limits finer than 1 Hz. set_limits() writes both; drawing
+ * uses the doubles while they still match the floats, else falls back to the
+ * floats (e.g. after the dB autoscale path or a manual entry writes them).  */
+double g_gmin = 0.0, g_gmax = 10.0;
+
+void graph_limits(double *mn, double *mx)
+{
+    if ((float)g_gmin == g_graph_scale.min_value &&
+        (float)g_gmax == g_graph_scale.max_value && g_gmax > g_gmin) {
+        *mn = g_gmin; *mx = g_gmax;
+    } else {
+        *mn = g_graph_scale.min_value; *mx = g_graph_scale.max_value;
+    }
+}
+
+void set_limits(double mn, double mx)
+{
+    g_gmin = mn; g_gmax = mx;
+    g_graph_scale.min_value = (float)mn;
+    g_graph_scale.max_value = (float)mx;
+}
+
 void auto_scale_graph(void) {
     int i, j;
-    float min_val = 1e30, max_val = -1e30;
+    double min_val = 1e30, max_val = -1e30;
     int found_data = 0;
     int has_fft_traces = 0;
-    float range, margin;
-    
+    double range, margin;
+
     for (i = 0; i < 10; i++) {
         if (g_traces[i].enabled && g_traces[i].unit_type == UNIT_DB) {
             has_fft_traces = 1;
@@ -253,11 +323,11 @@ void auto_scale_graph(void) {
         return;
     }
     
-    /* dB (FFT) traces: at least 20 dB span, 5% margin, skip the voltage snapping below */
+    /* dB (FFT) traces: at least 20 dB span, 5% margin, skip the snapping below */
     if (has_fft_traces) {
         range = max_val - min_val;
         if (range < 20.0) {
-            float center = (max_val + min_val) / 2.0;
+            double center = (max_val + min_val) / 2.0;
             min_val = center - 10.0;
             max_val = center + 10.0;
         }
@@ -267,51 +337,68 @@ void auto_scale_graph(void) {
         return;
     }
     
-    range = max_val - min_val;
-    
-    if (range < 0.1) {
-        float center = (max_val + min_val) / 2.0;
-        min_val = center - 0.5;
-        max_val = center + 0.5;
-        range = 1.0;
-    }
-    
-    margin = range * 0.1;
-    g_graph_scale.min_value = min_val - margin;
-    g_graph_scale.max_value = max_val + margin;
-    
-    /* Small spans: round the total range to a readable step (5 uV, 0.1 mV, 1 mV) */
-    range = g_graph_scale.max_value - g_graph_scale.min_value;
-    if (range < 0.000050) {  /* Less than 50µV total range */
-        float center = (g_graph_scale.max_value + g_graph_scale.min_value) / 2.0;
-        float range_uv = range * 1000000.0;  /* Convert to µV */
-        range_uv = ((int)((range_uv + 2.5) / 5.0)) * 5.0;  /* Round to 5µV */
-        if (range_uv < 5.0) range_uv = 5.0;  /* Minimum 5µV range */
-        range = range_uv / 1000000.0;  /* Convert back to V */
-        g_graph_scale.min_value = center - range / 2.0;
-        g_graph_scale.max_value = center + range / 2.0;
-    }
-    else if (range < 0.005) {  /* Less than 5mV total range */
-        float center = (g_graph_scale.max_value + g_graph_scale.min_value) / 2.0;
-        float range_mv = range * 1000.0;  /* Convert to mV */
-        range_mv = ((int)(range_mv * 10.0 + 0.5)) / 10.0;  /* Round to 0.1mV */
-        if (range_mv < 0.1) range_mv = 0.1;  /* Minimum 0.1mV range */
-        range = range_mv / 1000.0;  /* Convert back to V */
-        g_graph_scale.min_value = center - range / 2.0;
-        g_graph_scale.max_value = center + range / 2.0;
-    }
-    else if (range < 0.050) {  /* Less than 50mV total range */
-        float center = (g_graph_scale.max_value + g_graph_scale.min_value) / 2.0;
-        float range_mv = range * 1000.0;  /* Convert to mV */
-        range_mv = ((int)(range_mv + 0.5));  /* Round to 1mV */
-        if (range_mv < 1.0) range_mv = 1.0;  /* Minimum 1mV range */
-        range = range_mv / 1000.0;  /* Convert back to V */
-        g_graph_scale.min_value = center - range / 2.0;
-        g_graph_scale.max_value = center + range / 2.0;
-    }
-    
-    if (g_graph_scale.min_value > 0 && g_graph_scale.min_value < 1.0) {
-        g_graph_scale.min_value = 0.0;
+    /* In double: a float cannot resolve a small change on a large value */
+    {
+        double dmin = min_val, dmax = max_val, dr, dc, m;
+        dr = dmax - dmin;
+        if (dr < 0.1 && fabs((dmax + dmin) / 2.0) < 1000.0) {
+            /* small values (volts): at least a 1-unit window */
+            dc = (dmax + dmin) / 2.0;
+            dmin = dc - 0.5;
+            dmax = dc + 0.5;
+            dr = 1.0;
+        } else if (dr <= 0.0) {
+            /* flat trace on a big value: show +/- 1 count around it */
+            dmin -= 1.0;
+            dmax += 1.0;
+            dr = 2.0;
+        }
+        m = dr * 0.1;
+        dmin -= m;
+        dmax += m;
+        /* Small spans: round the total range to a readable step (5 uV, 0.1 mV, 1 mV) */
+        dr = dmax - dmin;
+        if (dr < 0.000050) {          /* < 50 uV: round to 5 uV */
+            double r_uv;
+            dc = (dmax + dmin) / 2.0;
+            r_uv = ((int)((dr * 1e6 + 2.5) / 5.0)) * 5.0;
+            if (r_uv < 5.0) r_uv = 5.0;
+            dmin = dc - r_uv / 2e6;
+            dmax = dc + r_uv / 2e6;
+        } else if (dr < 0.005 && fabs(dc = (dmax + dmin) / 2.0) < 1000.0) {
+            double r_mv = ((int)(dr * 1e4 + 0.5)) / 10.0;   /* 0.1 mV steps */
+            if (r_mv < 0.1) r_mv = 0.1;
+            dmin = dc - r_mv / 2e3;
+            dmax = dc + r_mv / 2e3;
+        } else if (dr < 0.050 && fabs(dc = (dmax + dmin) / 2.0) < 1000.0) {
+            double r_mv = (int)(dr * 1e3 + 0.5);            /* 1 mV steps */
+            if (r_mv < 1.0) r_mv = 1.0;
+            dmin = dc - r_mv / 2e3;
+            dmax = dc + r_mv / 2e3;
+        }
+        if (dmin > 0 && dmin < 1.0) dmin = 0.0;
+        /* Small change on a big value (the graph will use offset labels):
+           snap to 5 divisions of a 1/2/2.5/5 x 10^n step so the axis reads
+           -600, -500 ... or +1.5, +2.0 ... instead of -309, -367 ...     */
+        dr = dmax - dmin;
+        dc = (dmax + dmin) / 2.0;
+        if (dr > 0.0 && fabs(dc) >= 100.0 && dr < 0.02 * fabs(dc)) {
+            double e = pow(10.0, floor(log10(dr / 5.0)));
+            double f = dr / 5.0 / e, step, lo;
+            int k;
+            step = (f <= 1.0 ? 1.0 : f <= 2.0 ? 2.0 : f <= 2.5 ? 2.5 : f <= 5.0 ? 5.0 : 10.0) * e;
+            for (k = 0; k < 8; k++) {
+                lo = floor(dmin / step) * step;
+                if (lo + 5.0 * step >= dmax) break;
+                /* next step in the 1-2-2.5-5 series */
+                f = step / pow(10.0, floor(log10(step) + 1e-9));
+                step = (f < 1.5 ? 2.0 : f < 2.25 ? 2.5 : f < 3.5 ? 5.0 : 10.0) *
+                       pow(10.0, floor(log10(step) + 1e-9));
+            }
+            dmin = lo;
+            dmax = lo + 5.0 * step;
+        }
+        set_limits(dmin, dmax);
     }
 }
 
@@ -746,10 +833,14 @@ void snap_graph_scale_to_clean_values(void) {
             fclex
         }
     }
-    
-    y_range_d = (double)g_graph_scale.max_value - (double)g_graph_scale.min_value;
-    center_d = ((double)g_graph_scale.max_value + (double)g_graph_scale.min_value) * 0.5;
 
+    {
+        double mn, mx;
+        graph_limits(&mn, &mx);
+        y_range_d = mx - mn;
+        center_d = (mx + mn) * 0.5;
+    }
+    
     per_div_d = y_range_d * 0.2;  /* 5 divisions */
 
     if (per_div_d <= 0.0) return;  /* empty or inverted range */
@@ -768,8 +859,41 @@ void snap_graph_scale_to_clean_values(void) {
     clean_per_div = engineering_values[best_index];
     
     y_range_d = clean_per_div * 5.0;
-    g_graph_scale.min_value = (float)(center_d - y_range_d * 0.5);
-    g_graph_scale.max_value = (float)(center_d + y_range_d * 0.5);
+    set_limits(center_d - y_range_d * 0.5, center_d + y_range_d * 0.5);
+}
+
+/* ---- Time axis -------------------------------------------------------
+ * X can show measurement time instead of sample numbers when the samples
+ * carry time stamps (taken by the continuous monitor).  Stamps come from
+ * the BIOS tick (54.9 ms), so labels never show finer than 0.1 s.        */
+int g_xaxis_time = 0;
+
+/* the trace the time labels follow: the longest enabled one with stamps */
+int time_axis_slot(int max_samples, long *span_ms) {
+    int i;
+    for (i = 0; i < 10; i++) {
+        if (g_traces[i].enabled && g_traces[i].data_count == max_samples && max_samples > 1 &&
+            (*span_ms = sample_time_ms(i, max_samples - 1)) >= 0) {
+            return i;
+        }
+    }
+    *span_ms = 0;
+    return -1;
+}
+
+/* seconds with 0.1 s under 100 s, M:SS under 100 min, else H:MM */
+void fmt_time_label(char *buf, long ms, long span_ms) {
+    if (span_ms < 100000L) {
+        sprintf(buf, "%ld.%ld", ms / 1000L, (ms / 100L) % 10L);
+    } else if (span_ms < 6000000L) {
+        sprintf(buf, "%ld:%02ld", ms / 60000L, (ms / 1000L) % 60L);
+    } else {
+        sprintf(buf, "%ld:%02ld", ms / 3600000L, (ms / 60000L) % 60L);
+    }
+}
+
+char *time_unit_name(long span_ms) {
+    return span_ms < 100000L ? "S" : span_ms < 6000000L ? "M:S" : "H:M";
 }
 
 void draw_grid_dynamic(int max_samples) {
@@ -789,9 +913,16 @@ void draw_grid_dynamic(int max_samples) {
     int has_current_traces = 0;
     int has_resistance_traces = 0;
     int has_power_traces = 0;
+    int offset_mode = 0;
+    double offset_ref = 0.0;
+    double gmn, gmx;
+    int tslot;
+    long tspan;
     
-    y_range = g_graph_scale.max_value - g_graph_scale.min_value;
-    
+    graph_limits(&gmn, &gmx);            /* double-precision limits */
+    y_range = (float)(gmx - gmn);
+    tslot = time_axis_slot(max_samples, &tspan);
+
     unit_label = "V";
     scale_multiplier = 1.0;
     decimal_places = 1;
@@ -849,6 +980,24 @@ void draw_grid_dynamic(int max_samples) {
     draw_line(GRAPH_RIGHT+1, GRAPH_TOP-1, GRAPH_RIGHT+1, GRAPH_BOTTOM+1, 1);
     draw_line(GRAPH_RIGHT, GRAPH_TOP, GRAPH_RIGHT, GRAPH_BOTTOM, 3);
     
+    /* Offset mode: a small change on a big value (a 10 MHz standard
+     * drifting a few Hz, a 1.2 V rail moving microvolts).  The absolute
+     * labels would need 8+ digits in a 5-character margin, so the axis
+     * shows signed deltas from a round reference value, and the title
+     * shows the reference with enough digits to match one grid step.     */
+    {
+        double vmax = fabs(gmn);
+        if (fabs(gmx) > vmax) vmax = fabs(gmx);
+        offset_mode = 0;
+        if (!has_db_traces && y_range > 0.0 && y_range < 0.02 * vmax &&
+            vmax * scale_multiplier >= 100.0) {
+            double p = pow(10.0, ceil(log10(gmx - gmn)));
+            double mid = (gmn + gmx) / 2.0;
+            offset_mode = 1;
+            offset_ref = floor(mid / p + 0.5) * p;
+        }
+    }
+    
     /* Erase the previous unit label before drawing the new one */
     if (unit_label != NULL) {
         fill_rectangle(2, 2, 35, 12, 0);
@@ -871,7 +1020,28 @@ void draw_grid_dynamic(int max_samples) {
                 }
             }
             
-            if (has_db_traces && scale_multiplier == 1.0 && strcmp(unit_label, "DB") == 0) {
+            if (offset_mode) {
+                /* signed delta from the reference, decimals to suit one step */
+                double d = (gmn + (gmx - gmn) * i / 5.0 - offset_ref) * scale_multiplier;
+                double st = (gmx - gmn) / 5.0 * scale_multiplier;
+                int dec = (st >= 1.0) ? 0 : (st >= 0.1) ? 1 : (st >= 0.01) ? 2 : 3;
+                /* one more decimal if the step isn't round at this precision
+                   (e.g. 1.6 Hz steps -> -4.4, -2.8 rather than -4, -3) */
+                while (dec < 3) {
+                    double m = st * pow(10.0, dec);
+                    if (fabs(m - floor(m + 0.5)) < 0.01) break;
+                    dec++;
+                }
+                if (fabs(d) < 0.5 * pow(10.0, -dec)) {
+                    strcpy(label, "0");
+                } else {
+                    for (;;) {
+                        sprintf(label, "%+.*f", dec, d);
+                        if (strlen(label) <= 5 || dec == 0) break;
+                        dec--;
+                    }
+                }
+            } else if (has_db_traces && scale_multiplier == 1.0 && strcmp(unit_label, "DB") == 0) {
                 sprintf(label, "%.1f", value);
             } else if (scale_multiplier == 1.0) {
                 /* Unscaled unit (V, A, O, HZ, ...): suffix on every label */
@@ -909,20 +1079,54 @@ void draw_grid_dynamic(int max_samples) {
         }
         
         if (max_samples > 0) {
-            int sample_num = (max_samples - 1) * i / 5;
-            sprintf(label, "%d", sample_num);
+            int sample_num = (int)((long)(max_samples - 1) * i / 5);
+            long t;
+            if (g_xaxis_time && tslot >= 0 && (t = sample_time_ms(tslot, sample_num)) >= 0) {
+                fmt_time_label(label, t, tspan);
+            } else {
+                sprintf(label, "%d", sample_num);
+            }
         } else {
             sprintf(label, "%d", i * 20);
         }
         draw_text(pos - 6, GRAPH_BOTTOM + 3, label, 2);
     }
     
-    draw_text(GRAPH_LEFT + GRAPH_WIDTH/2 - 30, 5, "TIME (SAMPLES)", 1);
+    if (offset_mode) {
+        /* title = the reference the axis deltas are measured from */
+        char ref_txt[32];
+        double r = offset_ref, st = (gmx - gmn) / 5.0;
+        double us = 1.0;               /* display scale for the reference */
+        char *u;
+        int dec;
+        if (has_frequency_traces) {
+            if (fabs(r) >= 1e6)      { us = 1e-6; u = "MHZ"; }
+            else if (fabs(r) >= 1e3) { us = 1e-3; u = "KHZ"; }
+            else                     { us = 1.0;  u = "HZ"; }
+        } else if (has_current_traces) {
+            u = "A";
+        } else if (has_resistance_traces) {
+            u = "OHM";
+        } else if (has_power_traces) {
+            u = "W";
+        } else {
+            u = "V";
+        }
+        dec = (int)ceil(-log10(st * us));
+        if (dec < 0) dec = 0;
+        if (dec > 9) dec = 9;
+        sprintf(ref_txt, "REF %.*f%s", dec, r * us, u);
+        fill_rectangle(GRAPH_LEFT, 3, GRAPH_RIGHT, 12, 0);
+        draw_text(GRAPH_LEFT + GRAPH_WIDTH/2 - (int)strlen(ref_txt) * 3, 5, ref_txt, 1);
+    } else {
+        draw_text(GRAPH_LEFT + GRAPH_WIDTH/2 - 30, 5, "TIME (SAMPLES)", 1);
+    }
 }
 
-int value_to_y(float value) {
-    float normalized = (value - g_graph_scale.min_value) / 
-                      (g_graph_scale.max_value - g_graph_scale.min_value);
+int value_to_y(double value) {
+    double mn, mx, normalized;
+    graph_limits(&mn, &mx);
+    normalized = ((double)value - mn) / (mx - mn);
     return GRAPH_BOTTOM - (int)(normalized * GRAPH_HEIGHT);
 }
 
@@ -931,7 +1135,7 @@ void draw_legend_enhanced(int *is_fft_trace, int selected_trace) {
     char label[40];
     int legend_x = SCREEN_WIDTH - 58;
     char *module_name;
-    
+
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled || g_traces[i].enabled) {
             /* Name by derived-trace type first, then by module type */
@@ -986,6 +1190,29 @@ void draw_legend_enhanced(int *is_fft_trace, int selected_trace) {
             y_pos += 12;
             
             if (y_pos > GRAPH_BOTTOM - 15) break;
+        }
+    }
+}
+
+/* 3x5 pixel font (4-pixel pitch) for the graph footer: two lines of the
+ * 7-row font do not fit under the axis labels.  Each glyph is 5 rows x 3
+ * bits packed into a word, top row in the high bits; ' '..'Z', lower case
+ * is shown as upper case, anything else as a space.                     */
+static unsigned int small_font[] = { 0x0000, 0x0000, 0x0000, 0x5F7D, 0x0000, 0x52A5, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x05D0, 0x0000, 0x01C0, 0x0002, 0x12A4, 0x7B6F, 0x2C97, 0x73E7, 0x72CF, 0x5BC9, 0x79CF, 0x79EF, 0x7252, 0x7BEF, 0x7BCF, 0x0410, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x2BE3, 0x2BED, 0x6BAE, 0x3923, 0x6B6E, 0x79A7, 0x79A4, 0x396B, 0x5BED, 0x7497, 0x126A, 0x5BAD, 0x4927, 0x5FED, 0x6B6D, 0x2B6A, 0x6BA4, 0x2B73, 0x6BAD, 0x388E, 0x7492, 0x5B6F, 0x5B6A, 0x5BFD, 0x5AAD, 0x5A92, 0x72A7 };
+
+void draw_text_small(int x, int y, char *text, unsigned char color) {
+    unsigned int g;
+    int r, c;
+    unsigned char ch;
+    for (; *text && x <= SCREEN_WIDTH - 3; text++, x += 4) {
+        ch = (unsigned char)*text;
+        if (ch >= 'a' && ch <= 'z') ch -= 32;
+        if (ch < 0x20 || ch > 0x5A) continue;
+        g = small_font[ch - 0x20];
+        for (r = 0; r < 5; r++) {
+            for (c = 0; c < 3; c++) {
+                if (g & (0x4000 >> (r * 3 + c))) plot_pixel(x + c, y + r, color);
+            }
         }
     }
 }
@@ -1146,18 +1373,12 @@ void graph_config_menu(void) {
         printf("========================\n\n");
         
         printf("Current Settings:\n");
-        printf("  Scale: %.6f to %.6f\n", g_graph_scale.min_value, g_graph_scale.max_value);
-        printf("  Auto-scale: %s\n", g_graph_scale.auto_scale ? "ON" : "OFF");
-        {
-            float current_range = g_graph_scale.max_value - g_graph_scale.min_value;
-            float per_div = current_range / 5.0;
-            if (per_div >= 1.0) {
-                printf("  Voltage per div: %.3fV\n", per_div);
-            } else if (per_div >= 0.001) {
-                printf("  Voltage per div: %.1fmV\n", per_div * 1000.0);
-            } else {
-                printf("  Voltage per div: %.0fuV\n", per_div * 1000000.0);
-            }
+        {   /* Double limits; per division unscaled, since traces may not be volts */
+            double mn, mx;
+            graph_limits(&mn, &mx);
+            printf("  Scale: %.10g to %.10g\n", mn, mx);
+            printf("  Auto-scale: %s\n", g_graph_scale.auto_scale ? "ON" : "OFF");
+            printf("  Per division: %.4g\n", (mx - mn) / 5.0);
         }
         printf("  Sample start: %d\n", g_graph_scale.sample_start);
         printf("  Sample count: %d\n", g_graph_scale.sample_count);
@@ -1206,7 +1427,7 @@ void graph_config_menu(void) {
                             per_div_value = per_div_value / 1000.0;     /* mV to V */
                         }
                         /* Otherwise assume V units */
-
+                        
                         if (per_div_value >= 0.000001 && per_div_value <= 1000.0) {
                             range = per_div_value * 5.0;  /* 5 divisions */
 
@@ -1258,5 +1479,3 @@ void graph_config_menu(void) {
         }
     }
 }
-
-

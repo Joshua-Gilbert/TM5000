@@ -27,7 +27,8 @@ checked against source.
   (lines 37–41) claims it "Added missing GPIB cleanup commands 'abort' and 'reset'…
   Restored proper driver shutdown sequence from v2.9." But neither v3.2's `main.c`,
   v2.9's cleanup (`archive/v2-source/TM5000 V2.9.c:8314-8333`), nor `src/main.c`
-  contain abort/reset; all three do `gpib_local` + `close()` + a `delay`. Still true in v3.6.
+  contain abort/reset; all three do `gpib_local` + `close()` + a `delay`. Still true in v3.7
+  (the GRIDGPIB build replaces the per-slot `gpib_local` with one REN-off).
 
 ---
 

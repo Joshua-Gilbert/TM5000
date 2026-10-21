@@ -21,12 +21,16 @@
 #include <errno.h>
 
 /* Version information */
-#define TM5000_VERSION "3.6"
+#define TM5000_VERSION "3.7"
 #define TM5000_VERSION_MAJOR 3
-#define TM5000_VERSION_MINOR 6
+#define TM5000_VERSION_MINOR 7
 
 /* Per-slot sample buffer limits */
 #define MAX_SAMPLES_PER_MODULE 1024
+/* The monitor pools ten slots' worth of samples among the modules it reads.
+   POOLED_MAX caps one module: 8192 doubles = one whole 64 KB segment (alloc_samples). */
+#define POOL_SAMPLES   (10L * MAX_SAMPLES_PER_MODULE)
+#define POOLED_MAX     8192u
 #define MIN_BUFFER_SIZE 10
 #define MAX_BUFFER_SIZE MAX_SAMPLES_PER_MODULE
 
@@ -46,6 +50,15 @@
 #define CGA_MEMORY      0xB8000000L
 #define SCREEN_WIDTH    320
 #define SCREEN_HEIGHT   200
+/* Fixed wait after most bus calls, needed under Driver488. TM5000G builds
+ * modules.c and module_funcs.c with -DGRIDGPIB: GRIDGPIB calls return only
+ * once the bus transaction is complete, so the waits compile out. */
+#ifdef GRIDGPIB
+#define GPIB_PACE(ms) ((void)0)
+#else
+#define GPIB_PACE(ms) delay(ms)
+#endif
+
 #define LPT1_BASE       0x378
 #define LPT1_STATUS     (LPT1_BASE + 1)
 #define LPT1_CONTROL    (LPT1_BASE + 2)
@@ -93,15 +106,15 @@ unsigned char inportb(unsigned int port);
 #endif
 
 /* Global handles */
-extern int ieee_out;  /* Handle for writing to GPIB */
-extern int ieee_in;   /* Handle for reading from GPIB */
+extern int ieee_out;
+extern int ieee_in;
 extern int gpib_error;
 
 #pragma pack(1)
 typedef struct {
-    float far *module_data;
+    double far *module_data;     /* double keeps full counter resolution */
     char description[12];
-    float last_reading;
+    double last_reading;
     unsigned int module_data_count;
     unsigned int module_data_size;   /* samples allocated */
     unsigned char module_type;
@@ -109,14 +122,23 @@ typedef struct {
     unsigned char gpib_address;
     unsigned char enabled:1;
     unsigned char is_result:1;   /* computed trace (FFT/math): no GPIB, exempt from phantom cleanup */
-    unsigned char reserved:6;
+    unsigned char time_ok:1;     /* every stored sample has a measurement-time stamp */
+    unsigned char reserved:5;
+    /* Time stamps, and averaging once the buffer fills */
+    unsigned long far *sample_t; /* measurement clock (BIOS ticks) of each sample (mean of its group) */
+    unsigned long t_origin;      /* measurement clock at the run's first reading */
+    double acc_v, acc_t;         /* readings waiting to be averaged into the next sample */
+    unsigned int acc_n;
+    unsigned char avg_shift;     /* each stored sample = mean of 2^avg_shift readings */
+    unsigned char src_measured;  /* computed trace: src_seconds came from time stamps */
+    float src_seconds;           /* computed trace (FFT): duration of the measurement used */
 } tm5000_module;
 #pragma pack()
 
 typedef struct {
     tm5000_module modules[10];
     int gpib_devices[10];
-    float far *data_buffer;
+    double far *data_buffer;
     unsigned int buffer_size;
     unsigned int data_count;
     int sample_rate;
@@ -138,13 +160,14 @@ typedef struct {
     unsigned char running:1;
     unsigned char use_custom:1; /* 0=preset, 1=custom_rate */
     unsigned char monitor_all:1; /* 0=use monitor_mask, 1=all enabled modules */
-    unsigned char reserved:5;
+    unsigned char auto_rate:1;   /* 1=AUTO: fastest cycle the instruments allow */
+    unsigned char reserved:4;
 } control_panel_state;
 
 typedef struct {
     float custom_sample_rate;
-    int input_points;      /* 64, 128, 256, 512, 1024 */
-    int output_points;     /* 32, 64, 128, 256, 512, 1024 (≤ input) */
+    int input_points;      /* power of 2, 64..8192 */
+    int output_points;     /* power of 2, 64..8192 (≤ input) */
     int window_type;       /* 0=Rectangular, 1=Hamming, 2=Hanning, 3=Blackman */
     int output_format;     /* 0=dB, 1=Linear magnitude, 2=Power */
     unsigned char zero_pad:1;      /* pad to next power of 2 */
@@ -168,7 +191,7 @@ typedef struct {
 
 typedef struct {
     char label[12];
-    float *data;
+    double *data;                /* points at the slot's module_data, not owned */
     float x_scale;               /* frequency traces: Hz per sample */
     float x_offset;              /* X-axis offset (for centering) */
     int data_count;
@@ -179,8 +202,9 @@ typedef struct {
     unsigned char reserved:7;
 } trace_info;
 
-/* The *_config structs below are written raw into PROFILES.DAT (config_profiles.h):
-   any layout change needs a PROFILE_VERSION bump. */
+/* The *_config structs below are written raw into PROFILES.DAT (config_profiles.h),
+   as are control_panel_state, fft_config and graph_scale above: any layout change
+   needs a PROFILE_VERSION bump. */
 typedef struct {
     char function[12];      /* Current function (DCV, ACV, OHMS, etc.) */
     int range_mode;         /* 0=AUTO, 1-7=Manual range */
@@ -194,7 +218,7 @@ typedef struct {
     float max_value;       /* Maximum value tracked */
     int sample_count;      /* Samples taken since last clear */
     float sample_rate;     /* Internal sample rate (if supported) */
-
+    
     /* Async buffer fill tracking */
     int buffer_state;      /* 0=idle, 1=filling, 2=half, 3=full */
     unsigned long buffer_start_time; /* tick count when fill started */
@@ -225,7 +249,7 @@ typedef struct {
     float dbr_reference;   /* dBr reference value */
     float min_value;       /* Minimum measured value */
     float max_value;       /* Maximum measured value */
-
+    
     unsigned int filter_enabled:1;     /* Digital filter */
     unsigned int null_enabled:1;      /* NULL/REL */
     unsigned int data_format:1;       /* 0=ASCII, 1=Scientific notation */
@@ -242,7 +266,7 @@ typedef struct {
     float voltage;          /* Output voltage setting (0-20V) */
     float current_limit;    /* Current limit (10-305mA) */
     int display_mode;       /* 0=Voltage, 1=Current, 2=Current Limit */
-
+    
     unsigned int output_enabled:1;
     unsigned int vri_enabled:1;        /* Voltage regulation interrupt */
     unsigned int cri_enabled:1;        /* Current regulation interrupt */
@@ -272,7 +296,7 @@ typedef struct {
     unsigned char display_channel;        /* 0=Ch1, 1=Ch2, 2=Logic */
     unsigned char display_mode;           /* 0=Voltage, 1=Current */
     unsigned char error_queue_size;       /* Number of errors in queue */
-
+    
     unsigned int output1_enabled:1;
     unsigned int output2_enabled:1;
     unsigned int logic_enabled:1;
@@ -303,7 +327,7 @@ typedef struct {
     float level_b;              /* Trigger level Channel B */
     long overflow_count;        /* Extended range overflow counter */
     float last_measurement;     /* Last measurement result */
-
+    
     unsigned int filter_enabled:1;         /* Input filter */
     unsigned int auto_trigger:1;
     unsigned int overflow_enabled:1;       /* Overflow indication */
@@ -331,7 +355,7 @@ typedef struct {
     float level_b;              /* Trigger level Channel B */
     long overflow_count;        /* Extended range overflow counter */
     float last_measurement;     /* Last measurement result */
-
+    
     unsigned int filter_enabled:1;         /* Input filter */
     unsigned int auto_trigger:1;
     unsigned int overflow_enabled:1;       /* Overflow indication */
@@ -404,7 +428,7 @@ extern char __far *sample_rate_labels[];
 int init_gpib_system(void);
 int ieee_write(const char *str);
 int ieee_read(char *buffer, int maxlen);
-int gpib_write(int address, char *command);
+void gpib_write(int address, char *command);
 int gpib_read(int address, char *buffer, int maxlen);
 int gpib_read_float(int address, float *value);
 void gpib_remote(int address);
@@ -446,7 +470,7 @@ int dm5120_read_all_stored(int address, float far *buffer, int max_samples);
 /* From data.c */
 int allocate_module_buffer(int slot, unsigned int size);
 void free_module_buffer(int slot);
-void store_module_data(int slot, float value);
+void store_module_data(int slot, double value);
 void clear_module_data(int slot);
 void save_data(void);
 void load_data(void);

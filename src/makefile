@@ -1,4 +1,5 @@
 # TM5000 makefile: OpenWatcom wmake, 16-bit DOS, large-model C.
+# Builds tm5000.exe (Driver488) and tm5000g.exe (GRIDGPIB).
 
 # Default is a WSL build calling the Windows tools; override for a native build:
 #   wmake WATCOM_BIN=C:/WATCOM/binnt
@@ -12,10 +13,16 @@ CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100 -zm
 # trig287 adds -fp2 in its own rule.
 ASMFLAGS = -2
 TARGET = tm5000.exe
+# Same program on the GRIDGPIB resident driver
+TARGET_G = tm5000g.exe
 
 OBJS = main.obj gpib.obj modules.obj graphics.obj ui.obj data.obj print.obj math_functions.obj math_enhanced.obj ui_math_menus.obj module_funcs.obj ieeeio_w.obj config_profiles.obj export_enhanced.obj cga_asm.obj mem286.obj trig287_simple.obj fixed286.obj
 
-all: $(TARGET)
+# gpib_gg + gridgpib replace gpib. modules.c and module_funcs.c compile again
+# with -DGRIDGPIB, which drops the fixed GPIB waits (GPIB_PACE in tm5000.h).
+OBJS_G = main.obj gpib_gg.obj gridgpib.obj modules_g.obj graphics.obj ui.obj data.obj print.obj math_functions.obj math_enhanced.obj ui_math_menus.obj module_funcs_g.obj ieeeio_w.obj config_profiles.obj export_enhanced.obj cga_asm.obj mem286.obj trig287_simple.obj fixed286.obj
+
+all: $(TARGET) $(TARGET_G)
 
 # OPTION ELIMINATE drops unreferenced segments: with -zm, uncalled C functions
 # and the unused assembly modules stay out of the image. The file list is not
@@ -23,47 +30,63 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(LINKER) option eliminate system dos file main.obj,gpib.obj,modules.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET)
 
-main.obj: main.c tm5000.h gpib.h graphics.h ui.h data.h
+# The file list is not $(OBJS_G): keep the two in sync.
+$(TARGET_G): $(OBJS_G)
+	$(LINKER) option eliminate system dos file main.obj,gpib_gg.obj,gridgpib.obj,modules_g.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs_g.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET_G)
+
+gpib_gg.obj: gpib_gg.c gpib.h gridgpib.h tm5000.h
+	$(CC) $(CFLAGS) gpib_gg.c
+
+gridgpib.obj: gridgpib.c gridgpib.h
+	$(CC) $(CFLAGS) gridgpib.c
+
+modules_g.obj: modules.c modules.h tm5000.h gpib.h data.h
+	$(CC) $(CFLAGS) -DGRIDGPIB -fo=modules_g.obj modules.c
+
+module_funcs_g.obj: module_funcs.c module_funcs.h tm5000.h
+	$(CC) $(CFLAGS) -DGRIDGPIB -fo=module_funcs_g.obj module_funcs.c
+
+main.obj: main.c tm5000.h
 	$(CC) $(CFLAGS) main.c
 
 gpib.obj: gpib.c gpib.h tm5000.h
 	$(CC) $(CFLAGS) gpib.c
 
-modules.obj: modules.c modules.h gpib.h graphics.h tm5000.h
+modules.obj: modules.c modules.h tm5000.h gpib.h
 	$(CC) $(CFLAGS) modules.c
 
 graphics.obj: graphics.c graphics.h tm5000.h
 	$(CC) $(CFLAGS) graphics.c
 
-ui.obj: ui.c ui.h graphics.h module_funcs.h math_functions.h modules.h config_profiles.h data.h tm5000.h
+ui.obj: ui.c ui.h tm5000.h graphics.h
 	$(CC) $(CFLAGS) ui.c
 
-data.obj: data.c data.h modules.h tm5000.h
+data.obj: data.c data.h tm5000.h
 	$(CC) $(CFLAGS) data.c
 
-print.obj: print.c print.h graphics.h tm5000.h
+print.obj: print.c print.h tm5000.h graphics.h
 	$(CC) $(CFLAGS) print.c
 
-math_functions.obj: math_functions.c tm5000.h math_functions.h
+math_functions.obj: math_functions.c math_functions.h tm5000.h
 	$(CC) $(CFLAGS) math_functions.c
 
-math_enhanced.obj: math_enhanced.c math_functions.h modules.h tm5000.h
+math_enhanced.obj: math_enhanced.c math_functions.h tm5000.h
 	$(CC) $(CFLAGS) math_enhanced.c
 
-ui_math_menus.obj: ui_math_menus.c tm5000.h math_functions.h ui.h
+ui_math_menus.obj: ui_math_menus.c ui.h math_functions.h tm5000.h
 	$(CC) $(CFLAGS) ui_math_menus.c
 
-module_funcs.obj: module_funcs.c modules.h module_funcs.h gpib.h tm5000.h
+module_funcs.obj: module_funcs.c module_funcs.h tm5000.h
 	$(CC) $(CFLAGS) module_funcs.c
 
 # External GPIB driver library
-ieeeio_w.obj: ieeeio_w.c ieeeio.h
+ieeeio_w.obj: ieeeio_w.c
 	$(CC) $(CFLAGS) ieeeio_w.c
 
-config_profiles.obj: config_profiles.c config_profiles.h data.h modules.h tm5000.h
+config_profiles.obj: config_profiles.c config_profiles.h tm5000.h
 	$(CC) $(CFLAGS) config_profiles.c
 
-export_enhanced.obj: export_enhanced.c data.h modules.h tm5000.h
+export_enhanced.obj: export_enhanced.c data.h tm5000.h
 	$(CC) $(CFLAGS) export_enhanced.c
 
 # Assembly modules (unreferenced; kept out of the exe by OPTION ELIMINATE)
@@ -84,27 +107,28 @@ fixed286.obj: fixed286.asm
 clean:
 	-del *.obj 2>nul || rm -f *.obj
 	-del $(TARGET) 2>nul || rm -f $(TARGET)
-	-del *.err 2>nul || rm -f *.err
-	-del *.map 2>nul || rm -f *.map
+	-del $(TARGET_G) 2>nul || rm -f $(TARGET_G)
 
-# Incomplete single-command build: omits math_enhanced.c, ui_math_menus.c,
-# config_profiles.c, export_enhanced.c and the .asm files. Use `all`.
+# Incomplete single-command build of tm5000.exe only: omits math_enhanced.c,
+# ui_math_menus.c, config_profiles.c, export_enhanced.c and the .asm files. Use `all`.
 wcl: main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c
 	$(WATCOM_BIN)/wcl.exe $(CFLAGS) main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c -fe=$(TARGET)
 
 help:
-	@echo TM5000 Version 3.6 Build System
+	@echo TM5000 Version 3.7 Build System
 	@echo ===============================
 	@echo ""
 	@echo Available targets:
-	@echo   all     - Build tm5000.exe (default)
-	@echo   wcl     - Partial single-command build (C only, incomplete)
-	@echo   clean   - Remove object files and executable
+	@echo   all     - Build tm5000.exe (Driver488) and tm5000g.exe (GRIDGPIB) (default)
+	@echo   wcl     - Partial single-command build of tm5000.exe (C only, incomplete)
+	@echo   clean   - Remove object files and both executables
 	@echo   help    - Show this help
 	@echo.
 	@echo C Module structure:
 	@echo   main.c           - Main program and initialization
-	@echo   gpib.c           - GPIB communication functions
+	@echo   gpib.c           - GPIB communication via Driver488 (tm5000.exe)
+	@echo   gpib_gg.c        - GPIB communication via GRIDGPIB (tm5000g.exe)
+	@echo   gridgpib.c       - GRIDGPIB resident driver interface
 	@echo   modules.c        - Instrument module support
 	@echo   graphics.c       - CGA display and graph engine
 	@echo   ui.c             - User interface and menus
@@ -121,6 +145,6 @@ help:
 	@echo.
 	@echo Compiler flags: $(CFLAGS)
 	@echo Assembly flags: $(ASMFLAGS)
-	@echo Target: $(TARGET)
+	@echo Targets: $(TARGET) $(TARGET_G)
 
 .PHONY: all clean wcl help

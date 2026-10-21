@@ -50,9 +50,7 @@ typedef struct {
 } config_profile;
 #pragma pack()
 
-/* On-disk file header, followed by MAX_CONFIG_PROFILES config_profile slots. A
- * delete zeroes its slot in place, leaving a hole. profile_count is informational
- * (one past the highest slot ever written, never lowered); listing scans every slot. */
+/* On-disk file header */
 #pragma pack(1)
 typedef struct {
     unsigned char reserved[20];
@@ -64,14 +62,12 @@ typedef struct {
 } profile_file_header;
 #pragma pack()
 
-/* Profile list entry for UI display (in memory only, never written) */
+/* Profile list entry for UI display */
 #pragma pack(1)
 typedef struct {
     char description[PROFILE_DESC_LENGTH];
     char name[PROFILE_NAME_LENGTH];
-    time_t created;
     time_t modified;
-    unsigned char slot;                       /* file slot index */
     unsigned char valid:1;
     unsigned char reserved:7;
 } profile_list_entry;
@@ -122,8 +118,6 @@ char *get_profile_filename(void);
 #define PROFILE_ERROR_FULL          6
 #define PROFILE_ERROR_MEMORY        7
 #define PROFILE_ERROR_CORRUPT       8
-#define PROFILE_ERROR_INVALID_ADDR  9
-#define PROFILE_ERROR_VERSION       10
 
 /* Profile operation flags */
 #define PROFILE_FLAG_BACKUP_ON_SAVE     0x01

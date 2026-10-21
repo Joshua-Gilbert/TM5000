@@ -8,8 +8,8 @@
 #include "ui.h"
 #include "data.h"
 
-int ieee_out = -1;  /* Driver488 \DEV\IEEEOUT handle */
-int ieee_in = -1;   /* Driver488 \DEV\IEEEIN handle */
+int ieee_out = -1;  /* Driver488 \DEV\IEEEOUT handle; stays -1 under GRIDGPIB */
+int ieee_in = -1;   /* Driver488 \DEV\IEEEIN handle; stays -1 under GRIDGPIB */
 int gpib_error = 0;
 
 measurement_system *g_system = NULL;
@@ -45,7 +45,7 @@ measurement_system* init_measurement_system(unsigned int points) {
     
     memset(sys, 0, sizeof(measurement_system));
     sys->buffer_size = points;
-    sys->data_buffer = (float far *)_fmalloc(points * sizeof(float));
+    sys->data_buffer = (double far *)_fmalloc(points * sizeof(double));
     
     if (!sys->data_buffer) {
         free(sys);
@@ -84,13 +84,24 @@ void delay(unsigned int milliseconds) {
 void cleanup(void) {
     int i;
 
-    /* Return instruments to local before the driver handles close */
-    for (i = 0; i < 10; i++) {
-        if (g_system && g_system->modules[i].enabled) {
-            gpib_local(g_system->modules[i].gpib_address);
+    /* Return instruments to local before the driver closes. GRIDGPIB drops REN for
+       the whole bus; under Driver488 each instrument slot gets LOCAL. */
+    if (!gpib_release_bus()) {
+        for (i = 0; i < 10; i++) {
+            if (g_system && g_system->modules[i].enabled &&
+                !g_system->modules[i].is_result && g_system->modules[i].gpib_address) {
+                gpib_local(g_system->modules[i].gpib_address);   /* skip FFT/math result slots */
+            }
         }
     }
-    
+
+    /* Reset the mouse driver so the pointer is hidden and our settings dropped on exit */
+    if (g_mouse.present) {
+        union REGS r;
+        r.x.ax = MOUSE_RESET;
+        int86(MOUSE_INT, &r, &r);
+    }
+
     if (ieee_out >= 0) {
         delay(200);  /* let the driver settle before closing handles, else it errors */
     }
@@ -118,14 +129,14 @@ int main(void) {
     
     clrscr();
     printf("TM5000 GPIB Control System v" TM5000_VERSION "\n");
-    printf("For Personal488 Driver V2.2 August 1989\n");
+    printf("GPIB driver: %s\n", gpib_driver_name);
     printf("(C) 2025 - For Gridcase 1520\n\n");
     g_has_287 = 0;
 
     _asm {
         ; Without a 287 a waiting FPU instruction can hang, so only no-wait
         ; (FN*) forms belong before the probe result is known.
-        fnclex
+        fclex
 
         fninit
 
@@ -164,10 +175,7 @@ int main(void) {
     
     if (init_gpib_system() < 0) {
         printf("Error: GPIB initialization failed\n");
-        printf("\nMake sure:\n");
-        printf("1. DRVR488.EXE is loaded\n");
-        printf("2. Program is compiled in real mode (-mc flag)\n");
-        printf("3. Personal488 hardware is connected\n");
+        gpib_driver_help();
         cleanup();
         return 1;
     }
@@ -177,7 +185,7 @@ int main(void) {
         printf("No mouse detected - keyboard only mode.\n");
     }
     printf("\nSystem initialized successfully.\n");
-    printf("Note: Personal488 enforces strict command/response pairing\n");
+    printf("%s", gpib_driver_note);
     printf("Press any key to continue...");
     getch();
     

@@ -11,12 +11,14 @@ The full tree is in the [README](README.md#repository-layout).
 - **`src/` is the only tree you build and change.** It tracks the latest release.
 - **`archive/` is frozen.** Don't fix archived versions; they are the record of
   what worked and what didn't, and the baseline for diagnosing regressions.
+- **`driver/gridgpib/`** holds the GRIDGPIB resident driver that `tm5000g.exe`
+  runs on; it is assembled separately with NASM.
 
 ## Building & running
 
 See [docs/BUILD.md](docs/BUILD.md). In short: OpenWatcom C/C++ (2.0 verified), then
-build in `src/`, producing `tm5000.exe`. Test under DOSBox if you don't have
-period hardware.
+build in `src/`, producing `tm5000.exe` and `tm5000g.exe`. Test under DOSBox if you
+don't have period hardware.
 
 ## Coding conventions
 
@@ -40,8 +42,9 @@ This is a constrained 16-bit DOS C codebase. Match the existing style:
 2. Make focused commits with clear messages.
 3. If you change behavior, update [CHANGELOG.md](CHANGELOG.md) and the relevant
    doc in `docs/`.
-4. If you add or remove a source file, update the `src/makefile` object list
-   **and** the link line; the link line does not use `$(OBJS)`.
+4. If you add or remove a source file, update the `src/makefile` object lists
+   (`OBJS`, and `OBJS_G` for `tm5000g.exe`) **and** both link lines; the link
+   lines do not use `$(OBJS)` / `$(OBJS_G)`.
 5. Open a pull request describing the change and how you verified it (real
    hardware, DOSBox, or reasoning).
 

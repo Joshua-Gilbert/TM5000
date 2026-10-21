@@ -71,14 +71,14 @@ typedef struct {
 #pragma pack(1)
 typedef struct {
     time_t calculation_time;
-    float mean;
-    float rms;
-    float std_dev;
-    float min_value;
-    float max_value;
-    float peak_to_peak;
-    float median;
-    float mode;
+    double mean;
+    double rms;
+    double std_dev;
+    double min_value;
+    double max_value;
+    double peak_to_peak;
+    double median;
+    double mode;
     int sample_count;
 } statistics_result;
 #pragma pack()
@@ -103,7 +103,6 @@ void generate_window_function(float far *window, int N, int window_type);
 void perform_differentiation(void);  
 void perform_integration(void);
 void perform_smoothing(void);
-int ensure_result_buffer(int slot, unsigned int count);
 
 /* Dual-trace and analysis math (math_enhanced.c) */
 
@@ -119,37 +118,40 @@ int dual_trace_max(int trace1, int trace2, int result_slot);
 
 /* Real-time Statistics */
 int calculate_realtime_statistics(int trace_slot, statistics_config *config, statistics_result *result);
-int calculate_basic_statistics(float *data, int count, statistics_result *result);
+int calculate_basic_statistics(double *data, int count, statistics_result *result);
 int calculate_rolling_statistics(int trace_slot, int window_size);
 int get_statistics_result(int trace_slot, statistics_result *result);
 
 /* Distribution and peak statistics */
-int calculate_histogram(float *data, int count, float *bins, int bin_count);
-int find_peaks(float *data, int count, int *peak_indices, int max_peaks);
+int calculate_histogram(double *data, int count, double *bins, int bin_count);
+int calculate_median(double *data, int count);
+int calculate_mode(double *data, int count);
+int find_peaks(double *data, int count, int *peak_indices, int max_peaks);
+int calculate_frequency_analysis(double *data, int count, float sample_rate);
 
 /* Digital Filtering */
 int apply_digital_filter(int trace_slot, filter_config *config);
-int design_lowpass_filter(filter_config *config, float *coefficients);
-int design_highpass_filter(filter_config *config, float *coefficients);
-int design_bandpass_filter(filter_config *config, float *coefficients);
-int apply_moving_average_filter(float *data, int count, int window_size);
-int apply_iir_filter(float *data, int count, float *coefficients, int order);
+int design_lowpass_filter(filter_config *config, double *coefficients);
+int design_highpass_filter(filter_config *config, double *coefficients);
+int design_bandpass_filter(filter_config *config, double *coefficients);
+int apply_moving_average_filter(double *data, int count, int window_size);
+int apply_iir_filter(double *data, int count, double *coefficients, int order);
 
 /* Curve Fitting */
 int perform_curve_fitting(int trace_slot, int fit_type, curve_fit_result *result);
-int fit_linear_regression(float *x_data, float *y_data, int count, curve_fit_result *result);
-int fit_polynomial(float *x_data, float *y_data, int count, int order, curve_fit_result *result);
-int fit_exponential(float *x_data, float *y_data, int count, curve_fit_result *result);
-int calculate_fit_quality(float *y_data, float *y_fitted, int count, curve_fit_result *result);
+int fit_linear_regression(double *x_data, double *y_data, int count, curve_fit_result *result);
+int fit_polynomial(double *x_data, double *y_data, int count, int order, curve_fit_result *result);
+int fit_exponential(double *x_data, double *y_data, int count, curve_fit_result *result);
+int calculate_fit_quality(double *y_data, double *y_fitted, int count, curve_fit_result *result);
 
 /* Correlation Analysis */
 int calculate_correlation(int trace1, int trace2, correlation_result *result);
-int calculate_cross_correlation(float *data1, float *data2, int count, float *correlation);
-int find_best_lag(float *correlation, int count, int *best_lag);
+int calculate_cross_correlation(double *data1, double *data2, int count, double *correlation);
+int find_best_lag(double *correlation, int count, int *best_lag);
 int calculate_phase_shift(int trace1, int trace2, float sample_rate);
 
 /* Signal Processing Utilities */
-int remove_dc_offset(float *data, int count);
+int remove_dc_offset(double *data, int count);
 int normalize_signal(float *data, int count, float target_range);
 int apply_window_function(float *data, int count, int window_type);
 int interpolate_missing_data(float *data, int count, int *missing_indices, int missing_count);

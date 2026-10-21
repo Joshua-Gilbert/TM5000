@@ -10,8 +10,28 @@
 /* Data buffer management */
 int allocate_module_buffer(int slot, unsigned int size);
 void free_module_buffer(int slot);
-void store_module_data(int slot, float value);
+void store_module_data(int slot, double value);
 void clear_module_data(int slot);
+
+/* Measurement-time stamps for the graph's time axis. The monitor sets
+ * g_mclock (monotonic BIOS ticks of measurement time) and g_mclock_valid
+ * around its own store; a sample stored any other way (file load, single
+ * readings) has no stamp and turns the slot's time axis off until cleared.
+ * g_store_suppress keeps readers that store their own result
+ * (read_dm5120_enhanced) from adding a second sample per monitor pass. */
+extern unsigned long g_mclock;
+extern char g_mclock_valid;
+extern char g_store_suppress;
+long sample_time_ms(int slot, unsigned int idx);   /* -1 = not available */
+double slot_interval_s(int slot);
+void copy_time_axis(int dst, int src);
+
+/* Sample buffers up to 8192 x 8 bytes (exactly 64 KB). _fmalloc takes a
+   16-bit size, so 65536 bytes would wrap to 0; blocks over 65000 bytes come
+   from DOS as a whole segment instead. Free with free_samples(). */
+void far *alloc_samples(unsigned n, unsigned elsize);
+extern unsigned g_buffer_samples;   /* 0 = AUTO (pooled), else samples */
+void free_samples(void far *p);
 
 /* File I/O operations */
 void save_data(void);
@@ -28,14 +48,13 @@ void save_dc5009_config(FILE *fp, int slot);
 void save_dc5010_config(FILE *fp, int slot);
 void save_fg5010_config(FILE *fp, int slot);
 
-/* Return 1 with the next section header left in line, 0 at end of file */
-int load_dm5120_config(FILE *fp, int slot, char *line, int line_size);
-int load_dm5010_config(FILE *fp, int slot, char *line, int line_size);
-int load_ps5004_config(FILE *fp, int slot, char *line, int line_size);
-int load_ps5010_config(FILE *fp, int slot, char *line, int line_size);
-int load_dc5009_config(FILE *fp, int slot, char *line, int line_size);
-int load_dc5010_config(FILE *fp, int slot, char *line, int line_size);
-int load_fg5010_config(FILE *fp, int slot, char *line, int line_size);
+void load_dm5120_config(FILE *fp, int slot);
+void load_dm5010_config(FILE *fp, int slot);
+void load_ps5004_config(FILE *fp, int slot);
+void load_ps5010_config(FILE *fp, int slot);
+void load_dc5009_config(FILE *fp, int slot);
+void load_dc5010_config(FILE *fp, int slot);
+void load_fg5010_config(FILE *fp, int slot);
 
 /* Export (export_enhanced.c) */
 
@@ -92,7 +111,7 @@ int export_measurement_summary(char *filename, export_config *config);
 
 /* Real-time Export Functions */
 int start_realtime_export(char *filename_template, export_config *config);
-int update_realtime_export(int slot, float value, time_t timestamp);
+int update_realtime_export(int slot, double value, time_t timestamp);
 int stop_realtime_export(void);
 int pause_realtime_export(void);
 int resume_realtime_export(void);
@@ -105,9 +124,9 @@ int export_measurement_conditions(FILE *file, export_config *config);
 int export_calibration_info(FILE *file, export_config *config);
 
 /* Data Format Functions */
-int format_data_value(char *buffer, int buffer_size, float value, export_config *config);
+int format_data_value(char *buffer, int buffer_size, double value, export_config *config);
 int format_timestamp(char *buffer, int buffer_size, time_t timestamp, export_config *config);
-int format_scientific_notation(char *buffer, int buffer_size, float value, int precision);
+int format_scientific_notation(char *buffer, int buffer_size, double value, int precision);
 int generate_filename_from_template(char *output, int output_size, char *template, time_t timestamp);
 
 /* Compression Functions */
@@ -116,7 +135,7 @@ int estimate_compressed_size(char *filename);
 
 /* Export Validation and Utilities */
 int validate_export_config(export_config *config);
-long get_export_file_size(char *filename);
+int get_export_file_size(char *filename);
 int get_estimated_export_size(export_config *config);
 int cleanup_export_temp_files(void);
 

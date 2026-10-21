@@ -1,70 +1,196 @@
 /*
- * Data files: .tm5 measurement files, .cfg settings files, and the per-module
- * far sample buffers they load into.
+ * Per-module far sample buffers (time-stamped, pair-averaged on long runs),
+ * and the .tm5 measurement and .cfg settings files that load into them.
  */
 
 #include "data.h"
 #include "modules.h"
 
-/* Replaces any existing buffer for the slot (count reset to 0). Returns 1 on
-   success; on failure the old buffer, size and count are left untouched. */
+unsigned long g_mclock = 0;
+char g_mclock_valid = 0;
+char g_store_suppress = 0;
+
+/* Continuous-monitor buffer size per module, in samples. 0 = AUTO: the
+   memory of ten 1024-sample slots is shared by the modules monitored. */
+unsigned g_buffer_samples = 0;
+
+/* Sample buffers up to exactly 64 KB */
+#define DOS_BLOCKS 24
+static unsigned dos_seg[DOS_BLOCKS];          /* lets free_samples tell DOS blocks from _fmalloc ones */
+
+void far *alloc_samples(unsigned n, unsigned elsize) {
+    unsigned long bytes = (unsigned long)n * elsize;
+    unsigned seg;
+    int i;
+    if (bytes == 0 || bytes > 65536UL) return NULL;
+    if (bytes <= 65000UL) return _fmalloc((unsigned)bytes);
+    /* 65001-65536 bytes: a whole DOS segment, offset 0, so 16-bit
+       offsets reach every byte and indexes never wrap */
+    for (i = 0; i < DOS_BLOCKS && dos_seg[i]; i++) ;
+    if (i == DOS_BLOCKS) return NULL;
+    if (_dos_allocmem((unsigned)((bytes + 15) >> 4), &seg) != 0) return NULL;
+    dos_seg[i] = seg;
+    return MK_FP(seg, 0);
+}
+
+void free_samples(void far *p) {
+    int i;
+    if (!p) return;
+    if (FP_OFF(p) == 0) {
+        for (i = 0; i < DOS_BLOCKS; i++) {
+            if (dos_seg[i] && dos_seg[i] == FP_SEG(p)) {
+                _dos_freemem(dos_seg[i]);
+                dos_seg[i] = 0;
+                return;
+            }
+        }
+    }
+    _ffree(p);
+}
+
+/* Empties the slot and its averaging and time-stamp state; buffers stay allocated. */
+static void reset_slot_state(tm5000_module *m) {
+    m->module_data_count = 0;
+    m->acc_v = m->acc_t = 0.0;
+    m->acc_n = 0;
+    m->avg_shift = 0;
+    m->time_ok = 0;               /* set again by the first time-stamped sample */
+    m->src_seconds = 0.0f;
+    m->src_measured = 0;
+}
+
+/* Replaces the slot's value and time-stamp buffers, capped at POOLED_MAX.
+   Returns 1 if the value buffer was allocated; without the time-stamp buffer
+   the slot just has no time axis. */
 int allocate_module_buffer(int slot, unsigned int size) {
-    float far *old_data;
-    float far *new_data;
-
+    tm5000_module *m;
     if (slot < 0 || slot >= 10) return 0;
-    if (size > 0xFFFFu / sizeof(float)) return 0;  /* byte count must fit 16-bit size_t */
+    m = &g_system->modules[slot];
 
-    new_data = (float far *)_fmalloc(size * sizeof(float));
-    if (!new_data) return 0;
+    if (m->module_data) free_samples(m->module_data);
+    if (m->sample_t) free_samples(m->sample_t);
+    m->module_data = NULL;
+    m->sample_t = NULL;
+    if (size > POOLED_MAX) size = POOLED_MAX;
 
-    old_data = g_system->modules[slot].module_data;
-    g_system->modules[slot].module_data = new_data;
-    g_system->modules[slot].module_data_size = size;
-    g_system->modules[slot].module_data_count = 0;
-
-    /* A trace may alias the old buffer; repoint it before the free */
-    if (old_data && g_traces[slot].data == old_data) {
-        g_traces[slot].data = new_data;
-        g_traces[slot].data_count = 0;
+    m->module_data = (double far *)alloc_samples(size, sizeof(double));
+    m->sample_t = (unsigned long far *)alloc_samples(size, sizeof(unsigned long));
+    reset_slot_state(m);
+    if (m->module_data) {
+        m->module_data_size = size;
+        return 1;
     }
-    if (old_data) {
-        _ffree(old_data);
-    }
-    return 1;
+    m->module_data_size = 0;
+    return 0;
 }
 
 void free_module_buffer(int slot) {
+    tm5000_module *m;
     if (slot < 0 || slot >= 10) return;
+    m = &g_system->modules[slot];
+    if (m->module_data) {
+        free_samples(m->module_data);
+        m->module_data = NULL;
+        m->module_data_size = 0;
+    }
+    if (m->sample_t) {
+        free_samples(m->sample_t);
+        m->sample_t = NULL;
+    }
+    reset_slot_state(m);
+}
+
+/* Each stored sample is the mean of 2^avg_shift readings (values and times).
+ * When the buffer fills, adjacent samples merge in pairs and the group size
+ * doubles, so the buffer always spans the whole run (up to avg_shift 15). */
+void store_module_data(int slot, double value) {
+    tm5000_module *m;
+    unsigned int f, k, n, cnt;
+    if (slot < 0 || slot >= 10) return;
+    m = &g_system->modules[slot];
+    if (!m->module_data || m->module_data_size == 0) return;
+    if (g_store_suppress) return;            /* the monitor stores this pass itself */
     
-    if (g_system->modules[slot].module_data) {
-        if (g_traces[slot].data == g_system->modules[slot].module_data) {
-            g_traces[slot].data = NULL;
-            g_traces[slot].data_count = 0;
+    m->last_reading = value;
+    cnt = m->module_data_count;
+    if (cnt >= m->module_data_size) return;  /* full and at the averaging limit */
+    if (cnt == 0 && m->acc_n == 0) {         /* first reading of a run */
+        m->time_ok = (m->sample_t != NULL && g_mclock_valid);
+        m->t_origin = g_mclock;
+    } else if (!g_mclock_valid) {
+        m->time_ok = 0;                      /* an unstamped reading drops the time axis */
+    }
+    m->acc_v += value;
+    m->acc_t += (double)g_mclock;
+    m->acc_n++;
+    f = 1u << m->avg_shift;
+    if (m->acc_n < f) return;
+    
+    m->module_data[cnt] = m->acc_v / f;
+    if (m->sample_t) m->sample_t[cnt] = (unsigned long)(m->acc_t / f + 0.5);
+    m->acc_v = m->acc_t = 0.0;
+    m->acc_n = 0;
+    cnt++;
+    
+    if (cnt == m->module_data_size && cnt >= 2 && m->avg_shift < 15) {
+        n = cnt / 2;                         /* buffer full: merge pairs */
+        for (k = 0; k < n; k++) {
+            m->module_data[k] = (m->module_data[2*k] + m->module_data[2*k+1]) * 0.5;
+            if (m->sample_t)
+                m->sample_t[k] = m->sample_t[2*k] + (m->sample_t[2*k+1] - m->sample_t[2*k] + 1) / 2;
         }
-        _ffree(g_system->modules[slot].module_data);
-        g_system->modules[slot].module_data = NULL;
-        g_system->modules[slot].module_data_size = 0;
-        g_system->modules[slot].module_data_count = 0;
+        if (cnt & 1) {                       /* odd size (loaded data): keep the last */
+            m->module_data[n] = m->module_data[cnt - 1];
+            if (m->sample_t) m->sample_t[n] = m->sample_t[cnt - 1];
+            n++;
+        }
+        cnt = n;
+        m->avg_shift++;
     }
+    m->module_data_count = cnt;
 }
 
-/* Appends one sample; silently dropped once the buffer is full. */
-void store_module_data(int slot, float value) {
-    if (slot < 0 || slot >= 10) return;
-    if (!g_system->modules[slot].module_data) return;
-    
-    if (g_system->modules[slot].module_data_count < g_system->modules[slot].module_data_size) {
-        g_system->modules[slot].module_data[g_system->modules[slot].module_data_count] = value;
-        g_system->modules[slot].module_data_count++;
-        g_system->modules[slot].last_reading = value;
-    }
+/* ms from the run's first reading to sample idx (BIOS-tick resolution,
+   54.9 ms), or -1 when the slot has no time stamps. Ticks to ms is split
+   into quotient and remainder so t * 10000 cannot overflow. */
+long sample_time_ms(int slot, unsigned int idx) {
+    tm5000_module *m;
+    unsigned long t;
+    if (slot < 0 || slot >= 10) return -1L;
+    m = &g_system->modules[slot];
+    if (!m->sample_t || !m->time_ok || idx >= m->module_data_count) return -1L;
+    t = m->sample_t[idx] - m->t_origin;
+    return (long)((t / 182UL) * 10000UL + ((t % 182UL) * 10000UL) / 182UL);
 }
 
-/* Resets the count only; the buffer stays allocated. */
+/* Mean time between a slot's samples in seconds: measured from its time
+   stamps when it has them, else the set rate x averaging */
+double slot_interval_s(int slot) {
+    tm5000_module *m = &g_system->modules[slot];
+    long t = (m->module_data_count > 1) ? sample_time_ms(slot, m->module_data_count - 1) : -1L;
+    if (t > 0) return t / 1000.0 / (m->module_data_count - 1);
+    return g_control_panel.sample_rate_ms / 1000.0 * (1u << m->avg_shift);
+}
+
+/* Give a computed time-domain trace (derivative, integral, smoothing, trace
+   math) the time stamps of the trace it was computed from */
+void copy_time_axis(int dst, int src) {
+    tm5000_module *d = &g_system->modules[dst], *s = &g_system->modules[src];
+    unsigned int k, n;
+    if (dst == src) return;
+    if (!d->sample_t || !s->sample_t || !s->time_ok) { d->time_ok = 0; return; }
+    n = d->module_data_count < s->module_data_count ? d->module_data_count : s->module_data_count;
+    if (n > d->module_data_size) n = d->module_data_size;
+    for (k = 0; k < n; k++) d->sample_t[k] = s->sample_t[k];
+    d->t_origin = s->t_origin;
+    d->avg_shift = s->avg_shift;
+    d->time_ok = (n == d->module_data_count);
+}
+
+/* Empties the slot; the buffer stays allocated. */
 void clear_module_data(int slot) {
     if (slot < 0 || slot >= 10) return;
-    g_system->modules[slot].module_data_count = 0;
+    reset_slot_state(&g_system->modules[slot]);
 }
 
 void save_data(void) {
@@ -78,7 +204,7 @@ void save_data(void) {
     printf("=========\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%75s", filename);  /* leave room for the 4-char extension */
+    scanf("%s", filename);
     strcat(filename, ".tm5");
     
     fp = fopen(filename, "w");
@@ -97,7 +223,7 @@ void save_data(void) {
     if (!g_control_panel.use_custom) {
         fprintf(fp, "PresetIndex: %d\n", g_control_panel.selected_rate);
     }
-
+    
     fprintf(fp, "Modules:\n");
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
@@ -146,7 +272,7 @@ void save_data(void) {
     
     fprintf(fp, "GlobalData:\n");
     for (i = 0; i < g_system->data_count; i++) {
-        fprintf(fp, "%.6e\n", g_system->data_buffer[i]);
+        fprintf(fp, "%.12g\n", g_system->data_buffer[i]);
     }
     
     fprintf(fp, "ModuleData:\n");
@@ -163,7 +289,7 @@ void save_data(void) {
             
             if (data_count > 0) {
                 for (j = 0; j < data_count; j++) {
-                    fprintf(fp, "%.6e\n", g_system->modules[i].module_data[j]);
+                    fprintf(fp, "%.12g\n", g_system->modules[i].module_data[j]);
                 }
                 printf("Wrote %u data values for slot %d\n", data_count, i);
             } else {
@@ -186,14 +312,14 @@ void save_data(void) {
 void load_data(void) {
     FILE *fp;
     char filename[80];
-    char line[GPIB_BUFFER_SIZE];  /* also the buffer the load_*_config readers use */
+    char line[100];
     char desc[20];
     int slot, type, addr;
   
     unsigned int count;
     int i, j;
     unsigned int module_count;
-    float value;
+    double value;
     int total_loaded = 0;
     int active_modules = 0;
     
@@ -202,7 +328,7 @@ void load_data(void) {
     printf("=========\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%75s", filename);  /* leave room for the 4-char extension */
+    scanf("%s", filename);
     strcat(filename, ".tm5");
     
     fp = fopen(filename, "r");
@@ -266,10 +392,10 @@ void load_data(void) {
                 g_system->modules[slot].enabled = 1;
                 g_system->modules[slot].last_reading = 0.0;
                 strcpy(g_system->modules[slot].description, desc);
-
+                
                 /* Defaults first; the ModuleConfigs section overrides them. */
                 switch (type) {
-                    case MOD_DM5120: 
+                    case MOD_DM5120:
                         init_dm5120_config(slot); 
                         init_dm5120_config_enhanced(slot); 
                         break;
@@ -297,56 +423,46 @@ void load_data(void) {
                 if (count > 0) {
                     if (!allocate_module_buffer(slot, count + 100)) {
                         printf("Error: Failed to allocate memory for module %d (%u samples)\n", slot, count);
-                        if (g_system->modules[slot].module_data) {
-                            printf("Module %d keeps its existing %u-sample buffer\n",
-                                   slot, g_system->modules[slot].module_data_size);
-                        } else {
-                            printf("Module %d will remain configured but without data buffer\n", slot);
-                        }
+                        printf("Module %d will remain configured but without data buffer\n", slot);
+                    } else {
                     }
+                } else {
                 }
+            } else {
             }
+        } else {
         }
     }
     
     if (strncmp(line, "ModuleConfigs:", 14) == 0) {
-        int have_line = 0;  /* line already holds the header a reader stopped at */
-
         printf("Loading module configurations...\n");
-        while (have_line || fgets(line, sizeof(line), fp)) {
-            have_line = 0;
+        while (fgets(line, sizeof(line), fp)) {
             if (strncmp(line, "GlobalData:", 11) == 0) break;
-
+            
             /* Parse module config header like "Slot2:DM5120" */
             if (sscanf(line, "Slot%d:%*s", &slot) == 1) {
-                if (slot < 0 || slot >= 10 || !g_system->modules[slot].enabled) {
-                    printf("Warning: Config block for slot %d skipped (no such module)\n", slot);
-                } else {
+                if (slot >= 0 && slot < 10 && g_system->modules[slot].enabled) {
                     switch (g_system->modules[slot].module_type) {
                         case MOD_DM5120:
-                            have_line = load_dm5120_config(fp, slot, line, sizeof(line));
+                            load_dm5120_config(fp, slot);
                             break;
                         case MOD_DM5010:
-                            have_line = load_dm5010_config(fp, slot, line, sizeof(line));
+                            load_dm5010_config(fp, slot);
                             break;
                         case MOD_PS5004:
-                            have_line = load_ps5004_config(fp, slot, line, sizeof(line));
+                            load_ps5004_config(fp, slot);
                             break;
                         case MOD_PS5010:
-                            have_line = load_ps5010_config(fp, slot, line, sizeof(line));
+                            load_ps5010_config(fp, slot);
                             break;
                         case MOD_DC5009:
-                            have_line = load_dc5009_config(fp, slot, line, sizeof(line));
+                            load_dc5009_config(fp, slot);
                             break;
                         case MOD_DC5010:
-                            have_line = load_dc5010_config(fp, slot, line, sizeof(line));
+                            load_dc5010_config(fp, slot);
                             break;
                         case MOD_FG5010:
-                            have_line = load_fg5010_config(fp, slot, line, sizeof(line));
-                            break;
-                        default:
-                            printf("Warning: Config block for slot %d skipped (module type %d)\n",
-                                   slot, g_system->modules[slot].module_type);
+                            load_fg5010_config(fp, slot);
                             break;
                     }
                 }
@@ -361,7 +477,7 @@ void load_data(void) {
     }
     
     for (i = 0; i < g_system->data_count && i < g_system->buffer_size; i++) {
-        if (fscanf(fp, "%f", &value) != 1) break;
+        if (fscanf(fp, "%lf", &value) != 1) break;
         
         /* NaN (value != value) or +/-inf */
         if (value != value || value == HUGE_VAL || value == -HUGE_VAL) {
@@ -380,7 +496,7 @@ void load_data(void) {
             if (strncmp(line, "ModuleData", 10) == 0) { found_marker = 1; break; }
         }
         if (!found_marker) {
-            /* Truncated/corrupt file: warn rather than claim success. */
+            /* Truncated/corrupt file: warn rather than claim success. (review #8) */
             printf("Warning: 'ModuleData' section not found - per-module data not loaded\n");
         }
     }
@@ -413,7 +529,7 @@ void load_data(void) {
                 printf("Loading %u samples for slot %d...\n", module_count, slot);
                 
                 for (j = 0; j < module_count; j++) {
-                    if (fscanf(fp, "%f", &value) == 1) {
+                    if (fscanf(fp, "%lf", &value) == 1) {
                         /* NaN or +/-inf */
                         if (value != value || value == HUGE_VAL || value == -HUGE_VAL) {
                             printf("Warning: Invalid data value detected in slot %d sample %d, setting to 0.0\n", slot, j);
@@ -442,7 +558,10 @@ void load_data(void) {
     printf("File format: Enhanced (v3.2)\n");
     printf("Global samples: %u\n", g_system->data_count);
     printf("Sample rate: %d ms\n", g_control_panel.sample_rate_ms);
-
+    
+    for (i = 0; i < 10; i++) {
+    }
+    
     printf("\nActive modules after loading:\n");
     active_modules = 0;
     for (i = 0; i < 10; i++) {
@@ -466,6 +585,9 @@ void load_data(void) {
 
     sync_traces_with_modules();
 
+    for (i = 0; i < 10; i++) {
+    }
+
     /* Reset an empty, inverted or NaN graph scale */
     if (g_graph_scale.max_value <= g_graph_scale.min_value || 
         g_graph_scale.max_value != g_graph_scale.max_value ||
@@ -488,7 +610,7 @@ void save_settings(void) {
     printf("===========================\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%75s", filename);  /* leave room for the 4-char extension */
+    scanf("%s", filename);
     strcat(filename, ".cfg");
     
     fp = fopen(filename, "w");
@@ -567,7 +689,7 @@ void load_settings(void) {
     printf("===========================\n\n");
     
     printf("Enter filename (without extension): ");
-    scanf("%75s", filename);  /* leave room for the 4-char extension */
+    scanf("%s", filename);
     strcat(filename, ".cfg");
     
     fp = fopen(filename, "r");
@@ -688,9 +810,6 @@ void load_settings(void) {
                             case MOD_PS5010:
                                 init_ps5010_config(slot);
                                 break;
-                            case MOD_FG5010:
-                                init_fg5010_config(slot);
-                                break;
                         }
                         
                         if (!allocate_module_buffer(slot, MAX_SAMPLES_PER_MODULE)) {
@@ -708,7 +827,6 @@ void load_settings(void) {
         if (strcmp(line, "[ModuleConfigs]") == 0) {
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') {
-                    line[strcspn(line, "\r\n")] = 0;  /* matched by the [GraphScale] check below */
                     break;
                 }
                 if (sscanf(line, "%[^=]=%s", key, value) == 2) {
@@ -905,17 +1023,17 @@ void save_fg5010_config(FILE *fp, int slot) {
             cfg->units_freq, cfg->units_time, cfg->lf_termination);
 }
 
-/* The load_*_config readers read into the caller's line buffer and stop at the
-   next "Slot" or "GlobalData:" line (no fseek back). They return 1 with that
-   header left in line for the caller to handle, or 0 at end of file. */
-int load_dm5120_config(FILE *fp, int slot, char *line, int line_size) {
+/* The load_*_config readers stop at the next "Slot" or "GlobalData:" line and
+   consume it (no fseek back), so the caller never sees that line. */
+void load_dm5120_config(FILE *fp, int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
 
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
 
         token = strtok(line, "|");
@@ -942,17 +1060,17 @@ int load_dm5120_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }
 
-int load_dm5010_config(FILE *fp, int slot, char *line, int line_size) {
+void load_dm5010_config(FILE *fp, int slot) {
     dm5010_config *cfg = &g_dm5010_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
     
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -983,17 +1101,17 @@ int load_dm5010_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }
 
-int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
+void load_ps5004_config(FILE *fp, int slot) {
     ps5004_config *cfg = &g_ps5004_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
     
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -1014,17 +1132,17 @@ int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }
 
-int load_ps5010_config(FILE *fp, int slot, char *line, int line_size) {
+void load_ps5010_config(FILE *fp, int slot) {
     ps5010_config *cfg = &g_ps5010_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
     
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -1057,17 +1175,17 @@ int load_ps5010_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }
 
-int load_dc5009_config(FILE *fp, int slot, char *line, int line_size) {
+void load_dc5009_config(FILE *fp, int slot) {
     dc5009_config *cfg = &g_dc5009_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
     
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -1097,17 +1215,17 @@ int load_dc5009_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }
 
-int load_dc5010_config(FILE *fp, int slot, char *line, int line_size) {
+void load_dc5010_config(FILE *fp, int slot) {
     dc5010_config *cfg = &g_dc5010_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
     
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -1139,17 +1257,17 @@ int load_dc5010_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }
 
-int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
+void load_fg5010_config(FILE *fp, int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
+    char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
     
-    while (fgets(line, line_size, fp)) {
+    while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -1186,5 +1304,4 @@ int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
             token = strtok(NULL, "|");
         }
     }
-    return 0;
 }

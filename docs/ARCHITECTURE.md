@@ -1,4 +1,4 @@
-# TM5000 Architecture (as-built, v3.6)
+# TM5000 Architecture (as-built, v3.7)
 
 How [`src/`](../src) is built and organized. Toolchain: [BUILD.md](BUILD.md);
 cross-version bug history: [FINDINGS.md](FINDINGS.md); releases:
@@ -18,7 +18,17 @@ limit.
 - **Memory model:** large (`-ml`) — code and data pointers are far; data items ≥100 bytes
   go far automatically (`-zt100`), `const` lives in the code segment (`-zc`).
 - **Display:** CGA 320×200 4-color.
-- **GPIB hardware:** Personal488 (IOtech/CEC) via the vendor `ieeeio` driver shim.
+- **GPIB hardware:** Personal488 (IOtech/CEC), driven either through the vendor
+  `ieeeio` shim and Driver488 (`gpib.c`, `tm5000.exe`) or through the GRIDGPIB
+  resident driver (`gpib_gg.c` + `gridgpib.c`, `tm5000g.exe`). Both back ends
+  implement `gpib.h`. The fixed waits Driver488 needs after bus calls are
+  `GPIB_PACE(ms)`, compiled out with `-DGRIDGPIB` because GRIDGPIB calls return only
+  when the transaction is complete.
+- **Samples:** `double`, each with a measurement-time stamp (`sample_t`, BIOS
+  ticks). Buffers come from `alloc_samples()`: up to exactly 64 KB = 8192 samples,
+  taken as a DOS segment when `_fmalloc` cannot express that size. The continuous
+  monitor pools 10×1024 samples among the modules it reads; a full buffer merges
+  pairs and keeps averaging (`avg_shift`).
 
 ---
 
@@ -33,9 +43,9 @@ limit.
  ───────    ───────────        ────────────────      ────            ──────────
  gpib.c     modules.c          data.c                math_functions.c  ui.c
  ieeeio_w.c module_funcs.c     export_enhanced.c     math_enhanced.c   ui_math_menus.c
-            (DC5009/DC5010/     config_profiles.c                       graphics.c
-             DM5010/DM5120/                                             print.c
-             PS5004/PS5010/
+  or        (DC5009/DC5010/     config_profiles.c                       graphics.c
+ gpib_gg.c   DM5010/DM5120/                                             print.c
+ gridgpib.c  PS5004/PS5010/
              FG5010)
    asm (optimization, currently dormant): cga_asm  mem286  fixed286  trig287_simple
 ```
@@ -45,6 +55,8 @@ limit.
 | `main.c` / `tm5000.h` | Entry point, all global definitions, 287 detection, the single shared header (system types, instrument config structs, globals as `extern`, constants). |
 | `gpib.c/.h` | GPIB transport: generic `gpib_write/read`, SRQ/serial-poll, and DM5120/DM5010-specific I/O wrappers, over `ieeeio_w`. |
 | `ieeeio_w.c` / `ieeeio.h` | Vendor Personal488 driver glue (Watcom port of IOtech IEEEIO). Lowest layer. |
+| `gpib_gg.c` | `tm5000g.exe` only: the `gpib.h` API on GRIDGPIB, per-instrument read timeouts, and a small Driver488 text-command interpreter behind `ieee_write`/`ieee_read` for the terminal and diagnostics. |
+| `gridgpib.c/.h` | C interface to the GRIDGPIB resident driver (INT 60h–66h, found by its signature). |
 | `modules.c/.h` | Per-instrument drivers, `configure_modules`, `single_measurement`, `continuous_monitor`, and `validate_enabled_modules`. Largest unit. |
 | `module_funcs.c/.h` | Interactive "advanced configuration" menus / comm-test helpers per instrument. |
 | `data.c/.h` | Per-module buffer alloc/store, `.tm5`/`.cfg` text persistence, enhanced-export types. |
@@ -64,9 +76,9 @@ limit.
 ```c
 #pragma pack(1)
 typedef struct {                 /* one instrument slot (or computed-result slot) */
-    float far *module_data;      /* sample buffer (far) */
+    double far *module_data;     /* sample buffer (far) */
     char  description[12];
-    float last_reading;
+    double last_reading;
     unsigned int module_data_count;
     unsigned int module_data_size;
     unsigned char module_type;   /* MOD_NONE / MOD_DC5009 ... MOD_FG5010 */
@@ -74,7 +86,10 @@ typedef struct {                 /* one instrument slot (or computed-result slot
     unsigned char gpib_address;
     unsigned char enabled:1;
     unsigned char is_result:1;   /* computed (FFT/math) trace - see §5 */
-    unsigned char reserved:6;
+    unsigned char time_ok:1;     /* every stored sample has a time stamp */
+    unsigned char reserved:5;
+    unsigned long far *sample_t; /* BIOS-tick time of each sample */
+    ...                          /* averaging state (acc_*, avg_shift), FFT source duration */
 } tm5000_module;
 #pragma pack()
 
@@ -91,8 +106,11 @@ state for save/restore.
 
 ## 4. GPIB & instruments
 
-- All bus I/O funnels through `gpib.c` over the Personal488 shim (`ieeeio_w.c`). Each
-  slot's GPIB address (1–30) is set by the user in the slot-setup menu; addresses must be unique.
+- All bus I/O funnels through the `gpib.h` API: `gpib.c` over the Personal488 shim
+  (`ieeeio_w.c`) in `tm5000.exe`, `gpib_gg.c` over GRIDGPIB in `tm5000g.exe`. Each
+  slot's GPIB address (1–30) is set by the user in the slot-setup menu; addresses must be
+  unique. Auto-detect (Configure Modules → A) scans addresses 1–30 with `gpib_probe()`
+  and fills free slots only.
 - Seven instrument drivers live in `modules.c`. **DC5009 and DC5010 share one
   implementation**: the 22 byte-identical `dc5010_*` routines forward to their `dc5009_*`
   counterparts; only the DC5010-unique features (rise/fall time, A±B totalize, burst) are
@@ -123,7 +141,7 @@ See FINDINGS #1 for the regression this prevents.
 
 ## 6. Math subsystem
 
-- **FFT** (`math_functions.c`): C radix-2 FFT, power-of-2, 64–1024 points, with
+- **FFT** (`math_functions.c`): C radix-2 FFT, power-of-2, 64–8192 points, with
   Rectangular/Hamming/Hanning/Blackman windows. Runs on the 80287 when present; otherwise
   falls back to a coarse software DFT (approximate, ≤64 points).
   Output formats: dB (threshold `1e-12`, floor `-240 dB`), linear, power. When the requested
@@ -161,8 +179,10 @@ control size:
   has no identical-code folding, so duplicate functions are consolidated in source instead
   (e.g. the DC5009/DC5010 forwarders).
 
-`tm5000.exe` is 282,470 bytes (~276 KB), leaving room in 640 KB for the 1024-sample ×
-10-module far buffers.
+`tm5000.exe` is 296,728 bytes and `tm5000g.exe` 296,634 bytes (~290 KB each), leaving
+room in 640 KB for the pooled 10×1024-sample far buffers (8 bytes per sample plus a
+4-byte time stamp). `tm5000g.exe` swaps `gpib.c` for `gpib_gg.c` + `gridgpib.c` and
+builds `modules.c` / `module_funcs.c` with `-DGRIDGPIB`.
 
 ---
 
@@ -172,19 +192,6 @@ control size:
 optimization routines that are **not called from C** (only `extern`-declared). With
 `OPTION ELIMINATE` they are stripped from the image; they stay in the tree as
 scaffolding to wire in or remove.
-
-They are not safe to call as written:
-
-- All four are `.MODEL SMALL` with near procedures reading stack arguments at `[bp+4]`,
-  while the C side is large-model with Watcom's register calling convention.
-- `cga_asm.asm`: the `PUBLIC` names (`cga_draw_hline_`, …) don't match the procedure names
-  (`_cga_draw_hline`, …). `cga_draw_hline` exits its leading-pixel loop with `cx` still
-  pushed. `cga_clear_screen` writes 32 KB, past CGA's 16 KB.
-- `mem286.asm`: in `fast_fmemcpy_286`, `cmp cx,1000h` clobbers the carry from `shr`, so
-  every aligned copy moves one extra byte. `fast_memcmp_286` compares the later byte of a
-  mismatched word first, so its sign can disagree with `memcmp`.
-- `fixed286.asm`: `fixed_mul_286`, `fixed_div_286`, `fixed_cos_286` and `fixed_sqrt_286`
-  have wrong arithmetic or stack handling, and the `FIXED_PI*` constants are wrong.
 
 ---
 
@@ -197,4 +204,4 @@ They are not safe to call as written:
 
 ---
 
-*Describes v3.6. Update when the module structure, data layout, or build options change.*
+*Describes v3.7. Update when the module structure, data layout, or build options change.*

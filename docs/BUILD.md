@@ -4,7 +4,7 @@ TM5000 is a 16-bit real-mode MS-DOS application built with the **OpenWatcom
 C/C++** toolchain. It runs on period hardware or DOSBox / 86Box, not on a modern
 OS directly.
 
-This guide covers the current tree, [`src/`](../src) (v3.6). Versions under
+This guide covers the current tree, [`src/`](../src) (v3.7). Versions under
 [`archive/`](../archive) are reference only.
 
 ---
@@ -13,11 +13,11 @@ This guide covers the current tree, [`src/`](../src) (v3.6). Versions under
 
 | Component | Requirement |
 |-----------|-------------|
-| Compiler  | OpenWatcom C/C++ **2.0** (`wcc`, the **16-bit** compiler — *not* `wcc386`). v3.6 is verified with 2.0; 1.9 is untested with `-zm` / `OPTION ELIMINATE` |
+| Compiler  | OpenWatcom C/C++ **2.0** (`wcc`, the **16-bit** compiler — *not* `wcc386`). Only 2.0 is verified; 1.9 is untested with `-zm` / `OPTION ELIMINATE` |
 | Assembler | OpenWatcom `wasm` (for the `.asm` optimization modules) |
 | Linker    | OpenWatcom `wlink` |
 | Build tool| `wmake` (native) **or** GNU `make` calling the Watcom `.exe`s |
-| Run target| MS-DOS 3.3+ on a 286/287, CGA graphics, a Personal488 (IOtech) GPIB card — or [DOSBox](https://www.dosbox.com/) for testing without hardware |
+| Run target| MS-DOS 3.3+ on a 286/287, CGA graphics, a Personal488 (IOtech) GPIB card (driven by `DRVR488`, or by GRIDGPIB for `tm5000g.exe`) — or [DOSBox](https://www.dosbox.com/) for testing without hardware |
 
 Install OpenWatcom and run `owsetenv.bat` / `owsetenv.sh`: the compiler needs
 `WATCOM` and `INCLUDE` to find its headers and libraries.
@@ -68,16 +68,34 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (282,470 bytes, ~276 KB).
+Output: `tm5000.exe` (Driver488, 296,728 bytes) and `tm5000g.exe` (GRIDGPIB,
+296,634 bytes), ~290 KB each. Prebuilt copies of both are committed in `src/`.
+
+`tm5000g.exe` uses `gpib_gg.c` + `gridgpib.c` instead of `gpib.c`, and compiles
+`modules.c` / `module_funcs.c` a second time with `-DGRIDGPIB` (as
+`modules_g.obj` / `module_funcs_g.obj`) so the fixed Driver488 pacing waits
+(`GPIB_PACE`) compile to nothing. It needs `GRIDGPIB.COM` loaded instead of
+`DRVR488` — see [`driver/gridgpib/`](../driver/gridgpib).
+
+OpenWatcom 2.0 for Linux (`binl64`) also builds the tree with GNU make (its
+`wcc` writes `.o` by default, hence `-fo=.obj`):
+
+```sh
+make CC="wcc -q -fo=.obj" ASM="wasm -q -fo=.obj" LINKER="wlink option quiet"
+```
+
+Built this way, `tm5000g.exe` is byte-identical to the build tested on the
+GRiDCase 1520.
 
 Other makefile targets:
 
-- `wmake clean` — remove `*.obj`, `*.err`, `*.map` and the executable
+- `wmake clean` — remove `*.obj` and both executables
 - `wmake help`  — print build help
 
 The `wcl` target is **incomplete**: it omits `math_enhanced.c`,
 `ui_math_menus.c`, `config_profiles.c`, `export_enhanced.c`, and all assembly
-objects, so it produces a partial binary. Use the default `all` target.
+objects, and builds only the Driver488 program, so it produces a partial binary.
+Use the default `all` target.
 
 ---
 
@@ -85,8 +103,9 @@ objects, so it produces a partial binary. Use the default `all` target.
 
 On real hardware or DOSBox:
 
-1. Ensure the Personal488 driver (`DRVR488.EXE`) is loaded (for GPIB hardware).
-2. Run `TM5000.EXE` from the DOS prompt.
+1. Load the GPIB driver: `DRVR488.EXE` for `TM5000.EXE`, or `GRIDGPIB.COM`
+   (instead of `DRVR488`) for `TM5000G.EXE`.
+2. Run `TM5000.EXE` or `TM5000G.EXE` from the DOS prompt.
 
 Without GPIB hardware, the program still starts under DOSBox and the menus work;
 instrument operations time out.
@@ -95,8 +114,8 @@ instrument operations time out.
 
 ## 5. Build-system caveats
 
-1. **Duplicated object list.** The link line repeats the object list instead of
-   using `$(OBJS)`, so the two can drift when a module is added.
+1. **Duplicated object lists.** Each link line repeats its object list instead of
+   using `$(OBJS)` / `$(OBJS_G)`, so the lists can drift when a module is added.
 2. **Vendored header.** `ieeeio_w.c` needs `ieeeio.h`, which is vendored in `src/`
    so the build is self-contained.
 3. **Dormant assembly.** `cga_asm.asm`, `mem286.asm`, `fixed286.asm`, and

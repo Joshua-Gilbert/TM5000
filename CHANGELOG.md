@@ -15,71 +15,52 @@ The project has three eras:
 
 ---
 
-## [Unreleased] — Audit fixes
+## [3.7] — 2026-10-01 — TM5000G on GRIDGPIB, double precision, long runs
 
-Built clean with OpenWatcom 2.0 (no new warnings); not yet run on hardware.
+Detailed changelog: [docs/changelogs/CHANGELOG_v3.7.md](docs/changelogs/CHANGELOG_v3.7.md) ·
+Driver: [driver/gridgpib/](driver/gridgpib/) · Previous source: [archive/v3.6/](archive/v3.6/)
 
-### Fixed — memory safety
-- **Printing:** the text graph's row clear wrote 20 bytes past its line buffers on
-  every row, legend lines overran `label[40]`, and a custom header over 63 characters
-  overran `g_custom_header_text`. Headers are now cut to 63.
-- **GPIB:** a command too long for the 128-byte bus buffer is refused with an
-  error instead of overflowing it. `gpib_write`, `gpib_write_dm5120` and
-  `gpib_write_dm5010` return -1 when a command was refused or the write failed. A long driver status is cut to fit `g_error_msg`.
-- **Buffers:** `allocate_module_buffer` allocates before freeing, so a failed
-  allocation leaves the old data intact. FFT, derivative, integral, smoothing and
-  dual-trace results grow a too-small target buffer instead of writing past it.
-- `ieeescnf` read 256 bytes into a 128-byte buffer.
+Built and tested for Grid-OS on a GRiDCase 1520.
 
-### Fixed — files and profiles
-- **`.tm5` load** lost every other module's config, the global data and the module
-  data: each config reader consumed the next header line. Skipped config blocks now
-  print a warning. The file format is unchanged.
-- **`.cfg` load** never applied `[GraphScale]`, and FG5010 slots got no default config.
-- **Profiles:** the checksum covered its own low byte, so about 255 of 256 saved
-  profiles failed verification and vanished from the list. Existing `PROFILES.DAT`
-  files verify again with no version bump. After a delete, load, delete and overwrite
-  acted on the wrong profile. The menu never opened `PROFILES.DAT` at all, because
-  `init_profile_system` had no caller. It now tells I/O, not-a-profile-file and
-  version-mismatch errors apart.
-- Export file sizes of 32 KB and up were truncated to 16 bits. In scientific
-  notation, zero now follows the precision setting.
+### Added
+- **TM5000G (`tm5000g.exe`): the same program on the GRIDGPIB resident driver.**
+  1.85 KB resident vs ≈43 KB for Driver488; serial poll 0.5 ms vs 87 ms; test-set
+  bus time 8.5 s vs 34.8 s. `make` builds both executables.
+- **Auto-detect modules** (Configure Modules → A). Scans GPIB addresses 1–30, reads
+  each instrument's `ID?` (or `*IDN?`) and adds TM5000 modules not yet set up to
+  free slots; existing slots are never changed.
+- **Pooled buffers.** The continuous monitor shares 10 × 1024 samples among the
+  modules it reads (one module: 8192); buffer size can also be set
+  (Continuous Monitoring Setup → 4: AUTO, 1024 … 8192).
+- **A full buffer averages instead of stopping.** Each stored sample becomes the mean
+  of 2, 4, 8 … readings, shown by an `AVG xN` light.
+- AUTO sample rate; per-sample measurement-time stamps; X axis in samples or time.
+- Graph: P prints (with the print menu's setting), O opens the print menu, M toggles
+  the mouse.
+- FFT input and output up to 8192 points.
 
-### Fixed — math
-- **Digital filters** ran the wrong recurrence (feedback read from `a0`, and the
-  highpass `a1` was wrong). *Order* now cascades that many sections.
-- The **no-287 FFT** used small-angle cos/sin approximations over the whole circle,
-  and windowed a longer record than it transformed.
-- Derivative, integral and smoothing gave wrong results when overwriting their own
-  source slot. The integral trace now sets up its axes like the derivative.
-- Removed `calculate_median`, `calculate_mode` and `calculate_frequency_analysis`: they
-  were never called, and they returned scaled values in a 16-bit int.
+### Changed
+- **Samples, statistics and analysis use `double`** so counter readings keep their
+  resolution at 10 MHz and above.
+- Graph offset axis for small changes on large values; cursor drawn without full
+  redraws; readable footer.
+- FFT and math use the source's measured sample interval; math traces keep its
+  time stamps; FFT printouts show the source measurement's duration.
+- Start-up text and terminal name the driver the build uses.
+- The GRIDGPIB build releases the bus with one REN-off on exit.
 
-### Fixed — instruments and UI
-- **FG5010 communication test** reprograms frequency, amplitude and waveform and
-  briefly enables the output. It now asks first, and always switches the output off
-  again, even if the read-back times out. Ctrl-C/Ctrl-Break are ignored while the
-  output is on. If the `OUTP OFF` write fails, a front-panel warning is shown. It also runs from the slot-setup
-  "Test communication?" prompt.
-- **DM5120:** the buffered fill sent `STOINT` as readings/s × 1000 (10 r/s sent
-  `STOINT 10000`). The conflict check now tests the configured interval and refuses
-  an invalid slot.
-- **DM5120 bus handling** keyed off `address − 10` for addresses 10–17 only.
-  Addresses are user-assigned, so the SRQ poll and longer settle now apply to every
-  enabled DM5120, which adds about 200 ms per command to a DM5120 at any other
-  address.
-- The DC5010 communication test ran the DC5009 test. The DC5009/DC5010 query
-  functions now fill the caller's buffer.
-- The FPU probe began with a waiting `fclex`, which can hang a machine with no 287.
-- "Select all" left slots 8–9 unselected. ALT-toggle could index `g_traces[-1]`.
-  Graph status text had lowercase letters, which the CGA font draws as spaces.
-  File-menu mouse rows were off by two.
-- Custom GPIB commands starting with `F` (e.g. `FUNCT DCV`) triggered a read and a
-  SEQUENCE error. Only queries (`?`) read now.
-
-### Build
-- Makefile dependencies list each file's direct includes, and `clean` also removes
-  `.err` and `.map`.
+### Fixed
+- **Printing:** duration overflowed a 16-bit `int`; scales showed "0" on small
+  ranges; the print report used the wrong buffer; text-graph stack overrun; LPT
+  dropped bytes while the printer was busy.
+- FFT/math results were written past a reused slot's buffer.
+- DM5120 stored twice per pass in the continuous monitor.
+- **Monitor:** stale rows looked like duplicated slots; the summary printed over them;
+  counter readings below 1 MHz were shown as MHz.
+- Buffered text landed at the wrong cursor position (`clrscr`/`gotoxy`).
+- **Mouse pointer stayed hidden after a menu was left by a key.** The main,
+  Measurement and File Operations menus hid it twice (in the key branch and after
+  the loop) but showed it once, and the INT 33h driver counts hides.
 
 ---
 
@@ -222,7 +203,7 @@ Detailed changelog: [archive/v3.2/CHANGELOG_v3.2.md](archive/v3.2/CHANGELOG_v3.2
 - FFT cursor crash when selected as the active trace (bounds checking).
 - CGA unit-display artifacts (uppercase HZ/KHZ/DB, etc.).
 - Claimed "Restored GPIB abort/reset cleanup from v2.9 (main.c:260-264)" — this fix
-  is **not present** in the code of v3.2 (or v2.9, v3.5, v3.6). See FINDINGS.md.
+  is **not present** in the code of v3.2 (or v2.9, v3.5, v3.6, v3.7). See FINDINGS.md.
 
 ---
 
