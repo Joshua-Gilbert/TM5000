@@ -5,7 +5,7 @@ the real machine (GRiDCase 1520, 286 + 287, TM5006A with DC5009 / DM5120 /
 DM5010 / FG5010 / PS5004 / PS5010, PRS10 rubidium reference) except where
 noted.
 
-## New: TM5000G — TM5000 on the GRIDGPIB driver
+## TM5000G: TM5000 on the GRIDGPIB driver
 
 - `gpib_gg.c` (GPIB back end v4.1) implements the unchanged `gpib.h` API on the
   GRIDGPIB resident driver (`driver/gridgpib/`, C interface `gridgpib.c/.h`).
@@ -13,14 +13,15 @@ noted.
   whole and never split across reads.
 - A small Driver488 text-command interpreter behind `ieee_write`/`ieee_read`
   (OUTPUT, ENTER, SPOLL, STATUS, ABORT, RESET, CLEAR, REMOTE, LOCAL, TRIGGER,
-  HELLO, TIME OUT; FILL/EOL/BREAK accepted) keeps the terminal and diagnostics
-  working.
+  HELLO, TIME OUT; FILL/EOL/BREAK accepted) so the terminal and diagnostics,
+  which speak Driver488 commands, still work.
 - Per-instrument read timeouts: DC5009/DC5010 12 s (long gates), DM5120 10 s
   (AUTOCAL pauses, seen with direct chip access too), DM5010 5 s, others 2 s.
   Waits end as soon as the reply arrives.
-- The 215 fixed waits after bus calls in `modules.c` / `module_funcs.c` are now
+- The 207 fixed waits after bus calls in `modules.c` / `module_funcs.c` are now
   `GPIB_PACE(ms)`: `delay(ms)` in the Driver488 build (unchanged behaviour),
-  nothing in the GRIDGPIB build (`-DGRIDGPIB`).
+  nothing in the GRIDGPIB build (`-DGRIDGPIB`), whose calls already return only
+  when the transaction is complete.
 - `makefile`: `all` builds both `tm5000.exe` (Driver488) and `tm5000g.exe`.
 
 ## Measurement
@@ -35,14 +36,14 @@ noted.
 - **Buffer full → averaging instead of stopping.** At 1024 samples the buffer is
   merged in pairs (mean of values and of times) and each later sample is the
   mean of 2, 4, 8 … readings, so the buffer always covers the whole run. The
-  monitor shows a reverse-video `AVG xN` light; the monitor counts `Readings`.
+  monitor shows a reverse-video `AVG xN` light and counts `Readings`.
   Previously recording stopped silently at 1024 samples.
 - **AUTO sample rate** (Sample Rate menu option 9): the first 3 passes are timed
   per instrument and the rate locks to the slowest cycle, rounded up to whole
   timer ticks.
 - **Monitor Time = measurement time** (excludes pauses; reset with C).
-- **DM5120 stored twice per pass** in the continuous monitor (once inside
-  `read_dm5120_enhanced`, once by the monitor) — fixed.
+- **DM5120 stored once per pass.** The continuous monitor stored each reading
+  twice (once inside `read_dm5120_enhanced`, once by the monitor).
 - Statistics use a two-pass standard deviation (no cancellation on large values).
 - Differentiate/integrate and export timestamps use the measured sample
   interval (including averaging) instead of the set rate.
@@ -119,15 +120,14 @@ noted.
   `gpib_driver_help()`).
 - **Exit**: GRIDGPIB build drops REN once (`gpib_release_bus()`) instead of GTL to
   every slot; FFT/math slots skipped; mouse driver reset.
-- Open: FFT trace cursor readout reported missing on the Grid (not yet diagnosed).
+- Open issue: FFT trace cursor readout reported missing on the Grid (not yet diagnosed).
 
 ## Mouse pointer after a key (Grid-OS 0.3.1, 2026-10-06)
 
 - Grid-OS 0.3.1 gives DOS programs the mouse (INT 33h), so TM5000G now finds it.
-  Its review found that the main, Measurement and File Operations menus called
-  `hide_mouse()` twice when left by a key (once before `getch()`, once after the
-  loop) but `show_mouse()` once. An INT 33h driver counts hides, as Microsoft's
-  does, so after the first keyboard choice the pointer never came back. The
-  inner `hide_mouse()` is gone; the one after the loop covers both the key and
-  the click. Tested in Grid-OS's emulator: after a key choice and back, the
-  pointer shows again.
+- **Pointer no longer stays hidden after a keyboard choice.** The main,
+  Measurement and File Operations menus called `hide_mouse()` twice when left by
+  a key (once before `getch()`, once after the loop) but `show_mouse()` once. An
+  INT 33h driver counts hides, as Microsoft's does, so the pointer never came
+  back. The inner `hide_mouse()` is gone; the one after the loop covers both the
+  key and the click. Tested in Grid-OS's emulator.

@@ -1,6 +1,5 @@
 /*
- * TM5000 GPIB Control System - Module Functions Header
- * Version 3.0
+ * TM5000 module function menus: per-instrument setup, comm tests, GPIB terminal.
  */
 
 #ifndef MODULE_FUNCS_H
@@ -19,7 +18,7 @@ void gpib_terminal_mode(void);
 void test_ps5004_comm(int address);
 void test_ps5010_comm(int address);
 
-/* DM5120 Enhanced Menu Functions */
+/* DM5120 menus */
 void dm5120_buffer_query_menu(int address);
 void dm5120_stoint_menu(int address, int slot);
 void dm5120_srq_menu(int address, int slot);

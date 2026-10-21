@@ -1,14 +1,5 @@
 /*
- * TM5000 GPIB Control System - User Interface
- * Version 3.5
- * Header file for user interface functions
- * 
- * Version History:
- * 3.0 - Initial extraction from TM5000L.c
- * 3.1 - Version update
- * 3.2 - Version update
- * 3.3 - Version update
- * 3.5 - Added menus for configuration profiles, enhanced export, file browser
+ * TM5000 user interface: menus, input helpers, and status display.
  */
 
 #ifndef UI_H
@@ -21,12 +12,12 @@ void main_menu(void);
 void file_operations_menu(void);
 void measurement_menu(void);
 
-/* Enhanced file operations menus (v3.5) */
+/* File operations menus */
 void configuration_profiles_menu(void);
 void enhanced_export_menu(void);
 void file_browser_menu(void);
 
-/* Enhanced math menus (v3.5) */
+/* Math menus */
 void dual_trace_operations_menu(void);
 void statistics_analysis_menu(void);
 void digital_filter_menu(void);
@@ -45,33 +36,33 @@ int get_numeric_input(char *prompt, float *value, float min, float max);
 int get_string_input(char *prompt, char *buffer, int max_length);
 int get_yes_no(char *prompt);
 
-/* Menu functions not defined elsewhere */
+/* Other menus (module_functions_menu is also in modules.h) */
 void module_functions_menu(void);
 void continuous_monitor_setup(void);
 void sample_rate_menu(void);
 void module_selection_menu(void);
 
-/* Data functions not defined elsewhere */
+/* Also declared in data.h */
 void save_settings(void);
 void load_settings(void);
 
-/* Analysis functions not defined elsewhere */
+/* Also declared in modules.h */
 void test_dm5120_comm_debug(int address);
 void sync_traces_with_modules(void);
 
-/* Graphics helper functions not in graphics.h */
+/* Also declared in graphics.h */
 void draw_line_aa(int x1, int y1, int x2, int y2, unsigned char color);
 void draw_gradient_rect(int x1, int y1, int x2, int y2, unsigned char color1, unsigned char color2);
 void draw_text(int x, int y, char *text, unsigned char color);
 
-/* UI utility functions (v3.5) */
+/* UI utility functions */
 void display_header(char *title);
 void display_footer(char *prompt);
 void display_menu_item(int number, char *text, int enabled);
 void display_progress(int current, int total);
 void clear_screen_area(int x1, int y1, int x2, int y2);
 
-/* Utility functions */
+/* Defined in main.c */
 void delay(unsigned int milliseconds);
 
 #endif /* UI_H */

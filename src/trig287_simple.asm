@@ -1,8 +1,6 @@
 ;
-; TM5000 GPIB Control System - Simplified 287 Math Functions
-; Target: 80287 Math Coprocessor (Compatible Instructions Only)
-; 
-; Provides basic math optimizations using only 287-compatible instructions
+; sqrt/mul/div on the 287. Despite the name there is no trig: FSIN/FCOS are
+; 387-only. Not called from C and dead-stripped by OPTION ELIMINATE.
 ;
 
 .MODEL SMALL
@@ -10,7 +8,7 @@
 .287
 
 .DATA
-; Mathematical constants
+; Unused
 pi_value        DQ      3.141592653589793
 two_pi_value    DQ      6.283185307179586
 temp_storage    DQ      ?
@@ -22,28 +20,25 @@ PUBLIC fast_mult_287_
 PUBLIC fast_div_287_
 
 ;-----------------------------------------------------------------------------
-; Fast square root using 287 FSQRT (available on 287)
-; double fast_sqrt_287_simple(double x);
+; double fast_sqrt_287_simple(double x);   x < 0 returns 0
 ;-----------------------------------------------------------------------------
 fast_sqrt_287_simple_ PROC NEAR
     push    bp
     mov     bp, sp
-    
-    fld     QWORD PTR [bp+4]    ; Load x
-    
-    ; Check if negative
-    ftst                        ; Test against zero
-    fstsw   ax
-    sahf
+
+    fld     QWORD PTR [bp+4]
+
+    ftst
+    fstsw   ax                  ; FSTSW AX is 287+, not on the 8087
+    sahf                        ; C0 -> CF, C3 -> ZF
     jae     sqrt_positive
-    
-    ; Handle negative - return 0
-    fstp    st(0)               ; Pop value
-    fldz                        ; Return 0
+
+    fstp    st(0)
+    fldz
     jmp     sqrt_done
-    
+
 sqrt_positive:
-    fsqrt                       ; Calculate square root (287 instruction)
+    fsqrt
     
 sqrt_done:
     pop     bp
@@ -51,48 +46,45 @@ sqrt_done:
 fast_sqrt_287_simple_ ENDP
 
 ;-----------------------------------------------------------------------------
-; Fast multiplication using 287
 ; double fast_mult_287(double a, double b);
 ;-----------------------------------------------------------------------------
 fast_mult_287_ PROC NEAR
     push    bp
     mov     bp, sp
-    
-    fld     QWORD PTR [bp+4]    ; Load a
-    fld     QWORD PTR [bp+12]   ; Load b
-    fmul                        ; Multiply (a * b)
+
+    fld     QWORD PTR [bp+4]    ; a
+    fld     QWORD PTR [bp+12]   ; b
+    fmul
     
     pop     bp
     ret
 fast_mult_287_ ENDP
 
 ;-----------------------------------------------------------------------------
-; Fast division using 287
 ; double fast_div_287(double a, double b);
+; b == 0 returns +inf (1/0, sign of a ignored); assumes zero-divide is masked.
 ;-----------------------------------------------------------------------------
 fast_div_287_ PROC NEAR
     push    bp
     mov     bp, sp
-    
-    fld     QWORD PTR [bp+4]    ; Load a
-    fld     QWORD PTR [bp+12]   ; Load b
-    
-    ; Check for division by zero
+
+    fld     QWORD PTR [bp+4]    ; a
+    fld     QWORD PTR [bp+12]   ; b
+
     ftst
     fstsw   ax
     sahf
     jne     div_ok
-    
-    ; Division by zero - return large value
-    fstp    st(0)               ; Pop b
-    fstp    st(0)               ; Pop a
+
+    fstp    st(0)               ; pop b
+    fstp    st(0)               ; pop a
     fld1
     fldz
-    fdiv                        ; 1/0 = infinity
+    fdiv
     jmp     div_done
-    
+
 div_ok:
-    fdiv                        ; Divide (a / b)
+    fdiv                        ; a / b
     
 div_done:
     pop     bp

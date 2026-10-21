@@ -1,29 +1,19 @@
 /*
- * TM5000 GPIB Control System - GPIB Communication Module
- * Version 4.1 - GRIDGPIB back end (Grid-OS) - builds TM5000G.EXE
- *
- * Same functions as v3.x (gpib.h is unchanged), but talks to the GRIDGPIB
- * resident driver instead of IOtech Driver488:
- *   - every call returns when the bus transaction is complete, so the fixed
- *     GPIB_PACE() waits that papered over Driver488's timing compile to
- *     nothing (modules.c / module_funcs.c built with -DGRIDGPIB);
- *   - replies are read whole and never split across reads (Driver488 raw
- *     reads filled the whole buffer and long replies desynchronised the
- *     next transaction);
- *   - the Driver488 text commands TM5000 still sends through ieee_write()
- *     (OUTPUT, ENTER, SPOLL, STATUS, ABORT, CLEAR, REMOTE, LOCAL, TRIGGER,
- *     HELLO, RESET, TIME OUT, FILL, EOL, BREAK) are understood by a small
- *     built-in interpreter, so the terminal mode and diagnostics keep
- *     working unchanged.
- * Requires GRIDGPIB.COM to be loaded (instead of DRVR488).
+ * GRIDGPIB back end (tm5000g.exe): the gpib.h interface over the GRIDGPIB resident
+ * driver, which must be loaded instead of DRVR488.
+ *   - Every call returns when the bus transaction completes, so the GPIB_PACE()
+ *     waits Driver488 needed compile to nothing (modules.c and module_funcs.c
+ *     are built with -DGRIDGPIB).
+ *   - Replies are read whole, never split across reads. Driver488 raw reads
+ *     filled the whole buffer, and long replies desynchronised the next transaction.
+ *   - Driver488 text commands still sent through ieee_write() go to a small
+ *     interpreter (d488_command), so terminal mode and diagnostics work unchanged.
  */
 
 #include "gpib.h"
 #include "gridgpib.h"
 
-/* ---------------------------------------------------------------------
- * Driver488 text-command interpreter (for ieee_write / ieee_read)
- * ------------------------------------------------------------------- */
+/* Driver488 text-command interpreter behind ieee_write() / ieee_read() */
 #define PEND_SIZE 1024
 static char pend[PEND_SIZE];        /* reply waiting for ieee_read()    */
 static int  pend_len = 0, pend_pos = 0;
@@ -52,7 +42,8 @@ static const char *skipsp(const char *p)
     return p;
 }
 
-/* keyword match, case-insensitive; returns pointer after it or NULL */
+/* Case-insensitive match of an uppercase keyword not followed by a letter;
+   returns the text after it, or NULL. */
 static const char *kw(const char *p, const char *word)
 {
     while (*word) {
@@ -70,7 +61,7 @@ static int getaddr(const char **pp)
     if (isdigit((unsigned char)*p)) {
         a = 0;
         while (isdigit((unsigned char)*p)) a = a * 10 + (*p++ - '0');
-        if (*p == '.') {              /* secondary address - not used here */
+        if (*p == '.') {              /* secondary address: skipped */
             p++;
             while (isdigit((unsigned char)*p)) p++;
         }
@@ -111,7 +102,7 @@ static int d488_command(const char *line)
         char buf[8];
         unsigned char st = 0;
         a = getaddr(&q);
-        if (a < 0) st = gg_srq() ? 64 : 0;      /* SRQ line status */
+        if (a < 0) st = gg_srq() ? 64 : 0;      /* bare SPOLL: SRQ seen since last check */
         else e = gg_spoll(a, &st);
         if (e == 0) {
             sprintf(buf, "%u\r\n", st);
@@ -159,9 +150,7 @@ static int d488_command(const char *line)
     return 0;
 }
 
-/* ---------------------------------------------------------------------
- * Driver488-compatible entry points
- * ------------------------------------------------------------------- */
+/* Driver488-compatible entry points */
 int ieee_write(const char *str)
 {
     if (d488_command(str) < 0) return -1;
@@ -214,9 +203,7 @@ int init_gpib_system(void)
     return 0;
 }
 
-/* ---------------------------------------------------------------------
- * TM5000 GPIB functions
- * ------------------------------------------------------------------- */
+/* TM5000 GPIB functions */
 int gpib_check_srq(int address)
 {
     unsigned char st;
@@ -227,9 +214,9 @@ int gpib_check_srq(int address)
 const char gpib_driver_name[] = "GRIDGPIB";
 const char gpib_driver_note[] = "";
 
-/* GRIDGPIB build: on exit drop REN - every device returns to local in one
-   register write, instead of addressing each slot (GTL), which waited on
-   command-byte timeouts when the bus was left in an odd state */
+/* On exit drop REN: every device goes local in one register write. Addressing
+   each slot with GTL waited out command-byte timeouts when the bus was left in
+   an odd state. */
 int gpib_release_bus(void)
 {
     gg_local(GG_ALL);
@@ -276,9 +263,9 @@ void gpib_write(int address, char *command)
     if (e < 0) note_error(e);
 }
 
-/* Per-instrument read timeout (per byte).  Instruments that are slow to
- * produce a reading get more time; everything else keeps the 2 s default.
- * The wait ends as soon as the reply arrives, so this costs nothing.     */
+/* Per-byte read timeout for instruments slow to produce a reading; 0 leaves
+ * the current timeout (driver default 2 s). The wait ends as soon as the
+ * reply arrives, so a long limit costs nothing. */
 static unsigned read_timeout_for(int address)
 {
     int i;
@@ -323,18 +310,18 @@ void gpib_remote(int address) { note_error(gg_remote(address)); }
 void gpib_local(int address)  { note_error(gg_local(address)); }
 void gpib_clear(int address)  { note_error(gg_clear(address)); }
 
-/* DM5120: v3.x serial-polled before every write (clears a pending SRQ);
- * kept - it costs about half a millisecond now.  The LF-termination
- * option only changed the Driver488 command line, never the bus data.  */
+/* Serial-poll before each DM5120 write to clear a pending SRQ, as gpib.c does;
+ * it costs about 0.5 ms here. lf_termination is ignored: it only changed the
+ * Driver488 command line, never the bus data. */
 void gpib_write_dm5120(int address, char *command)
 {
     gpib_check_srq(address);
     gpib_write(address, command);
 }
 
-/* The DM5120 (6.5 digits, AUTOCAL ON) now and then goes quiet for more
- * than 2 s - seen with direct chip access too, so it is the meter, not
- * the driver.  Its reads get a 10 s per-byte timeout.                  */
+/* The DM5120 (6.5 digits, AUTOCAL ON) sometimes goes quiet for over 2 s, with
+ * direct chip access too, so it is the meter, not the driver. Its reads get a
+ * 10 s per-byte timeout. */
 #define DM5120_TIMEOUT_MS 10000u
 
 int gpib_read_dm5120(int address, char *buffer, int maxlen)
@@ -365,8 +352,8 @@ void gpib_local_dm5120(int address)  { gpib_local(address); }
 
 void gpib_clear_dm5120(int address)
 {
-    gpib_clear(address);               /* v3.x sent ABORT (IFC) first;   */
-}                                      /* SDC alone clears the DM5120    */
+    gpib_clear(address);               /* SDC alone clears it; no ABORT (IFC) as in gpib.c */
+}
 
 void gpib_write_dm5010(int address, char *command)
 {
@@ -403,7 +390,7 @@ int command_has_response(const char *cmd)
     return 0;
 }
 
-/* Check GPIB error status and handle errors */
+/* Query STATUS into gpib_error/g_error_msg; any ERROR gets one ABORT to clear it. */
 void check_gpib_error(void)
 {
     char status[GPIB_BUFFER_SIZE];

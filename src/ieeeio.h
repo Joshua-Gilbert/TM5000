@@ -13,7 +13,7 @@ extern	int ieee,	/* File descriptor (handle) for IEEE routines */
 
 extern	void no_op(),	/* Function that does nothing at all */
 	     (*ieee_isr)();	/* Pointer to Personal488 Interrupt Service
-				   Routine (ISR).  Initally points to no_op */
+				   Routine (ISR).  Initially points to no_op */
 
 extern	int _ieeewt(),	/* IEEE Write and Read routines.  Use macro below. */
 	    _ieeerd(),

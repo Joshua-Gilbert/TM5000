@@ -1,7 +1,5 @@
 /*
- * TM5000 GPIB Control System - Graphics and Display
- * Version 3.3
- * Header file for graphics and display functions
+ * TM5000 graphics: CGA 320x200 drawing, text, graph display, and mouse.
  */
 
 #ifndef GRAPHICS_H
@@ -31,7 +29,7 @@ void draw_text(int x, int y, char *text, unsigned char color);
 void draw_text_small(int x, int y, char *text, unsigned char color);
 void draw_text_scaled(int x, int y, char *text, unsigned char color, int scale_x, int scale_y);
 
-/* Enhanced font support */
+/* Bitmap fonts (5x7 glyphs, indexed by get_font_index) */
 int get_font_index(char c);
 extern unsigned char enhanced_font[][7];
 extern unsigned char scientific_font[][7];

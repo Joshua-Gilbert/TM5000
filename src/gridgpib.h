@@ -1,9 +1,7 @@
 /*
- * gridgpib.h - C interface to the GRIDGPIB resident GPIB driver (Grid-OS)
- * OpenWatcom C, 16-bit DOS, any memory model.
- *
- * The driver (GRIDGPIB.COM) must be loaded first.  Every call blocks only
- * until the bus transaction is complete (or times out) - no sleeps needed.
+ * C interface to the GRIDGPIB resident driver; GRIDGPIB.COM must be loaded first.
+ * Every call blocks only until the bus transaction completes or times out, so
+ * callers need no fixed delays.
  */
 #ifndef GRIDGPIB_H
 #define GRIDGPIB_H

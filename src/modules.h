@@ -1,7 +1,5 @@
 /*
- * TM5000 GPIB Control System - Module Support
- * Version 3.3
- * Header file for instrument module functions
+ * TM5000 instrument modules: slot configuration and per-instrument drivers.
  */
 
 #ifndef MODULES_H
@@ -13,8 +11,7 @@
 void configure_modules(void);
 void auto_detect_modules(void);
 void validate_enabled_modules(void);
-int module_is_result(int slot);   /* computed-result trace (FFT/math)? - flag or derived from state */
-/* void module_selection_menu(void); - moved to ui.h */
+int module_is_result(int slot);   /* is_result set, or MOD_NONE slot that holds data */
 void display_trace_selection_menu(void);
 void sync_traces_with_modules(void);
 
@@ -29,31 +26,30 @@ void dm5120_set_trigger(int address, char *source, char *mode);
 void dm5120_set_digits(int address, int digits);
 void dm5120_set_null(int address, int enabled, float value);
 void dm5120_set_data_format(int address, int on);
-/* DM5120 timing calculation */
 int dm5120_calculate_delay(int slot, int operation_type, int sample_count);
 
 void dm5120_enable_buffering(int address, int slot, int buffer_size);
 
-/* DM5120 Buffer Query Functions */
+/* DM5120 buffer queries */
 float dm5120_get_buffer_average(int address);
 int dm5120_get_buffer_count(int address);
 float dm5120_get_buffer_min(int address);
 float dm5120_get_buffer_max(int address);
 void dm5120_set_buffer_size(int address, int size);
 int dm5120_query_buffer_size(int address);
-/* Enhanced DM5120 timing functions */
+/* DM5120 timing */
 float dm5120_get_measurement_rate(int slot, int trigger_mode);
 int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_count);
 int dm5120_validate_stoint_settings(int slot, int interval_ms);
 void dm5120_set_storage_interval(int address, int slot, int interval_ms);
 
-/* SRQ Event Handling Functions */
+/* DM5120 SRQ events */
 void dm5120_configure_srq_events(int address, int enable_full, int enable_half, int enable_rdy, int enable_opc);
 void dm5120_configure_srq_events_smart(int address, int buffer_size, int is_circular, int expected_time_ms);
 int dm5120_check_buffer_status(int address);
 int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, int max_samples);
 
-/* Timing Validation and Diagnostic Functions */
+/* DM5120 validation, diagnostics, and readout */
 int dm5120_validate_configuration(int slot);
 void dm5120_timing_diagnostics(int slot);
 int dm5120_query_storage_interval(int address);
@@ -67,7 +63,7 @@ void dm5120_clear_statistics(int slot);
 void test_dm5120_comm(int address);
 void test_dm5120_comm_debug(int address);
 
-/* DM5120 Asynchronous Buffer Functions */
+/* DM5120 async buffer fill */
 void dm5120_start_buffer_async(int address, int slot);
 int dm5120_check_buffer_async(int address, int slot);
 void dm5120_reset_buffer_async(int slot);
@@ -114,7 +110,6 @@ void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on);
 void ps5010_set_srq(int address, int on);
 void test_ps5010_comm(int address);
 
-/* Measurement functions */
 /* DC5009 functions */
 void init_dc5009_config(int slot);
 void configure_dc5009_advanced(int slot);
@@ -198,7 +193,7 @@ int test_fg5010_comm(int address);
 float fg5010_read_frequency(int address);
 int fg5010_read_output_status(int address);
 
-/* FG5010 Enhanced Programs (v3.5) */
+/* FG5010 programs */
 void fg5010_pulse_program_menu(int slot);
 
 /* Measurement functions */

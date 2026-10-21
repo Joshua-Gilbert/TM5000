@@ -1,35 +1,26 @@
 # TM5000 GPIB Control System
 
-## Professional Instrument Control for DOS Systems
-
-![Version](https://img.shields.io/badge/Version-3.7-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![Architecture](https://img.shields.io/badge/Architecture-Modular-orange) ![License](https://img.shields.io/badge/License-Research-lightgrey)
+![Version](https://img.shields.io/badge/Version-3.7-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![License](https://img.shields.io/badge/License-Research-lightgrey)
 
 <img width="1344" height="1691" alt="Gridcase 1520 with Tektronix TM5006A GPIB measurement system — FFT analysis of precision voltage reference" src="https://github.com/user-attachments/assets/7f70d8ae-4ebc-4a04-a70c-bf06f67a440f" />
 
-**Figure:** Gridcase 1520 running a Tektronix TM5006A modular measurement system via GPIB control — FFT spectral analysis of a precision voltage reference standard.
+**Figure:** Gridcase 1520 running a Tektronix TM5006A mainframe over GPIB — FFT of a precision voltage reference.
 
----
+TM5000 is a 16-bit MS-DOS program that controls Tektronix TM5000-series
+instruments over GPIB (IEEE-488) through a Personal488 (IOtech/CEC) interface,
+and acquires, analyzes, plots, prints, and exports their measurements. It was
+written for the Gridcase 1520 portable.
 
-### 🎯 Overview
+Two executables build from the same source: `tm5000.exe` uses IOtech's
+Driver488, and `tm5000g.exe` (TM5000G) uses GRIDGPIB, a 1.85 KB resident driver
+from the Grid-OS project in [`driver/gridgpib/`](driver/gridgpib) (serial poll
+0.5 ms vs 87 ms under Driver488).
 
-The TM5000 GPIB Control System is an instrument-control and data-acquisition
-platform for DOS systems. Originally developed for the Gridcase 1520 portable
-computer, it provides control of Tektronix TM5000-series instruments over a
-GPIB (IEEE-488) interface, using the Personal488 (IOtech/CEC) driver — or, as
-TM5000G, the small GRIDGPIB resident driver from the Grid-OS project.
+The repository keeps every version, from the earliest binaries to the current
+modular source. The buildable source is in [`src/`](src); prior versions are
+frozen under [`archive/`](archive).
 
-This repository preserves the **entire history** of the project — from the
-earliest binaries through the current modular source — which makes it a useful
-study in how a constrained 16-bit DOS application evolved. The current,
-buildable source is in [`src/`](src); every prior version is kept under
-[`archive/`](archive).
-
-> **v3.7 / TM5000G:** `src/` also builds `tm5000g.exe`, the same program on
-> the small, fast GRIDGPIB resident driver in [`driver/gridgpib/`](driver/gridgpib)
-> (1.85 KB resident; serial poll 0.5 ms vs 87 ms under Driver488). See the
-> [v3.7 changelog](docs/changelogs/CHANGELOG_v3.7.md).
-
-### 📁 Repository layout
+## Repository layout
 
 ```
 TM5000/
@@ -50,104 +41,108 @@ TM5000/
 └── LICENSE
 ```
 
-### 🔧 System Capabilities
+## Features
 
-#### Instrument Support
-- **DM5010** — 4½-digit multimeter with high-speed acquisition
-- **DM5120** — 6½-digit precision multimeter with advanced math functions
-- **PS5004** — single-channel precision power supply (0–20 V, 300 mA)
+### Instruments
+- **DM5010** — 4½-digit multimeter
+- **DM5120** — 6½-digit multimeter with built-in math and reading buffer
+- **PS5004** — single-channel power supply (0–20 V, 300 mA)
 - **PS5010** — dual-channel power supply with logic supply (0–32 V, 0.75 A)
-- **DC5009** — universal counter/timer with advanced triggering
-- **DC5010** — enhanced counter with rise/fall time measurement
+- **DC5009** — universal counter/timer
+- **DC5010** — counter/timer with rise/fall time measurement
 - **FG5010** — function generator
 
-#### Data Acquisition
-- Up to **10 instrument slots** simultaneously (single GPIB bus)
+### Acquisition
+- Up to **10 instrument slots** on one GPIB bus; modules can be auto-detected from a
+  bus scan
 - **1024 samples** per module, pooled up to **8192** when fewer modules are monitored;
-  a full buffer is averaged in pairs instead of stopping (v3.7)
-- Double-precision samples with per-sample measurement-time stamps (v3.7)
-- Sample intervals from 100 ms to 10 s, plus custom rates
-- Continuous real-time monitoring with live display
-- Dynamic buffer management within the 640 KB DOS budget
+  a full buffer is averaged in pairs instead of stopping
+- Double-precision samples, each with its measurement-time stamp
+- Sample intervals from 100 ms to 10 s, custom rates, or AUTO (as fast as the
+  slowest instrument allows)
+- Continuous monitoring with live display
+- Buffers allocated dynamically within the 640 KB DOS budget
 
-#### Mathematical Analysis
-- **FFT** (power-of-2, 64–1024 points) with Rectangular/Hamming/Hanning/Blackman windows
+### Analysis
+- **FFT** (power-of-2, 64–8192 points) with Rectangular/Hamming/Hanning/Blackman windows
 - Statistics: min, max, mean, standard deviation, RMS
 - Waveform math: differentiation, integration, smoothing/filtering, scaling, offset,
-  dual-trace operations, curve fitting, correlation, linear regression
+  dual-trace operations, curve fitting (linear/polynomial/exponential), correlation,
+  cross-correlation, phase/delay
 - Automatic peak detection
-- Optional 80287 coprocessor acceleration (pure-C FFT path)
+- The FFT runs in C on the 80287 when present; without one it falls back to a coarse
+  ≤64-point DFT
 
-#### Display & Visualization
+### Display
 - **CGA graphics** (320×200, 4-color) with engineering grid
 - Up to 10 simultaneous color-coded traces
-- Auto-scaling with manual override; zoom/pan; interactive cursor measurements
+- Auto-scaling with manual override; offset axis for small changes on large values;
+  zoom/pan; cursor measurements; X axis in samples or time
 - Automatic V/mV/µV unit scaling
 
-#### Data Management
+### Files and export
 - Native `.tm5` measurement files and `.cfg` configuration files
-- Export to CSV / text / PostScript (enhanced CSV with metadata in v3.5)
-- Configuration profiles — save/restore complete system setups (v3.5)
+- Export to CSV (with metadata) / text / PostScript
+- Configuration profiles — save/restore complete system setups
 
-#### Printing
+### Printing
 - PostScript output and Brother dot-matrix support over LPT1
 - Custom headers, automatic legends, IEEE scientific-notation formatting
 
-### 🏗️ Architecture
+## Architecture
 
-The v3.x series is a modular rewrite of the original monolithic v2.9 (which had
-outgrown the DOS 64 KB segment limit). The current source is ~21,650 lines
-across the files below. Full detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+v3.x is a modular rewrite of the monolithic v2.9, which had outgrown the DOS
+64 KB segment limit. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 | Area | Files |
 |------|-------|
 | **Core** | `main.c`, `tm5000.h` (the single shared header) |
-| **GPIB / driver** | `gpib.c/.h`, `ieeeio_w.c`, `ieeeio.h` (Personal488 glue) |
+| **GPIB / driver** | `gpib.c/.h`, `ieeeio_w.c`, `ieeeio.h` (Personal488 glue); `gpib_gg.c`, `gridgpib.c/.h` (GRIDGPIB back end, `tm5000g.exe`) |
 | **Instruments** | `modules.c/.h`, `module_funcs.c/.h` |
 | **Data & export** | `data.c/.h`, `export_enhanced.c`, `config_profiles.c/.h` |
 | **Math** | `math_functions.c/.h`, `math_enhanced.c` |
 | **UI / display / print** | `ui.c/.h`, `ui_math_menus.c`, `graphics.c/.h`, `print.c/.h` |
 | **Assembly (286/287/CGA)** | `cga_asm.asm`, `mem286.asm`, `fixed286.asm`, `trig287_simple.asm` |
 
-> The four assembly modules are assembled and linked but **not currently invoked**
-> from C (only `extern` declarations exist) — treat them as optimization
-> scaffolding. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and
-> [docs/FINDINGS.md](docs/FINDINGS.md).
+The four assembly modules are linked but nothing in C calls them (only `extern`
+declarations exist); they are optimization scaffolding. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-#### Version evolution
+## Versions
 
 | Version | Release | Key change |
 |---------|---------|-----------|
-| **v3.0** | June 2025 | Modular architecture; DOS segment compliance |
+| **v3.0** | June 2025 | Modular rewrite; every unit within the 64 KB segment limit |
 | **v3.1** | June 2025 | Full instrument support; 287 optimizations |
-| **v3.2** | June 2025 | Stability; FFT printing; configuration persistence |
-| **v3.3** | June 2025 | File-I/O reliability; symbol-conflict resolution |
+| **v3.2** | June 2025 | FFT printing; configuration persistence |
+| **v3.3** | June 2025 | File-I/O fixes; duplicate-symbol cleanup |
 | **v3.4** | July 2025 | 1024-sample buffers; ~22% memory reduction |
-| **v3.5** | July 2025 | Configuration profiles; enhanced export; enhanced math |
-| **v3.6** | June 2026 | Regression fixes (FFT, DM5120, stats, import) **+ new math** (polynomial/exponential curve fit, cross-correlation, phase/delay) **+ linker dead-strip** for a smaller binary |
-| **v3.7** | October 2026 | Grid-OS: **TM5000G** on the GRIDGPIB driver, double precision + time stamps, pooled/averaged buffers, auto-detect, AUTO rate, graph/print/FFT fixes |
+| **v3.5** | July 2025 | Configuration profiles; metadata export; dual-trace math |
+| **v3.6** | June 2026 | Regression fixes; polynomial/exponential fit, cross-correlation, phase/delay; linker dead-strip |
+| **v3.7** | October 2026 | TM5000G on the GRIDGPIB driver; double precision + time stamps; pooled/averaged buffers; auto-detect; AUTO rate; graph/print/FFT fixes |
 
-### 🔨 Requirements
+## Requirements
 
 **To run:** IBM PC-compatible 80286+ · 640 KB RAM (1 MB recommended) · CGA graphics ·
-MS-DOS 3.3+ · a Personal488-compatible (IOtech/CEC) GPIB interface with its DOS driver
-(`DRVR488.EXE`) — or, for `tm5000g.exe`, the GRIDGPIB resident driver
-(`driver/gridgpib/GRIDGPIB.COM`). An 80287 coprocessor and a Microsoft-compatible mouse are
-recommended. The original target was the **Gridcase 1520** portable.
+MS-DOS 3.3+ · a Personal488 (IOtech/CEC) GPIB interface with its DOS driver
+(`DRVR488.EXE`), or for `tm5000g.exe` the GRIDGPIB resident driver
+(`driver/gridgpib/GRIDGPIB.COM`). An 80287 coprocessor and a Microsoft-compatible
+mouse are recommended.
 
-**To build:** OpenWatcom C/C++ 1.9 (16-bit DOS target) plus its assembler.
+**To build:** OpenWatcom C/C++ (16-bit DOS target) plus its assembler.
 See [docs/BUILD.md](docs/BUILD.md).
 
-### 💾 Quick start
+## Quick start
 
 ```sh
 # Build (from the source tree)
 cd src
-wmake                     # produces tm5000.exe (~270 KB, dead-stripped)
+wmake                     # tm5000.exe + tm5000g.exe (~290 KB each); prebuilt copies are committed
+# WATCOM_BIN defaults to a WSL path; elsewhere: wmake WATCOM_BIN=C:/WATCOM/binnt
 
 # Run on DOS / DOSBox
-#   1. load the Personal488 driver (DRVR488.EXE) if using GPIB hardware
-#   2. TM5000.EXE
+#   1. if using GPIB hardware, load DRVR488.EXE (for TM5000) or GRIDGPIB.COM (for TM5000G)
+#   2. TM5000.EXE or TM5000G.EXE
 ```
 
 Basic flow inside the program:
@@ -158,52 +153,21 @@ Main Menu → Configure Modules → [select instrument] → [set parameters]
           → File / Export → [save .tm5 / .cfg / CSV / PostScript]
 ```
 
-### 🆕 New in v3.7
+## Status
 
-Built on the GRiDCase 1520 bench (TM5006A, DC5009, FG5010, PRS10). Details:
+v3.7 was built and tested on a GRiDCase 1520 bench (TM5006A, DC5009, FG5010,
+PRS10). Besides TM5000G (a resident driver 23× smaller than Driver488, ~4× less
+bus time on the test set), it keeps counter resolution with double-precision samples
+(a float held only 1 Hz at 10 MHz), keeps long runs whole by pooling and averaging
+buffers, and fixes printed durations and scales, the print report, buffer overruns,
+the monitor display, and DM5120 samples stored twice. Details:
 [docs/changelogs/CHANGELOG_v3.7.md](docs/changelogs/CHANGELOG_v3.7.md).
 
-- **TM5000G**: the same program on the GRIDGPIB resident driver — 23× smaller than
-  Driver488 and ~4× less bus time on the test set; `make` builds both executables.
-- **Precision**: samples in double (1 Hz at 10 MHz was the old float limit), per-sample
-  measurement-time stamps, offset graph axis for small changes on large values.
-- **Long runs**: buffers pooled up to 8192 samples; a full buffer averages in pairs
-  (AVG light) instead of stopping; AUTO sample rate; X axis in time.
-- **Convenience**: auto-detect modules from a bus scan, mouse cursor, P/O printing,
-  FFT up to 8192 points.
-- **Fixes**: printed durations and scales, print report, buffer overruns, monitor
-  display, DM5120 double-stored samples.
+v3.6 fixed the six v3.5 issues catalogued in [docs/FINDINGS.md](docs/FINDINGS.md)
+(computed traces wiped by continuous monitoring, FFT dB clipping, DM5120 buffer
+timeouts, Enhanced Statistics units, `.tm5` import desync, FFT truncation), each traced
+against the archived versions. What changed: [CHANGELOG.md](CHANGELOG.md).
 
-### ✅ Fixed in v3.6
+## License
 
-Every limitation catalogued for v3.5 has been traced to a specific cause (in several
-cases to a prior version where the behavior *worked*) and fixed in v3.6. Details:
-[docs/changelogs/CHANGELOG_v3.6.md](docs/changelogs/CHANGELOG_v3.6.md); full
-code-referenced analysis: [docs/FINDINGS.md](docs/FINDINGS.md).
-
-- Computed FFT/math result traces are no longer wiped on entering continuous monitoring.
-- FFT low-frequency dB content is no longer clipped (the documented-but-missing fix is now applied).
-- The FFT spectrum is no longer silently truncated at small output sizes (peak-preserving decimation).
-- DM5120 buffer fills no longer stall waiting on an external trigger (defaults to internal; `EXT` opt-in).
-- Enhanced Statistics labels dB/Hz/Ω/A traces correctly instead of as volts.
-- `.tm5` import resynchronises to the data marker, tolerating a sample-count mismatch.
-
-**Also new in v3.6:** polynomial & exponential curve fitting, cross-correlation, and
-phase/delay analysis (previously stubbed) are now implemented. The build enables
-OpenWatcom dead-code elimination (`-zm` + `OPTION ELIMINATE`), so `tm5000.exe` is
-~270 KB — smaller than v3.5 despite the added features. See [CHANGELOG.md](CHANGELOG.md).
-
-> Remaining lower-priority items (header/API-hygiene cleanups noted in the review pass)
-> are tracked for a future release.
-
-### 🔬 Educational use
-
-The TM5000 system is a useful platform for studying DOS/16-bit software
-architecture, GPIB/IEEE-488 instrument control, real-time systems under tight
-timing, and programming within hard memory constraints.
-
-### 📄 License
-
-Provided for research and educational purposes. See [LICENSE](LICENSE).
-
-**Copyright © 2025 — For Educational and Research Use**
+Provided for research and educational purposes. Copyright © 2025. See [LICENSE](LICENSE).
