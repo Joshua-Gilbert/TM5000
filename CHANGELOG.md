@@ -32,9 +32,13 @@ hardware.
   error instead of overflowing it. `gpib_write`, `gpib_write_dm5120` and
   `gpib_write_dm5010` return -1 when a command was refused or the write failed. A long
   driver status is cut to fit `g_error_msg`.
-- **Buffers:** `allocate_module_buffer` allocates before freeing, so a failed
-  allocation leaves the old data intact. FFT, derivative, integral, smoothing and
-  dual-trace results grow a too-small target buffer instead of writing past it.
+- **Buffers:** a failed `allocate_module_buffer` left the slot pointing at freed
+  memory, and the trace kept a pointer to it after `free_module_buffer`. A failed
+  allocation now leaves the slot empty, with its trace alias cleared. FFT,
+  derivative, integral, smoothing and dual-trace results grow a too-small target
+  buffer instead of writing past it, and stop with a message if memory runs out.
+- Print and report lines are written with `snprintf`, so an overload reading
+  (about 1e38) can't overrun the line buffers.
 - `ieeescnf` read 256 bytes into a 128-byte buffer.
 
 ### Fixed — files and profiles
@@ -48,6 +52,12 @@ hardware.
   acted on the wrong profile. The menu never opened `PROFILES.DAT` at all, because
   `init_profile_system` had no caller. It now tells I/O, not-a-profile-file and
   version-mismatch errors apart.
+- **Loaded and FFT traces** no longer claim a time axis. `.tm5` files carry no time
+  stamps, but loaded samples were stamped with the live measurement clock.
+- Profile save errors name the cause: bad name, GPIB address over 30, all slots in
+  use, or a write failure.
+- File names typed at the save/load prompts are limited to 75 characters, so the
+  extension still fits.
 - Export file sizes of 32 KB and up were truncated to 16 bits. In scientific
   notation, zero now follows the precision setting.
 - **PostScript:** the graph title and trace labels are escaped, so `(`, `)` or `\` in
@@ -81,7 +91,9 @@ hardware.
   enabled DM5120, which adds about 200 ms per command to a DM5120 at any other
   address.
 - **DM5010 advanced config** sent an uninitialized buffer instead of the command it
-  had just built: all nine `dm5010_set_*` setters. They now send the real command.
+  had just built: all nine `dm5010_set_*` setters. They now send the commands v2.9
+  sent (`CONF:`, `AVER:`, `CALC:`, `SYST:`); that command set has not been checked
+  against the DM5010 manual.
 - The DC5010 communication test ran the DC5009 test. The DC5009/DC5010 query
   functions now fill the caller's buffer.
 - The FPU probe began with a waiting `fclex`, which can hang a machine with no 287,
@@ -89,10 +101,16 @@ hardware.
 - The STOINT menu read a 16-bit int but accepted up to 999999, so 70000 wrapped to
   4464 and was sent. It now accepts 1–32767.
 - "Select all" left slots 8–9 unselected. ALT-toggle could index `g_traces[-1]`.
-  File-menu mouse clicks picked the item above the one clicked. Trace visibility
-  survives the monitor's buffer-pool resize.
+  File-menu mouse clicks picked the item above the one clicked. A trace is shown
+  the first time its slot has data; after that its visibility is the user's,
+  including across the monitor's buffer-pool resize and file loads.
 - Two fixed Driver488 settle waits in the custom-command and terminal screens now
   compile away in the GRIDGPIB build, like the other pacing waits.
+- The custom-command and terminal consoles looped forever at end of input (Ctrl-Z
+  or redirected stdin). They now return to the menu. The terminal also reports a
+  failed driver write instead of "No response received".
+- **Digital filters** start in steady state for the first sample, so a DC-offset trace
+  no longer opens with a step or spike.
 - Custom GPIB commands starting with `F` (e.g. `FUNCT DCV`) triggered a read and a
   SEQUENCE error. Only queries (`?`) read now.
 

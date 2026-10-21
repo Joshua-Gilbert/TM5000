@@ -59,30 +59,20 @@ static void reset_slot_state(tm5000_module *m) {
     m->src_measured = 0;
 }
 
-/* Replaces the slot's value and time-stamp buffers, capped at POOLED_MAX.
-   Returns 1 if the value buffer was allocated; without the time-stamp buffer
-   the slot just has no time axis. On failure the old buffers, size and
-   count are left untouched. */
+/* Replaces the slot's value and time-stamp buffers, capped at POOLED_MAX. The old
+   buffers go first to keep the peak low in 640 KB. Returns 1 if the value buffer
+   was allocated (without the time-stamp buffer the slot just has no time axis);
+   on failure the slot is left empty rather than holding stale data. */
 int allocate_module_buffer(int slot, unsigned int size) {
     tm5000_module *m;
-    double far *new_data;
     if (slot < 0 || slot >= 10) return 0;
     m = &g_system->modules[slot];
     if (size > POOLED_MAX) size = POOLED_MAX;
 
-    new_data = (double far *)alloc_samples(size, sizeof(double));
-    if (!new_data) return 0;
-
-    /* A trace may alias the old buffer; repoint it before the free */
-    if (m->module_data && g_traces[slot].data == m->module_data) {
-        g_traces[slot].data = new_data;
-        g_traces[slot].data_count = 0;
-    }
-    if (m->module_data) free_samples(m->module_data);
-    if (m->sample_t) free_samples(m->sample_t);   /* before the new one: lower peak */
-    m->module_data = new_data;
+    free_module_buffer(slot);
+    m->module_data = (double far *)alloc_samples(size, sizeof(double));
+    if (!m->module_data) return 0;
     m->sample_t = (unsigned long far *)alloc_samples(size, sizeof(unsigned long));
-    reset_slot_state(m);
     m->module_data_size = size;
     return 1;
 }
@@ -430,12 +420,7 @@ void load_data(void) {
                 if (count > 0) {
                     if (!allocate_module_buffer(slot, count + 100)) {
                         printf("Error: Failed to allocate memory for module %d (%u samples)\n", slot, count);
-                        if (g_system->modules[slot].module_data) {
-                            printf("Module %d keeps its existing %u-sample buffer\n",
-                                   slot, g_system->modules[slot].module_data_size);
-                        } else {
-                            printf("Module %d will remain configured but without data buffer\n", slot);
-                        }
+                        printf("Module %d will remain configured but without data buffer\n", slot);
                     } else {
                     }
                 } else {
@@ -548,7 +533,8 @@ void load_data(void) {
                 }
                 
                 printf("Loading %u samples for slot %d...\n", module_count, slot);
-                
+                g_mclock_valid = 0;  /* .tm5 files carry no time stamps */
+
                 for (j = 0; j < module_count; j++) {
                     if (fscanf(fp, "%lf", &value) == 1) {
                         /* NaN or +/-inf */

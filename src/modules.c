@@ -2119,24 +2119,19 @@ void display_trace_selection_menu(void) {
 
 void sync_traces_with_modules(void) {
     int i;
-    int user_enabled[10];  /* user's trace visibility, restored after rebinding */
-    /* Until a trace has been bound, show every trace with data; after that keep the
-       user's visibility, even when every buffer was just freed (pool resize, file load). */
-    static int bound_before = 0;
-    int first_sync = !bound_before;
+    /* A slot's trace is shown the first time it has data; after that the user's choice
+       is kept, even across a sync where its buffer was freed (pool resize, file load).
+       Removing the module forgets the slot. */
+    static unsigned char shown_before[10];
+    static unsigned char hidden_no_data[10];  /* enabled was forced 0, not the user's choice */
+    static unsigned char user_enabled[10];
 
-    if (!first_sync) {
-        for (i = 0; i < 10; i++) {
+    for (i = 0; i < 10; i++) {
+        if (shown_before[i] && !hidden_no_data[i]) {
             user_enabled[i] = g_traces[i].enabled;
         }
-    }
-    
-    for (i = 0; i < 10; i++) {
         g_traces[i].data = NULL;
         g_traces[i].data_count = 0;
-        if (first_sync) {
-            g_traces[i].enabled = 0;
-        }
     }
     
     for (i = 0; i < 10; i++) {
@@ -2170,17 +2165,20 @@ void sync_traces_with_modules(void) {
                     }
                 }
                 
-                if (first_sync) {
-                    g_traces[i].enabled = 1;
-                } else {
-                    g_traces[i].enabled = user_enabled[i];
+                if (!shown_before[i]) {
+                    shown_before[i] = 1;
+                    user_enabled[i] = 1;
                 }
-                bound_before = 1;
+                g_traces[i].enabled = user_enabled[i];
+                hidden_no_data[i] = 0;
             } else {
                 g_traces[i].enabled = 0;
+                hidden_no_data[i] = 1;
             }
         } else {
             g_traces[i].enabled = 0;
+            shown_before[i] = 0;
+            hidden_no_data[i] = 0;
         }
     }
 }

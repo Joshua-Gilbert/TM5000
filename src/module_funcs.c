@@ -7,6 +7,24 @@
 #include "module_funcs.h"
 #include "gpib.h"
 
+static void drain_console_line(void) {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF) ;
+}
+
+/* One console line without its newline: 1 = line, 0 = over-long (rest discarded,
+   so it can't go out as a command of its own), -1 = end of input. */
+static int read_console_line(char *buf, int size) {
+    if (fgets(buf, size, stdin) == NULL) return -1;
+    if (strchr(buf, '\n') == NULL && !feof(stdin)) {
+        drain_console_line();
+        printf("Command too long, not sent\n");
+        return 0;
+    }
+    buf[strcspn(buf, "\r\n")] = 0;
+    return 1;
+}
+
 /* Command loop to one configured slot; reads a reply when the command looks like a query. */
 void send_custom_command(void) {
     int slot, i;
@@ -71,25 +89,17 @@ void send_custom_command(void) {
     printf("  General: *IDN?, *RST, *CLS, ERROR?\n");
     printf("----------------------------------------\n\n");
     
-    while (getchar() != '\n');
-    
+    drain_console_line();
+
     while (!done) {
+        int got;
+
         printf("\nCommand> ");
         fflush(stdout);
-        
-        if (fgets(command, sizeof(command), stdin) == NULL) {
-            continue;
-        }
 
-        /* An over-long line: drop the rest, else it would go out as a command of its own. */
-        if (strchr(command, '\n') == NULL && !feof(stdin)) {
-            int c;
-            while ((c = getchar()) != '\n' && c != EOF) ;
-            printf("Command too long, not sent\n");
-            continue;
-        }
-
-        command[strcspn(command, "\r\n")] = 0;
+        got = read_console_line(command, sizeof(command));
+        if (got < 0) break;
+        if (got == 0) continue;
 
         if (strcasecmp(command, "EXIT") == 0) {
             done = 1;
@@ -957,25 +967,18 @@ void gpib_terminal_mode(void) {
         printf("Initial Status: %s\n", response);
     }
     
-    while (getchar() != '\n');
-    
+    drain_console_line();
+
     while (!done) {
+        int got;
+
         printf("\nGPIB> ");
         fflush(stdout);
-        
+
         /* 2 bytes kept for the CRLF appended below */
-        if (fgets(command, sizeof(command) - 2, stdin) == NULL) {
-            continue;
-        }
-
-        if (strchr(command, '\n') == NULL && !feof(stdin)) {
-            int c;
-            while ((c = getchar()) != '\n' && c != EOF) ;
-            printf("Command too long, not sent\n");
-            continue;
-        }
-
-        command[strcspn(command, "\r\n")] = 0;
+        got = read_console_line(command, sizeof(command) - 2);
+        if (got < 0) break;
+        if (got == 0) continue;
 
         if (strcasecmp(command, "EXIT") == 0) {
             done = 1;
@@ -988,8 +991,11 @@ void gpib_terminal_mode(void) {
 
         printf("Sending: '%s'\n", command);
         strcat(command, "\r\n");
-        ieee_write(command);
-        
+        if (ieee_write(command) < 0) {
+            printf("Command not sent (driver write failed)\n");
+            continue;
+        }
+
         GPIB_PACE(100);
         
         bytes_read = ieee_read(response, sizeof(response)-1);

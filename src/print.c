@@ -486,14 +486,14 @@ void print_graph_text(void) {
     {   /* enough decimals to tell the limits apart */
         int sd = decimal_places, s2 = step_dec(y_range / 10.0 * scale_factor);
         if (s2 > sd) sd = s2;
-        sprintf(label, "Y Scale: %.*f to %.*f %s\r\n", 
+        snprintf(label, sizeof(label), "Y Scale: %.*f to %.*f %s\r\n", 
                 sd, min_val * scale_factor, sd, max_val * scale_factor, unit_str);
     }
     print_string(label);
     if (off_mode) {
         char rs[24], *ru;
         ref_text(rs, dominant_trace, off_ref, y_range / 10.0, &ru);
-        sprintf(label, "Y axis: offset from %s %s, in %s\r\n", rs, ru, unit_str);
+        snprintf(label, sizeof(label), "Y axis: offset from %s %s, in %s\r\n", rs, ru, unit_str);
         print_string(label);
     }
     
@@ -513,7 +513,7 @@ void print_graph_text(void) {
         }
 
         /* 10 divisions, matching the graph's label on every 5th line */
-        sprintf(label, "Total Scale: %.*f %s (%.*f %s per division)\r\n", 
+        snprintf(label, sizeof(label), "Total Scale: %.*f %s (%.*f %s per division)\r\n", 
                 sig_dec(range_decimal_places, y_range * range_scale_factor),
                 y_range * range_scale_factor, range_unit_str,
                 sig_dec(range_decimal_places, y_range / 10.0 * range_scale_factor),
@@ -526,16 +526,16 @@ void print_graph_text(void) {
         double secs = run_seconds(max_samples, &meas, &avg);
         int sp = spectrum_slot(max_samples);
         if (sp >= 0)
-            sprintf(label, "Spectrum: %d bins of %.4g Hz, from %.1f s of measurement%s\r\n",
+            snprintf(label, sizeof(label), "Spectrum: %d bins of %.4g Hz, from %.1f s of measurement%s\r\n",
                     max_samples, (double)g_traces[sp].x_scale, secs, meas ? " (measured)" : "");
         else if (max_samples > 1 && secs > 0.0)
-            sprintf(label, "Sample interval: %.0f ms %s, Samples: %d\r\n",
+            snprintf(label, sizeof(label), "Sample interval: %.0f ms %s, Samples: %d\r\n",
                     secs * 1000.0 / (max_samples - 1), meas ? "(measured)" : "(set)", max_samples);
         else
-            sprintf(label, "Sample Rate: %d ms, Samples: %d\r\n", g_control_panel.sample_rate_ms, max_samples);
+            snprintf(label, sizeof(label), "Sample Rate: %d ms, Samples: %d\r\n", g_control_panel.sample_rate_ms, max_samples);
         print_string(label);
         if (avg > 1) {
-            sprintf(label, "Averaging: each sample is the mean of %d readings (buffer full)\r\n", avg);
+            snprintf(label, sizeof(label), "Averaging: each sample is the mean of %d readings (buffer full)\r\n", avg);
             print_string(label);
         }
     }
@@ -556,28 +556,28 @@ void print_graph_text(void) {
             }
         }
         
-        sprintf(label, "Measurement Duration: %.1f seconds%s\r\n", total_time_sec,
+        snprintf(label, sizeof(label), "Measurement Duration: %.1f seconds%s\r\n", total_time_sec,
                 meas_t ? " (measured)" : "");
         print_string(label);
-        sprintf(label, "Active Traces: %d\r\n", active_traces);
+        snprintf(label, sizeof(label), "Active Traces: %d\r\n", active_traces);
         print_string(label);
-        sprintf(label, "Data Points per Trace: %d\r\n", max_samples);
+        snprintf(label, sizeof(label), "Data Points per Trace: %d\r\n", max_samples);
         print_string(label);
         
         time(&current_time);
         time_info = localtime(&current_time);
-        sprintf(label, "Print Time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
+        snprintf(label, sizeof(label), "Print Time: %04d-%02d-%02d %02d:%02d:%02d\r\n",
                 time_info->tm_year + 1900, time_info->tm_mon + 1, time_info->tm_mday,
                 time_info->tm_hour, time_info->tm_min, time_info->tm_sec);
         print_string(label);
         
         if (g_graph_scale.sample_count > 0) {
-            sprintf(label, "Sample Range: %d to %d (showing %d samples)\r\n",
+            snprintf(label, sizeof(label), "Sample Range: %d to %d (showing %d samples)\r\n",
                     g_graph_scale.sample_start + 1,
                     g_graph_scale.sample_start + g_graph_scale.sample_count,
                     g_graph_scale.sample_count);
         } else {
-            sprintf(label, "Sample Range: All samples (1 to %d)\r\n", max_samples);
+            snprintf(label, sizeof(label), "Sample Range: All samples (1 to %d)\r\n", max_samples);
         }
         print_string(label);
         
@@ -592,7 +592,7 @@ void print_graph_text(void) {
             } else {
                 get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
             }
-            sprintf(label, "Units per div: %.*f %s, Auto Scale: %s\r\n",
+            snprintf(label, sizeof(label), "Units per div: %.*f %s, Auto Scale: %s\r\n",
                     sig_dec(per_div_decimal, per_div * per_div_scale),
                     per_div * per_div_scale, per_div_ps_unit,
                     g_graph_scale.auto_scale ? "ON" : "OFF");
@@ -601,7 +601,7 @@ void print_graph_text(void) {
     }
     print_string("\r\n");
     
-    sprintf(label, "Graph Resolution: %.2e %s per line\r\n\r\n", 
+    snprintf(label, sizeof(label), "Graph Resolution: %.2e %s per line\r\n\r\n", 
             (y_range * scale_factor) / (double)(graph_lines - 1), unit_str);
     print_string(label);
     
@@ -621,15 +621,15 @@ void print_graph_text(void) {
                 {
                     double dv = (line_value - off_ref) * scale_factor;
                     if (fabs(dv) < 1e-3 * y_range * scale_factor) dv = 0.0;  /* no "-0.0" */
-                    sprintf(label, "%+9.*f", lbl_dec, dv);
+                    snprintf(label, sizeof(label), "%+9.*f", lbl_dec, dv);
                 }
             } else if (decimal_places == 0) {
-                sprintf(label, "%7.0f", line_value * scale_factor);
+                snprintf(label, sizeof(label), "%7.0f", line_value * scale_factor);
             } else if (decimal_places >= 4) {
-                sprintf(label, "%*.*f", 7 + decimal_places, decimal_places, 
+                snprintf(label, sizeof(label), "%*.*f", 7 + decimal_places, decimal_places, 
                         line_value * scale_factor);
             } else {
-                sprintf(label, "%7.*f", decimal_places, line_value * scale_factor);
+                snprintf(label, sizeof(label), "%7.*f", decimal_places, line_value * scale_factor);
             }
             
             for (j = 0; j < (off_mode ? 11 : 7 + decimal_places) && j < 12 && label[j]; j++) {
@@ -720,21 +720,21 @@ void print_graph_text(void) {
             
             for (x = 1; x <= 6; x++) {
                 double freq_val = (max_freq * x) / (6.0 * freq_scale);
-                sprintf(label, "%9.1f", freq_val);
+                snprintf(label, sizeof(label), "%9.1f", freq_val);
                 print_string(label);
             }
             print_string("\r\n");
-            sprintf(label, "                              Frequency (%s)\r\n\r\n", freq_unit);
+            snprintf(label, sizeof(label), "                              Frequency (%s)\r\n\r\n", freq_unit);
             print_string(label);
         } else {
             for (x = 1; x <= 6; x++) {
                 char xl[16];
                 x_label(xl, max_samples, x, 6);
-                sprintf(label, "%10s", xl);
+                snprintf(label, sizeof(label), "%10s", xl);
                 print_string(label);
             }
             print_string("\r\n");
-            sprintf(label, "                              %s\r\n\r\n", x_title(max_samples));
+            snprintf(label, sizeof(label), "                              %s\r\n\r\n", x_title(max_samples));
             print_string(label);
         }
     }
@@ -767,7 +767,7 @@ void print_graph_text(void) {
             
             last_val = g_system->modules[i].last_reading;
             
-            sprintf(label, "  %c = Slot %d: %s (%d samples)\r\n", 
+            snprintf(label, sizeof(label), "  %c = Slot %d: %s (%d samples)\r\n", 
                     symbol, i, g_traces[i].label, g_traces[i].data_count);
             print_string(label);
             
@@ -793,7 +793,7 @@ void print_graph_text(void) {
                     min_dec = val_dec(min_dec, res * min_scale);
                     max_dec = val_dec(max_dec, res * max_scale);
                 }
-                sprintf(label, "      Last: %.*f %s, Min: %.*f %s, Max: %.*f %s\r\n",
+                snprintf(label, sizeof(label), "      Last: %.*f %s, Min: %.*f %s, Max: %.*f %s\r\n",
                         last_dec, last_val * last_scale, last_unit,
                         min_dec, min_trace * min_scale, min_unit,
                         max_dec, max_trace * max_scale, max_unit);
@@ -827,7 +827,7 @@ void print_graph_text(void) {
                         avg_dec = val_dec(avg_dec, res * avg_scale);
                         rms_dec = val_dec(rms_dec, res * rms_scale);
                     }
-                    sprintf(label, "      Average: %.*f %s, RMS: %.*f %s\r\n",
+                    snprintf(label, sizeof(label), "      Average: %.*f %s, RMS: %.*f %s\r\n",
                             avg_dec, avg_val * avg_scale, avg_unit,
                             rms_dec, rms_val * rms_scale, rms_unit);
                     print_string(label);
@@ -838,14 +838,14 @@ void print_graph_text(void) {
     
     print_string("\r\nGraph Settings:\r\n");
     print_string("---------------\r\n");
-    sprintf(label, "Zoom Factor: %.2f\r\n", g_graph_scale.zoom_factor);
+    snprintf(label, sizeof(label), "Zoom Factor: %.2f\r\n", g_graph_scale.zoom_factor);
     print_string(label);
-    sprintf(label, "Auto Scale: %s\r\n", g_graph_scale.auto_scale ? "ON" : "OFF");
+    snprintf(label, sizeof(label), "Auto Scale: %s\r\n", g_graph_scale.auto_scale ? "ON" : "OFF");
     print_string(label);
     
     if (g_system->modules[0].module_type == MOD_DM5120) {
         print_string("\r\nDM5120 Precision Info:\r\n");
-        sprintf(label, "Configured digits: %d\r\n", g_dm5120_config[0].digits);
+        snprintf(label, sizeof(label), "Configured digits: %d\r\n", g_dm5120_config[0].digits);
         print_string(label);
     }
     
@@ -1013,7 +1013,7 @@ void print_graph_postscript(void) {
     {   /* enough decimals to tell the limits apart */
         int sd = decimal_places, s2 = step_dec(y_range / 10.0 * scale_factor);
         if (s2 > sd) sd = s2;
-        sprintf(label, "(Scale: %.*f to %.*f ) show ", 
+        snprintf(label, sizeof(label), "(Scale: %.*f to %.*f ) show ", 
                 sd, min_val * scale_factor, sd, max_val * scale_factor);
     }
     print_string(label);
@@ -1022,7 +1022,7 @@ void print_graph_postscript(void) {
         print_string("/mu glyphshow\r\n");
         print_string("(V) show\r\n");
     } else {
-        sprintf(label, "(%s) show\r\n", unit_str);
+        snprintf(label, sizeof(label), "(%s) show\r\n", unit_str);
         print_string(label);
     }
     
@@ -1042,14 +1042,14 @@ void print_graph_postscript(void) {
             range_unit_str = range_postscript_unit;
         }
         
-        sprintf(label, "(Range: %.*f ) show ",
+        snprintf(label, sizeof(label), "(Range: %.*f ) show ",
                 sig_dec(range_decimal_places, y_range * range_scale_factor),
                 y_range * range_scale_factor);
         print_string(label);
         if (strcmp(range_unit_str, "uV") == 0) {
             print_string("( ) show /mu glyphshow (V, Interval: ) show ");
         } else {
-            sprintf(label, "(%s, Interval: ) show ", range_unit_str);
+            snprintf(label, sizeof(label), "(%s, Interval: ) show ", range_unit_str);
             print_string(label);
         }
     }
@@ -1058,16 +1058,16 @@ void print_graph_postscript(void) {
         double secs = run_seconds(max_samples, &meas, &avg);
         int sp = spectrum_slot(max_samples);
         if (sp >= 0)
-            sprintf(label, "(%.4g Hz/bin) show\r\n", (double)g_traces[sp].x_scale);
+            snprintf(label, sizeof(label), "(%.4g Hz/bin) show\r\n", (double)g_traces[sp].x_scale);
         else if (max_samples > 1 && secs > 0.0)
-            sprintf(label, "(%.0f ms%s%s) show\r\n", secs * 1000.0 / (max_samples - 1),
+            snprintf(label, sizeof(label), "(%.0f ms%s%s) show\r\n", secs * 1000.0 / (max_samples - 1),
                     meas ? " measured" : "", avg > 1 ? "" : "");
         else
-            sprintf(label, "(%d ms) show\r\n", g_control_panel.sample_rate_ms);
+            snprintf(label, sizeof(label), "(%d ms) show\r\n", g_control_panel.sample_rate_ms);
         print_string(label);
         if (avg > 1) {
             print_string("350 685 moveto\r\n");
-            sprintf(label, "(Averaging: each sample = mean of %d readings) show\r\n", avg);
+            snprintf(label, sizeof(label), "(Averaging: each sample = mean of %d readings) show\r\n", avg);
             print_string(label);
         }
     }
@@ -1099,10 +1099,10 @@ void print_graph_postscript(void) {
         
         print_string("72 655 moveto\r\n");
         if (actual_samples > 0) {
-            sprintf(label, "(Duration: %.1f sec, Active Traces: %d, Data Points: %d) show\r\n", 
+            snprintf(label, sizeof(label), "(Duration: %.1f sec, Active Traces: %d, Data Points: %d) show\r\n", 
                     total_time_sec, active_traces, actual_samples);
         } else {
-            sprintf(label, "(Duration: 0.00 sec, Active Traces: %d, Data Points: 0) show\r\n", 
+            snprintf(label, sizeof(label), "(Duration: 0.00 sec, Active Traces: %d, Data Points: 0) show\r\n", 
                     active_traces);
         }
         print_string(label);
@@ -1110,7 +1110,7 @@ void print_graph_postscript(void) {
         time(&current_time);
         time_info = localtime(&current_time);
         print_string("72 640 moveto\r\n");
-        sprintf(label, "(Print Time: %04d-%02d-%02d %02d:%02d:%02d) show\r\n",
+        snprintf(label, sizeof(label), "(Print Time: %04d-%02d-%02d %02d:%02d:%02d) show\r\n",
                 time_info->tm_year + 1900, time_info->tm_mon + 1, time_info->tm_mday,
                 time_info->tm_hour, time_info->tm_min, time_info->tm_sec);
         print_string(label);
@@ -1128,7 +1128,7 @@ void print_graph_postscript(void) {
                 } else {
                     get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
                 }
-                sprintf(label, "(Sample Range: %d to %d, Units/div: %.*f %s, Auto Scale: %s) show\r\n",
+                snprintf(label, sizeof(label), "(Sample Range: %d to %d, Units/div: %.*f %s, Auto Scale: %s) show\r\n",
                         g_graph_scale.sample_start + 1,
                         g_graph_scale.sample_start + g_graph_scale.sample_count,
                         sig_dec(per_div_decimal, per_div * per_div_scale),
@@ -1147,7 +1147,7 @@ void print_graph_postscript(void) {
                 } else {
                     get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
                 }
-                sprintf(label, "(Sample Range: All (1 to %d), Units/div: %.*f %s, Auto Scale: %s) show\r\n", 
+                snprintf(label, sizeof(label), "(Sample Range: All (1 to %d), Units/div: %.*f %s, Auto Scale: %s) show\r\n", 
                         actual_samples,
                         sig_dec(per_div_decimal, per_div * per_div_scale),
                         per_div * per_div_scale, per_div_ps_unit,
@@ -1159,13 +1159,13 @@ void print_graph_postscript(void) {
     
     print_string("1 setlinewidth\r\n");
     print_string("newpath\r\n");
-    sprintf(label, "%.1f %.1f moveto\r\n", graph_x, graph_y);
+    snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", graph_x, graph_y);
     print_string(label);
-    sprintf(label, "%.1f %.1f lineto\r\n", graph_x + graph_width, graph_y);
+    snprintf(label, sizeof(label), "%.1f %.1f lineto\r\n", graph_x + graph_width, graph_y);
     print_string(label);
-    sprintf(label, "%.1f %.1f lineto\r\n", graph_x + graph_width, graph_y + graph_height);
+    snprintf(label, sizeof(label), "%.1f %.1f lineto\r\n", graph_x + graph_width, graph_y + graph_height);
     print_string(label);
-    sprintf(label, "%.1f %.1f lineto\r\n", graph_x, graph_y + graph_height);
+    snprintf(label, sizeof(label), "%.1f %.1f lineto\r\n", graph_x, graph_y + graph_height);
     print_string(label);
     print_string("closepath stroke\r\n");
     
@@ -1174,14 +1174,14 @@ void print_graph_postscript(void) {
     
     for (i = 1; i < 10; i++) {
         y_pos = graph_y + (graph_height * i / 10);
-        sprintf(label, "newpath %.1f %.1f moveto %.1f %.1f lineto stroke\r\n",
+        snprintf(label, sizeof(label), "newpath %.1f %.1f moveto %.1f %.1f lineto stroke\r\n",
                 graph_x, y_pos, graph_x + graph_width, y_pos);
         print_string(label);
     }
     
     for (i = 1; i < 10; i++) {
         x_pos = graph_x + (graph_width * i / 10);
-        sprintf(label, "newpath %.1f %.1f moveto %.1f %.1f lineto stroke\r\n",
+        snprintf(label, sizeof(label), "newpath %.1f %.1f moveto %.1f %.1f lineto stroke\r\n",
                 x_pos, graph_y, x_pos, graph_y + graph_height);
         print_string(label);
     }
@@ -1195,16 +1195,16 @@ void print_graph_postscript(void) {
         y_pos = graph_y + (graph_height * i / 10);
         y_label_value = min_val + (y_range * i / 10);
         
-        sprintf(label, "%.1f %.1f moveto\r\n", graph_x - 45, y_pos - 3);
+        snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", graph_x - 45, y_pos - 3);
         print_string(label);
         if (off_mode) {
             double dv = (y_label_value - off_ref) * scale_factor;
             if (fabs(dv) < 1e-3 * y_range * scale_factor) dv = 0.0;  /* no "-0.0" */
-            sprintf(label, "(%+.*f) show\r\n", lbl_dec, dv);
+            snprintf(label, sizeof(label), "(%+.*f) show\r\n", lbl_dec, dv);
         } else if (decimal_places == 0) {
-            sprintf(label, "(%.0f) show\r\n", y_label_value * scale_factor);
+            snprintf(label, sizeof(label), "(%.0f) show\r\n", y_label_value * scale_factor);
         } else {
-            sprintf(label, "(%.*f) show\r\n", decimal_places, y_label_value * scale_factor);
+            snprintf(label, sizeof(label), "(%.*f) show\r\n", decimal_places, y_label_value * scale_factor);
         }
         print_string(label);
     }
@@ -1213,14 +1213,14 @@ void print_graph_postscript(void) {
         char rs[24], *ru;
         ref_text(rs, dominant_trace, off_ref, y_range / 10.0, &ru);
         print_string("/Times-Roman findfont 10 scalefont setfont\r\n");
-        sprintf(label, "%.1f %.1f moveto\r\n", graph_x, graph_y + graph_height + 6);
+        snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", graph_x, graph_y + graph_height + 6);
         print_string(label);
-        sprintf(label, "(Axis = offset from reference %s ) show ", rs);
+        snprintf(label, sizeof(label), "(Axis = offset from reference %s ) show ", rs);
         print_string(label);
         if (strcmp(ru, "uV") == 0) {
             print_string("/mu glyphshow (V) show\r\n");
         } else {
-            sprintf(label, "(%s) show\r\n", ru);
+            snprintf(label, sizeof(label), "(%s) show\r\n", ru);
             print_string(label);
         }
         print_string("/Times-Roman findfont 8 scalefont setfont\r\n");
@@ -1261,17 +1261,17 @@ void print_graph_postscript(void) {
                 freq_val = (max_freq * i) / (10.0 * freq_scale);
                 
                 if (i % 2 == 0) {  /* label every other tick */
-                    sprintf(label, "%.1f %.1f moveto\r\n", x_pos - 15, graph_y - 15);
+                    snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", x_pos - 15, graph_y - 15);
                     print_string(label);
-                    sprintf(label, "(%.1f) show\r\n", freq_val);
+                    snprintf(label, sizeof(label), "(%.1f) show\r\n", freq_val);
                     print_string(label);
                 }
             }
             
             print_string("/Times-Roman findfont 10 scalefont setfont\r\n");
-            sprintf(label, "%.1f %.1f moveto\r\n", graph_x + graph_width/2 - 30, graph_y - 30);
+            snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", graph_x + graph_width/2 - 30, graph_y - 30);
             print_string(label);
-            sprintf(label, "(Frequency [%s]) show\r\n", freq_unit);
+            snprintf(label, sizeof(label), "(Frequency [%s]) show\r\n", freq_unit);
             print_string(label);
         } else {
             for (i = 0; i <= 10; i++) {
@@ -1288,23 +1288,23 @@ void print_graph_postscript(void) {
                 if (i % 2 == 0) {  /* label every other tick */
                     char xl[16];
                     x_label(xl, max_samples, i, 10);
-                    sprintf(label, "%.1f %.1f moveto\r\n", x_pos - 10, graph_y - 15);
+                    snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", x_pos - 10, graph_y - 15);
                     print_string(label);
-                    sprintf(label, "(%s) show\r\n", xl);
+                    snprintf(label, sizeof(label), "(%s) show\r\n", xl);
                     print_string(label);
                 }
             }
             
             print_string("/Times-Roman findfont 10 scalefont setfont\r\n");
-            sprintf(label, "%.1f %.1f moveto\r\n", graph_x + graph_width/2 - 30, graph_y - 30);
+            snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", graph_x + graph_width/2 - 30, graph_y - 30);
             print_string(label);
-            sprintf(label, "(%s) show\r\n", x_title(max_samples));
+            snprintf(label, sizeof(label), "(%s) show\r\n", x_title(max_samples));
             print_string(label);
         }
     }
     
     print_string("gsave\r\n");
-    sprintf(label, "%.1f %.1f translate\r\n", graph_x - 60, graph_y + graph_height/2);
+    snprintf(label, sizeof(label), "%.1f %.1f translate\r\n", graph_x - 60, graph_y + graph_height/2);
     print_string(label);
     print_string("90 rotate\r\n");
     print_string("0 0 moveto\r\n");
@@ -1327,14 +1327,14 @@ void print_graph_postscript(void) {
             }
         }
         
-        sprintf(label, off_mode ? "(%s offset [) show " : "(%s [) show ", y_label);
+        snprintf(label, sizeof(label), off_mode ? "(%s offset [) show " : "(%s [) show ", y_label);
         print_string(label);
     }
     
     if (strcmp(unit_str, "uV") == 0) {
         print_string("/mu glyphshow (V]) show\r\n");
     } else {
-        sprintf(label, "(%s]) show\r\n", unit_str);
+        snprintf(label, sizeof(label), "(%s]) show\r\n", unit_str);
         print_string(label);
     }
     print_string("grestore\r\n");
@@ -1362,21 +1362,21 @@ void print_graph_postscript(void) {
             y_scale = graph_height / y_range;
             
             value = g_traces[i].data[0];
-            sprintf(label, "%.2f %.2f moveto\r\n",
+            snprintf(label, sizeof(label), "%.2f %.2f moveto\r\n",
                     graph_x,
                     graph_y + (value - min_val) * y_scale);
             print_string(label);
             
             for (j = 1; j < g_traces[i].data_count; j++) {
                 value = g_traces[i].data[j];
-                sprintf(label, "%.2f %.2f lineto\r\n",
+                snprintf(label, sizeof(label), "%.2f %.2f lineto\r\n",
                         graph_x + j * x_scale,
                         graph_y + (value - min_val) * y_scale);
                 print_string(label);
                 
                 if (j % 100 == 0) {
                     print_string("stroke\r\n");
-                    sprintf(label, "%.2f %.2f moveto\r\n",
+                    snprintf(label, sizeof(label), "%.2f %.2f moveto\r\n",
                             graph_x + j * x_scale,
                             graph_y + (value - min_val) * y_scale);
                     print_string(label);
@@ -1417,21 +1417,21 @@ void print_graph_postscript(void) {
             }
             
             print_string("2 setlinewidth\r\n");
-            sprintf(label, "newpath 90 %d moveto 110 %d lineto stroke\r\n", y + 3, y + 3);
+            snprintf(label, sizeof(label), "newpath 90 %d moveto 110 %d lineto stroke\r\n", y + 3, y + 3);
             print_string(label);
             print_string("1 setlinewidth\r\n");
             
             print_string("0 0 0 setrgbcolor\r\n");
-            sprintf(label, "120 %d moveto\r\n", y);
+            snprintf(label, sizeof(label), "120 %d moveto\r\n", y);
             print_string(label);
-            sprintf(label, "(Slot %d: ", i);
+            snprintf(label, sizeof(label), "(Slot %d: ", i);
             print_string(label);
             ps_print_escaped(g_traces[i].label);
-            sprintf(label, " - %d samples) show\r\n", g_traces[i].data_count);
+            snprintf(label, sizeof(label), " - %d samples) show\r\n", g_traces[i].data_count);
             print_string(label);
             
             print_string("/Times-Roman findfont 8 scalefont setfont\r\n");
-            sprintf(label, "120 %d moveto\r\n", y - 10);
+            snprintf(label, sizeof(label), "120 %d moveto\r\n", y - 10);
             print_string(label);
             {
                 char *min_unit, *max_unit, *range_unit;
@@ -1455,16 +1455,16 @@ void print_graph_postscript(void) {
                     max_dec = val_dec(max_dec, res * max_scale);
                 }
                 print_string("(  Min: ) show ");
-                sprintf(label, "(%.*f) show ", min_dec, min_trace * min_scale);
+                snprintf(label, sizeof(label), "(%.*f) show ", min_dec, min_trace * min_scale);
                 print_string(label);
                 if (strcmp(min_unit, "uV") == 0) {
                     print_string("( ) show /mu glyphshow (V, Max: ) show ");
                 } else {
-                    sprintf(label, "(%s, Max: ) show ", min_unit);
+                    snprintf(label, sizeof(label), "(%s, Max: ) show ", min_unit);
                     print_string(label);
                 }
                 
-                sprintf(label, "(%.*f) show ", max_dec, max_trace * max_scale);
+                snprintf(label, sizeof(label), "(%.*f) show ", max_dec, max_trace * max_scale);
                 print_string(label);
                 {
                     double avg_val = 0.0;
@@ -1486,16 +1486,16 @@ void print_graph_postscript(void) {
                     if (strcmp(max_unit, "uV") == 0) {
                         print_string("( ) show /mu glyphshow (V, Avg: ) show ");
                     } else {
-                        sprintf(label, "(%s, Avg: ) show ", max_unit);
+                        snprintf(label, sizeof(label), "(%s, Avg: ) show ", max_unit);
                         print_string(label);
                     }
                     
-                    sprintf(label, "(%.*f) show ", avg_dec, avg_val * avg_scale);
+                    snprintf(label, sizeof(label), "(%.*f) show ", avg_dec, avg_val * avg_scale);
                     print_string(label);
                     if (strcmp(avg_unit, "uV") == 0) {
                         print_string("( ) show /mu glyphshow (V) show\r\n");
                     } else {
-                        sprintf(label, "(%s) show\r\n", avg_unit);
+                        snprintf(label, sizeof(label), "(%s) show\r\n", avg_unit);
                         print_string(label);
                     }
                 }
@@ -1538,7 +1538,7 @@ void print_report(void) {
     
     print_string("TM5000 MEASUREMENT REPORT\r\n");
     print_string("========================\r\n");
-    sprintf(buffer, "Date: %02d/%02d/%04d  Time: %02d:%02d:%02d\r\n",
+    snprintf(buffer, sizeof(buffer), "Date: %02d/%02d/%04d  Time: %02d:%02d:%02d\r\n",
             t->tm_mon + 1, t->tm_mday, t->tm_year + 1900,
             t->tm_hour, t->tm_min, t->tm_sec);
     print_string(buffer);
@@ -1551,15 +1551,15 @@ void print_report(void) {
     } else {
         sprintf(rate_str, "%.1f seconds", g_control_panel.sample_rate_ms / 1000.0);
     }
-    sprintf(buffer, "Sample Rate: %s\r\n", rate_str);
+    snprintf(buffer, sizeof(buffer), "Sample Rate: %s\r\n", rate_str);
     print_string(buffer);
     
     if (g_control_panel.sample_rate_ms > 0) {
         samples_per_second = 1000.0 / g_control_panel.sample_rate_ms;
         if (samples_per_second >= 1.0) {
-            sprintf(buffer, "Frequency: %.2f samples/second\r\n", samples_per_second);
+            snprintf(buffer, sizeof(buffer), "Frequency: %.2f samples/second\r\n", samples_per_second);
         } else {
-            sprintf(buffer, "Frequency: %.2f samples/minute\r\n", samples_per_second * 60);
+            snprintf(buffer, sizeof(buffer), "Frequency: %.2f samples/minute\r\n", samples_per_second * 60);
         }
         print_string(buffer);
     }
@@ -1567,7 +1567,7 @@ void print_report(void) {
     if (g_control_panel.use_custom) {
         print_string("Rate Type: Custom\r\n");
     } else {
-        sprintf(buffer, "Rate Type: Preset #%d (%s)\r\n", 
+        snprintf(buffer, sizeof(buffer), "Rate Type: Preset #%d (%s)\r\n", 
                 g_control_panel.selected_rate + 1, 
                 (char far *)sample_rate_labels[g_control_panel.selected_rate]);
         print_string(buffer);
@@ -1589,7 +1589,7 @@ void print_report(void) {
                 case MOD_FG5010: type_name = "FG5010"; break;
             }
             
-            sprintf(buffer, "Slot %d: %s, GPIB %d, Last: %.6f\r\n",
+            snprintf(buffer, sizeof(buffer), "Slot %d: %s, GPIB %d, Last: %.6f\r\n",
                     i, type_name,
                     g_system->modules[i].gpib_address,
                     g_system->modules[i].last_reading);
@@ -1613,10 +1613,10 @@ void print_report(void) {
             if (val > max) max = val;
             sum += val;
         }
-        sprintf(buffer, "Slot %d: %u samples", i, m->module_data_count);
+        snprintf(buffer, sizeof(buffer), "Slot %d: %u samples", i, m->module_data_count);
         print_string(buffer);
         if (m->avg_shift) {
-            sprintf(buffer, " (each the mean of %u readings)", 1u << m->avg_shift);
+            snprintf(buffer, sizeof(buffer), " (each the mean of %u readings)", 1u << m->avg_shift);
             print_string(buffer);
         }
         print_string("\r\n");
@@ -1624,13 +1624,13 @@ void print_report(void) {
         if (t < 0 && m->is_result && m->src_seconds > 0.0f)
             t = (long)(m->src_seconds * 1000.0f);      /* FFT: source measurement */
         if (t >= 0) {
-            if (t < 60000L) sprintf(buffer, "  Duration: %.1f seconds (measured)\r\n", t / 1000.0);
-            else            sprintf(buffer, "  Duration: %.1f minutes (measured)\r\n", t / 60000.0);
+            if (t < 60000L) snprintf(buffer, sizeof(buffer), "  Duration: %.1f seconds (measured)\r\n", t / 1000.0);
+            else            snprintf(buffer, sizeof(buffer), "  Duration: %.1f minutes (measured)\r\n", t / 60000.0);
             print_string(buffer);
         }
-        sprintf(buffer, "  Minimum: %.10g\r\n", min);  print_string(buffer);
-        sprintf(buffer, "  Maximum: %.10g\r\n", max);  print_string(buffer);
-        sprintf(buffer, "  Average: %.10g\r\n", sum / m->module_data_count);  print_string(buffer);
+        snprintf(buffer, sizeof(buffer), "  Minimum: %.10g\r\n", min);  print_string(buffer);
+        snprintf(buffer, sizeof(buffer), "  Maximum: %.10g\r\n", max);  print_string(buffer);
+        snprintf(buffer, sizeof(buffer), "  Average: %.10g\r\n", sum / m->module_data_count);  print_string(buffer);
     }
     
     lpt_send_byte(0x0C);

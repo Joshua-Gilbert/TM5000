@@ -408,6 +408,16 @@ void file_operations_menu(void) {
     }
 }
 
+static char *profile_save_error(int code) {
+    switch (code) {
+        case PROFILE_ERROR_INVALID_NAME: return "Profile not saved: invalid name";
+        case PROFILE_ERROR_INVALID_ADDR: return "Profile not saved: a slot has a GPIB address over 30";
+        case PROFILE_ERROR_FULL:         return "Profile not saved: all profile slots are in use";
+        case PROFILE_ERROR_FILE_IO:      return "Profile not saved: cannot write PROFILES.DAT";
+        default:                         return "Failed to save profile";
+    }
+}
+
 void configuration_profiles_menu(void) {
     int choice;
     int done = 0;
@@ -481,10 +491,11 @@ void configuration_profiles_menu(void) {
                     printf("Description (optional): ");
                     get_string_input("", profile_desc, PROFILE_DESC_LENGTH - 1);
                     
-                    if (save_config_profile(profile_name, profile_desc) == PROFILE_SUCCESS) {
+                    result = save_config_profile(profile_name, profile_desc);
+                    if (result == PROFILE_SUCCESS) {
                         display_success("Profile saved successfully");
                     } else {
-                        display_error("Failed to save profile");
+                        display_error(profile_save_error(result));
                     }
                 }
                 break;
@@ -527,10 +538,11 @@ void configuration_profiles_menu(void) {
                     printf("Description: ");
                     get_string_input("", profile_desc, PROFILE_DESC_LENGTH - 1);
                     
-                    if (save_config_profile(profile_name, profile_desc) == PROFILE_SUCCESS) {
+                    result = save_config_profile(profile_name, profile_desc);
+                    if (result == PROFILE_SUCCESS) {
                         display_success("New profile created");
                     } else {
-                        display_error("Failed to create profile");
+                        display_error(profile_save_error(result));
                     }
                 }
                 break;

@@ -399,7 +399,22 @@ int apply_iir_filter(double *data, int count, double *coefficients, int order) {
         if (y_history) free(y_history);
         return MATH_ERROR_MEMORY;
     }
-    
+
+    /* Start in steady state for data[0] (DC gain = sum(b) / sum(a)), not from zero,
+       so a DC-offset trace doesn't open with a step or spike. */
+    {
+        double num = 0.0, den = 0.0, y0 = 0.0;
+        for (j = 0; j <= order; j++) {
+            num += coefficients[j];
+            den += coefficients[order + 1 + j];
+        }
+        if (fabs(den) > 1e-12) y0 = data[0] * num / den;
+        for (j = 0; j <= order; j++) {
+            x_history[j] = data[0];
+            y_history[j] = y0;
+        }
+    }
+
     for (i = 0; i < count; i++) {
         for (j = order; j > 0; j--) {
             x_history[j] = x_history[j - 1];

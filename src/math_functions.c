@@ -663,6 +663,7 @@ void execute_fft_with_config(void) {
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "FFT Result");
     g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
+    g_system->modules[target_slot].time_ok = 0;  /* a spectrum has no sample time axis */
 
     /* Duration of the source capture, for printouts: measured from its time
        stamps when available, else (n-1)/sample_rate */
