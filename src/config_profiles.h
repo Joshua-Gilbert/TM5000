@@ -50,7 +50,9 @@ typedef struct {
 } config_profile;
 #pragma pack()
 
-/* On-disk file header */
+/* On-disk file header, followed by MAX_CONFIG_PROFILES config_profile slots. A
+ * delete zeroes its slot in place, leaving a hole. profile_count is informational
+ * (one past the highest slot ever written, never lowered); listing scans every slot. */
 #pragma pack(1)
 typedef struct {
     unsigned char reserved[20];

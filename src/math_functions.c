@@ -39,6 +39,16 @@ void kahan_add(kahan_accumulator *acc, double value) {
     acc->sum = t;
 }
 
+/* Gives a result slot room for count samples. A big-enough buffer is kept: an in-place
+   operation is still reading it. Returns 1 on success, 0 if out of memory. */
+int ensure_result_buffer(int slot, unsigned int count) {
+    if (g_system->modules[slot].module_data &&
+        g_system->modules[slot].module_data_size >= count) {
+        return 1;
+    }
+    return allocate_module_buffer(slot, count);
+}
+
 /* Cosine with explicit reduction to [0, 2*PI) and quadrant folding before libm sin/cos. */
 double cos_287_safe(double x) {
     const double PI = 3.14159265358979323846;
@@ -353,7 +363,13 @@ void execute_fft_with_config(void) {
             pow2++;
         }
     }
-    
+
+    /* No 287: the DFT transforms only the first dft_size samples, so window just those */
+    dft_size = N > 64 ? 64 : N;
+    if (!g_has_287 && actual_input_size > dft_size) {
+        actual_input_size = dft_size;
+    }
+
     printf("\nConfiguration: %d input -> %d FFT -> %d output points\n", 
            actual_input_size, N, g_fft_config.output_points);
     
@@ -512,9 +528,7 @@ void execute_fft_with_config(void) {
     } else {
         /* No 287: coarse DFT, at most 64 points */
         printf("Software mode (this may take a while)...\n");
-        
-        dft_size = N > 64 ? 64 : N;
-        
+
         for (k = 0; k < dft_size/2; k++) {
             sum_real = 0.0;
             sum_imag = 0.0;
@@ -549,8 +563,8 @@ void execute_fft_with_config(void) {
         int b, b0, b1;
         float m;
 
-        /* FINDINGS #6: map the full 0..Nyquist span onto op bins, each taking the peak
-           of its source group so narrow lines survive; x axis scaled to match. */
+        /* Map the full 0..Nyquist span onto op bins, each taking the peak of its
+           source group so narrow lines survive; x axis scaled to match. */
         out_bin_hz = (op > 0) ? (freq_resolution * (float)half / (float)op) : freq_resolution;
 
         for (i = 0; i < op; i++) {
@@ -568,7 +582,7 @@ void execute_fft_with_config(void) {
 
             switch(g_fft_config.output_format) {
                 case 0: /* dB Magnitude */
-                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude bins still display (FINDINGS #2) */
+                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude bins still display */
                         magnitude[i] = 20.0 * log10(mag_linear);
                     } else {
                         magnitude[i] = -240.0;  /* = 20*log10(1e-12) */
@@ -630,19 +644,16 @@ void execute_fft_with_config(void) {
         printf("\nStoring FFT in slot %d...\n", target_slot);
     }
 
-    /* A reused slot's buffer may be smaller than output_points (source data is already copied out) */
-    if (!g_system->modules[target_slot].module_data ||
-        g_system->modules[target_slot].module_data_size < (unsigned int)g_fft_config.output_points) {
-        if (!allocate_module_buffer(target_slot, g_fft_config.output_points)) {
-            printf("\nInsufficient memory for FFT result!\n");
-            _ffree(real_data);
-            _ffree(imag_data);
-            _ffree(magnitude);
-            _ffree(window_data);
-            printf("Press any key...");
-            getch();
-            return;
-        }
+    /* The source samples are already copied out, so the target may be reallocated */
+    if (!ensure_result_buffer(target_slot, g_fft_config.output_points)) {
+        printf("\nInsufficient memory for FFT result!\n");
+        _ffree(real_data);
+        _ffree(imag_data);
+        _ffree(magnitude);
+        _ffree(window_data);
+        printf("Press any key...");
+        getch();
+        return;
     }
 
     /* is_result marks a computed trace (fresh slot or overwritten source) so
@@ -743,7 +754,8 @@ void perform_differentiation(void) {
     int count;
     float dt;
     float scale_factor;
-    
+    float prev, cur;
+
     clrscr();
     printf("\n\nDifferentiation (dV/dt)\n");
     printf("=======================\n\n");
@@ -782,38 +794,38 @@ void perform_differentiation(void) {
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
     }
+
+    if (!ensure_result_buffer(target_slot, count)) {
+        printf("\nInsufficient memory for result!\n");
+        printf("Press any key...");
+        getch();
+        return;
+    }
+    result_data = g_system->modules[target_slot].module_data;
+
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "Derivative");
     g_system->modules[target_slot].gpib_address = 0;
-    
-    /* Grow a reused slot's buffer; never true when target_slot == slot */
-    if (!g_system->modules[target_slot].module_data ||
-        g_system->modules[target_slot].module_data_size < (unsigned int)count) {
-        if (!allocate_module_buffer(target_slot, count)) {
-            g_system->modules[target_slot].enabled = 0;
-            printf("\nInsufficient memory for result!\n");
-            printf("Press any key...");
-            getch();
-            return;
-        }
-    }
-    result_data = g_system->modules[target_slot].module_data;
-    
+
     if (g_has_287) {
-        /* Central difference, one-sided at the ends */
+        /* Central difference, one-sided at the ends. result_data aliases source_data
+           when overwriting, so source_data[i-1] comes from prev. */
         scale_factor = 1.0 / dt;
-        
-        result_data[0] = (source_data[1] - source_data[0]) * scale_factor;
-        
+
+        prev = source_data[0];
+        result_data[0] = (source_data[1] - prev) * scale_factor;
+
         for (i = 1; i < count - 1; i++) {
-            result_data[i] = (source_data[i+1] - source_data[i-1]) * 0.5 * scale_factor;
+            cur = source_data[i];
+            result_data[i] = (source_data[i+1] - prev) * 0.5 * scale_factor;
+            prev = cur;
         }
-        
-        result_data[count-1] = (source_data[count-1] - source_data[count-2]) * scale_factor;
+
+        result_data[count-1] = (source_data[count-1] - prev) * scale_factor;
     } else {
-        /* No 287: forward difference */
+        /* No 287: forward difference (reads i and i+1 before writing i) */
         for (i = 0; i < count - 1; i++) {
             result_data[i] = (source_data[i+1] - source_data[i]) / dt;
         }
@@ -851,6 +863,7 @@ void perform_integration(void) {
     int count;
     float dt;
     float sum;
+    float prev, cur;
     kahan_accumulator acc;
     
     clrscr();
@@ -891,26 +904,25 @@ void perform_integration(void) {
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
     }
+
+    if (!ensure_result_buffer(target_slot, count)) {
+        printf("\nInsufficient memory for result!\n");
+        printf("Press any key...");
+        getch();
+        return;
+    }
+    result_data = g_system->modules[target_slot].module_data;
+
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "Integral");
     g_system->modules[target_slot].gpib_address = 0;
-    
-    /* Grow a reused slot's buffer; never true when target_slot == slot */
-    if (!g_system->modules[target_slot].module_data ||
-        g_system->modules[target_slot].module_data_size < (unsigned int)count) {
-        if (!allocate_module_buffer(target_slot, count)) {
-            g_system->modules[target_slot].enabled = 0;
-            printf("\nInsufficient memory for result!\n");
-            printf("Press any key...");
-            getch();
-            return;
-        }
-    }
-    result_data = g_system->modules[target_slot].module_data;
-    
-    /* Running integral, Kahan-summed; trapezoidal with a 287, rectangle rule without */
+
+    /* Running integral, Kahan-summed; trapezoidal with a 287, rectangle rule without.
+       result_data aliases source_data when overwriting, so the trapezoid takes
+       source_data[i-1] from prev. */
+    prev = source_data[0];
     result_data[0] = 0.0;
 
     kahan_init(&acc);
@@ -919,8 +931,9 @@ void perform_integration(void) {
 
     if (g_has_287) {
         for (i = 1; i < count; i++) {
-            double trapezoid_area = (double)(source_data[i] + source_data[i-1]) * 0.5 * dt;
-            kahan_add(&acc, trapezoid_area);
+            cur = source_data[i];
+            kahan_add(&acc, (double)(cur + prev) * 0.5 * dt);
+            prev = cur;
             result_data[i] = (float)acc.sum;
         }
     } else {
@@ -934,7 +947,7 @@ void perform_integration(void) {
     g_system->modules[target_slot].module_data_count = count;
 
     if (target_slot >= 0 && target_slot < 10) {
-        g_traces[target_slot].unit_type = UNIT_VOLTAGE;  /* no V*s unit; plotted on the V axis */
+        g_traces[target_slot].unit_type = UNIT_VOLTAGE;  /* values are V*s; no such unit, so the axis reads V */
         g_traces[target_slot].x_scale = 1.0;  /* x axis in samples */
         g_traces[target_slot].x_offset = 0.0;
         strcpy(g_traces[target_slot].label, "Integral");
@@ -947,11 +960,13 @@ void perform_integration(void) {
     }
 
     printf("\nIntegration complete!\n");
-    printf("Units changed from V to V*s\n");
+    printf("Result is in V*s (the graph axis is labelled V)\n");
     printf("Final value: %.6f V*s\n", result_data[count-1]);
     printf("\nPress any key to continue...");
     getch();
 }
+
+#define SMOOTH_HISTORY 11   /* > largest half window (21 / 2) */
 
 /* Smoothing - Moving average filter */
 void perform_smoothing(void) {
@@ -965,6 +980,7 @@ void perform_smoothing(void) {
     int half_window;
     int start, end;
     kahan_accumulator window_acc;
+    float history[SMOOTH_HISTORY];
     
     clrscr();
     printf("\n\nSmoothing Filter\n");
@@ -1012,41 +1028,41 @@ void perform_smoothing(void) {
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
     }
+
+    if (!ensure_result_buffer(target_slot, count)) {
+        printf("\nInsufficient memory for result!\n");
+        printf("Press any key...");
+        getch();
+        return;
+    }
+    result_data = g_system->modules[target_slot].module_data;
+
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "Smoothed");
     g_system->modules[target_slot].gpib_address = 0;
-    
-    /* Grow a reused slot's buffer; never true when target_slot == slot */
-    if (!g_system->modules[target_slot].module_data ||
-        g_system->modules[target_slot].module_data_size < (unsigned int)count) {
-        if (!allocate_module_buffer(target_slot, count)) {
-            g_system->modules[target_slot].enabled = 0;
-            printf("\nInsufficient memory for result!\n");
-            printf("Press any key...");
-            getch();
-            return;
-        }
-    }
-    result_data = g_system->modules[target_slot].module_data;
-    
-    /* Centered moving average, Kahan-summed; the window shrinks at the edges */
+
+    /* Centered moving average, Kahan-summed; the window shrinks at the edges.
+       result_data aliases source_data when overwriting, so samples before i come
+       from history[], which holds the last SMOOTH_HISTORY source values. */
     init_fpu_precision();
-    
+
     for (i = 0; i < count; i++) {
         kahan_init(&window_acc);
-        
+
         start = i - half_window;
         end = i + half_window;
-        
+
         if (start < 0) start = 0;
         if (end >= count) end = count - 1;
-        
+
         for (j = start; j <= end; j++) {
-            kahan_add(&window_acc, (double)source_data[j]);
+            kahan_add(&window_acc, (double)(j < i ? history[j % SMOOTH_HISTORY]
+                                                  : source_data[j]));
         }
-        
+
+        history[i % SMOOTH_HISTORY] = source_data[i];
         result_data[i] = (float)(window_acc.sum / (end - start + 1));
     }
     

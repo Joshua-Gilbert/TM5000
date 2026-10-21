@@ -417,10 +417,18 @@ void configuration_profiles_menu(void) {
     int profile_count;
     char profile_name[PROFILE_NAME_LENGTH];
     char profile_desc[PROFILE_DESC_LENGTH];
-    int i, selected_index;
-    
-    if (init_profile_system() != PROFILE_SUCCESS) {
-        printf("\nCannot open or create PROFILES.DAT (disk full, read-only, or wrong version).\n");
+    int i, selected_index, result;
+
+    result = init_profile_system();
+    if (result != PROFILE_SUCCESS) {
+        if (result == PROFILE_ERROR_CORRUPT) {
+            printf("\nPROFILES.DAT in the current directory is not a TM5000 profile file.\n");
+        } else if (result == PROFILE_ERROR_VERSION) {
+            printf("\nPROFILES.DAT in the current directory was written by a different\n");
+            printf("TM5000 version. The file was left unchanged.\n");
+        } else {
+            printf("\nCannot create or read PROFILES.DAT in the current directory.\n");
+        }
         printf("Press any key to continue...");
         getch();
         return;

@@ -103,6 +103,7 @@ void generate_window_function(float far *window, int N, int window_type);
 void perform_differentiation(void);  
 void perform_integration(void);
 void perform_smoothing(void);
+int ensure_result_buffer(int slot, unsigned int count);
 
 /* Dual-trace and analysis math (math_enhanced.c) */
 
@@ -124,10 +125,7 @@ int get_statistics_result(int trace_slot, statistics_result *result);
 
 /* Distribution and peak statistics */
 int calculate_histogram(float *data, int count, float *bins, int bin_count);
-int calculate_median(float *data, int count, float *result);
-int calculate_mode(float *data, int count, float *result);
 int find_peaks(float *data, int count, int *peak_indices, int max_peaks);
-int calculate_frequency_analysis(float *data, int count, float sample_rate, float *result);
 
 /* Digital Filtering */
 int apply_digital_filter(int trace_slot, filter_config *config);

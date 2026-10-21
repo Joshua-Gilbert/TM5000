@@ -57,12 +57,8 @@ int perform_dual_trace_operation(int trace1, int trace2, int operation, int resu
         return MATH_ERROR_NO_DATA;
     }
     
-    /* Reuse a big-enough buffer: reallocating would free a source when result_slot is one */
-    if (!g_system->modules[result_slot].module_data ||
-        g_system->modules[result_slot].module_data_size < (unsigned int)count) {
-        if (allocate_module_buffer(result_slot, count) == 0) {
-            return MATH_ERROR_MEMORY;
-        }
+    if (!ensure_result_buffer(result_slot, count)) {
+        return MATH_ERROR_MEMORY;
     }
 
     for (i = 0; i < count; i++) {
@@ -213,7 +209,7 @@ int calculate_basic_statistics(float *data, int count, statistics_result *result
 /* Filters the trace in place. */
 int apply_digital_filter(int trace_slot, filter_config *config) {
     float *data;
-    int count, pass;
+    int count, pass, section_order;
     float coefficients[16];
 
     if (validate_trace_data(trace_slot) != MATH_SUCCESS || !config) {
@@ -227,37 +223,35 @@ int apply_digital_filter(int trace_slot, filter_config *config) {
     data = g_system->modules[trace_slot].module_data;
     count = g_system->modules[trace_slot].module_data_count;
     
-    /* The designers emit one section (1st order, bandpass 2nd); order N cascades N passes. */
     switch (config->filter_type) {
         case FILTER_TYPE_LOWPASS:
             design_lowpass_filter(config, coefficients);
-            for (pass = 0; pass < config->order; pass++) {
-                apply_iir_filter(data, count, coefficients, 1);
-            }
+            section_order = 1;
             break;
 
         case FILTER_TYPE_HIGHPASS:
             design_highpass_filter(config, coefficients);
-            for (pass = 0; pass < config->order; pass++) {
-                apply_iir_filter(data, count, coefficients, 1);
-            }
+            section_order = 1;
             break;
 
         case FILTER_TYPE_BANDPASS:
             design_bandpass_filter(config, coefficients);
-            for (pass = 0; pass < config->order; pass++) {
-                apply_iir_filter(data, count, coefficients, 2);
-            }
+            section_order = 2;
             break;
-            
+
         case FILTER_TYPE_MOVING_AVG:
             apply_moving_average_filter(data, count, config->window_size);
-            break;
-            
+            return MATH_SUCCESS;
+
         default:
             return MATH_ERROR_INVALID_CONFIG;
     }
-    
+
+    /* Filter order N: N cascaded passes of the designed section */
+    for (pass = 0; pass < config->order; pass++) {
+        apply_iir_filter(data, count, coefficients, section_order);
+    }
+
     return MATH_SUCCESS;
 }
 
@@ -385,14 +379,14 @@ int apply_moving_average_filter(float *data, int count, int window_size) {
     return MATH_SUCCESS;
 }
 
-/* In-place IIR, coefficients laid out [b0..b_order, a0..a_order] with a0 = 1:
-   y[n] = sum b_j*x[n-j] - sum(j>=1) a_j*y[n-j]. */
+/* In-place IIR section of order 1 or 2 (what the designers emit), coefficients laid out
+   [b0..b_order, a0..a_order] with a0 = 1: y[n] = sum b_j*x[n-j] - sum(j>=1) a_j*y[n-j]. */
 int apply_iir_filter(float *data, int count, float *coefficients, int order) {
     int i, j;
     float *x_history, *y_history;
     float output;
 
-    if (!data || !coefficients || count <= 0 || order <= 0 || order > 8) {
+    if (!data || !coefficients || count <= 0 || order <= 0 || order > 2) {
         return MATH_ERROR_INVALID_PARAMS;
     }
 
@@ -420,9 +414,7 @@ int apply_iir_filter(float *data, int count, float *coefficients, int order) {
 
         /* Feedback (denominator); y_history[0] is y[n-1] here */
         for (j = 1; j <= order; j++) {
-            if (order + 1 + j < 16) {
-                output -= coefficients[order + 1 + j] * y_history[j - 1];
-            }
+            output -= coefficients[order + 1 + j] * y_history[j - 1];
         }
         
         for (j = order; j > 0; j--) {
@@ -1070,96 +1062,6 @@ int calculate_histogram(float *data, int count, float *bins, int bin_count) {
         if (bin_index < 0) bin_index = 0;
         bins[bin_index] += 1.0;
     }
-    
-    return MATH_SUCCESS;
-}
 
-/* Median into *result; count <= 1024 (4 KB stack copy, bubble sort). */
-int calculate_median(float *data, int count, float *result) {
-    float sorted_data[1024];
-    int i, j;
-    float median;
-
-    if (!data || !result || count <= 0) {
-        return MATH_ERROR_INVALID_PARAMS;
-    }
-    
-    if (count > 1024) {
-        return MATH_ERROR_BUFFER_OVERFLOW;
-    }
-    
-    memcpy(sorted_data, data, count * sizeof(float));
-
-    for (i = 0; i < count - 1; i++) {
-        for (j = 0; j < count - 1 - i; j++) {
-            if (sorted_data[j] > sorted_data[j + 1]) {
-                float temp = sorted_data[j];
-                sorted_data[j] = sorted_data[j + 1];
-                sorted_data[j + 1] = temp;
-            }
-        }
-    }
-    
-    if (count % 2 == 0) {
-        median = (sorted_data[count/2 - 1] + sorted_data[count/2]) / 2.0;
-    } else {
-        median = sorted_data[count/2];
-    }
-    
-    *result = median;
-    return MATH_SUCCESS;
-}
-
-/* Most frequent value (within tolerance) into *result. O(count^2). */
-int calculate_mode(float *data, int count, float *result) {
-    float tolerance = 0.001;
-    float mode_value;
-    int max_frequency = 1;
-    int i, j, frequency;
-
-    if (!data || !result || count <= 0) {
-        return MATH_ERROR_INVALID_PARAMS;
-    }
-
-    mode_value = data[0];
-
-    for (i = 0; i < count; i++) {
-        frequency = 1;
-        for (j = i + 1; j < count; j++) {
-            if (fabs(data[i] - data[j]) <= tolerance) {
-                frequency++;
-            }
-        }
-        
-        if (frequency > max_frequency) {
-            max_frequency = frequency;
-            mode_value = data[i];
-        }
-    }
-    
-    *result = mode_value;
-    return MATH_SUCCESS;
-}
-
-/* Dominant frequency (Hz) estimated from zero crossings, into *result. */
-int calculate_frequency_analysis(float *data, int count, float sample_rate, float *result) {
-    int zero_crossings = 0;
-    int i;
-    float dominant_freq;
-
-    if (!data || !result || count <= 0 || sample_rate <= 0.0) {
-        return MATH_ERROR_INVALID_PARAMS;
-    }
-    
-    for (i = 1; i < count; i++) {
-        if ((data[i-1] >= 0.0 && data[i] < 0.0) || 
-            (data[i-1] < 0.0 && data[i] >= 0.0)) {
-            zero_crossings++;
-        }
-    }
-    
-    dominant_freq = (zero_crossings * sample_rate) / (2.0 * count);  /* two crossings per cycle */
-
-    *result = dominant_freq;
     return MATH_SUCCESS;
 }

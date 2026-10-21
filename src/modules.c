@@ -1576,7 +1576,19 @@ int test_fg5010_comm(int address) {
     printf("FG5010 Function Generator Communication Test\n");
     printf("==========================================\n\n");
     printf("Testing FG5010 at GPIB address %d...\n\n", address);
-    
+
+    /* The test overwrites the user's settings and drives whatever is wired to the output */
+    printf("WARNING: This test sets 1 kHz, 2 Vpp, SINE and briefly turns\n");
+    printf("the output ON. Current generator settings will be lost.\n");
+    printf("Continue? (y/n): ");
+    if (toupper(getch()) != 'Y') {
+        printf("\n\nFG5010 test not run.\n");
+        printf("Press any key to continue...");
+        getch();
+        return 1;
+    }
+    printf("\n\n");
+
     printf("Test 1: Device Identification... ");
     gpib_write(address, "*IDN?");
     delay(100);
@@ -1635,14 +1647,13 @@ int test_fg5010_comm(int address) {
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
-        
-        /* Turn output back off for safety */
-        gpib_write(address, "OUTP OFF");
-        delay(50);
     } else {
         printf("FAILED\n");
         test_passed = 0;
     }
+    /* A failed read does not mean OUTP ON was ignored */
+    gpib_write(address, "OUTP OFF");
+    delay(50);
     
     printf("\nTest 6: Error Status Check... ");
     gpib_write(address, "SYST:ERR?");
@@ -2564,11 +2575,12 @@ void dm5120_enable_buffering(int address, int slot, int buffer_size) {
     delay(dm5120_calculate_delay(slot, 1, buffer_size));
 }
 
-/* Check a STOINT interval against the manual's listed conflicts; 0 = OK, <0 = conflict code */
+/* Check a STOINT interval against the manual's listed conflicts; 0 = OK, -1..-5 = conflict
+   code, DM5120_STOINT_BAD_SLOT = slot out of range */
 int dm5120_validate_stoint_settings(int slot, int interval_ms) {
     dm5120_config *cfg;
 
-    if (slot < 0 || slot >= 10) return 0;
+    if (slot < 0 || slot >= 10) return DM5120_STOINT_BAD_SLOT;
     cfg = &g_dm5120_config[slot];
 
     /* STOINT 1-14 ms conflicts with: */
@@ -2607,11 +2619,16 @@ static int dm5120_stoint_from_rate(dm5120_config *cfg) {
     return 100;
 }
 
-/* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict */
+/* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict, sends nothing
+   for a bad slot */
 void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
     int validation_result;
-    
+
     validation_result = dm5120_validate_stoint_settings(slot, interval_ms);
+    if (validation_result == DM5120_STOINT_BAD_SLOT) {
+        printf("ERROR: invalid DM5120 slot %d, STOINT not sent\n", slot);
+        return;
+    }
     if (validation_result != 0) {
         printf("WARNING: STOINT %d conflicts with current settings (code %d)\n", 
                interval_ms, validation_result);
@@ -2946,6 +2963,7 @@ int dm5120_validate_configuration(int slot) {
                 case -3: printf("  - CIRCULAR buffer conflicts with fast intervals\n"); break;
                 case -4: printf("  - High resolution (5-6 digits) conflicts\n"); break;
                 case -5: printf("  - Very fast intervals conflict with resolution\n"); break;
+                case DM5120_STOINT_BAD_SLOT: printf("  - Invalid slot\n"); break;
             }
             warnings++;
         }

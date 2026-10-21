@@ -50,13 +50,19 @@ static char *ps_unit_of(char *u) {
     return u;  /* power spectrum (^2/Hz) and anything else: pass through */
 }
 
-/* Send a string for use inside a PostScript ( ) literal, escaping ( ) and \. */
+/* Send a string for use inside a PostScript ( ) literal, escaping ( ) and \.
+   Control bytes become spaces so a stray CR/LF cannot break the line. */
 static void ps_print_escaped(char *str) {
+    unsigned char c;
+
     while (*str) {
-        if (*str == '(' || *str == ')' || *str == '\\') {
+        c = (unsigned char)*str++;
+        if (c < 0x20) {
+            c = ' ';
+        } else if (c == '(' || c == ')' || c == '\\') {
             lpt_send_byte('\\');
         }
-        lpt_send_byte(*str++);
+        lpt_send_byte(c);
     }
 }
 
@@ -1115,8 +1121,10 @@ void print_graph_postscript(void) {
             print_string("0 0 0 setrgbcolor\r\n");
             sprintf(label, "120 %d moveto\r\n", y);
             print_string(label);
-            sprintf(label, "(Slot %d: %s - %d samples) show\r\n", 
-                    i, g_traces[i].label, g_traces[i].data_count);
+            sprintf(label, "(Slot %d: ", i);
+            print_string(label);
+            ps_print_escaped(g_traces[i].label);
+            sprintf(label, " - %d samples) show\r\n", g_traces[i].data_count);
             print_string(label);
             
             print_string("/Times-Roman findfont 8 scalefont setfont\r\n");

@@ -1093,7 +1093,7 @@ static const char* __far stoint_opts[] = {
 static const int __far test_intervals[] = {1, 5, 10, 20, 100};
 static const char* __far conflict_msgs[] = {
     "OHMS conflict", "AUTO range conflict", "CIRCULAR conflict", 
-    "5-6 digit conflict", "4+ digit conflict"
+    "5-6 digit conflict", "4+ digit conflict", "invalid slot"
 };
 
 void dm5120_stoint_menu(int address, int slot) {

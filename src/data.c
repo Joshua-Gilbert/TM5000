@@ -6,22 +6,32 @@
 #include "data.h"
 #include "modules.h"
 
-/* Replaces any existing buffer for the slot. Returns 1 on success. */
+/* Replaces any existing buffer for the slot (count reset to 0). Returns 1 on
+   success; on failure the old buffer, size and count are left untouched. */
 int allocate_module_buffer(int slot, unsigned int size) {
+    float far *old_data;
+    float far *new_data;
+
     if (slot < 0 || slot >= 10) return 0;
+    if (size > 0xFFFFu / sizeof(float)) return 0;  /* byte count must fit 16-bit size_t */
 
-    if (g_system->modules[slot].module_data) {
-        _ffree(g_system->modules[slot].module_data);
+    new_data = (float far *)_fmalloc(size * sizeof(float));
+    if (!new_data) return 0;
+
+    old_data = g_system->modules[slot].module_data;
+    g_system->modules[slot].module_data = new_data;
+    g_system->modules[slot].module_data_size = size;
+    g_system->modules[slot].module_data_count = 0;
+
+    /* A trace may alias the old buffer; repoint it before the free */
+    if (old_data && g_traces[slot].data == old_data) {
+        g_traces[slot].data = new_data;
+        g_traces[slot].data_count = 0;
     }
-
-    g_system->modules[slot].module_data = (float far *)_fmalloc(size * sizeof(float));
-    if (g_system->modules[slot].module_data) {
-        g_system->modules[slot].module_data_size = size;
-        g_system->modules[slot].module_data_count = 0;
-        return 1;
+    if (old_data) {
+        _ffree(old_data);
     }
-
-    return 0;
+    return 1;
 }
 
 void free_module_buffer(int slot) {
@@ -217,7 +227,7 @@ void load_data(void) {
     for (i = 0; i < 10; i++) {
         clear_module_data(i);
         g_system->modules[i].enabled = 0;
-        g_system->modules[i].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
+        g_system->modules[i].is_result = 0;  /* stale computed-trace flag */
     }
     g_system->data_count = 0;
 
@@ -283,7 +293,12 @@ void load_data(void) {
                 if (count > 0) {
                     if (!allocate_module_buffer(slot, count + 100)) {
                         printf("Error: Failed to allocate memory for module %d (%u samples)\n", slot, count);
-                        printf("Module %d will remain configured but without data buffer\n", slot);
+                        if (g_system->modules[slot].module_data) {
+                            printf("Module %d keeps its existing %u-sample buffer\n",
+                                   slot, g_system->modules[slot].module_data_size);
+                        } else {
+                            printf("Module %d will remain configured but without data buffer\n", slot);
+                        }
                     }
                 }
             }
@@ -300,7 +315,9 @@ void load_data(void) {
 
             /* Parse module config header like "Slot2:DM5120" */
             if (sscanf(line, "Slot%d:%*s", &slot) == 1) {
-                if (slot >= 0 && slot < 10 && g_system->modules[slot].enabled) {
+                if (slot < 0 || slot >= 10 || !g_system->modules[slot].enabled) {
+                    printf("Warning: Config block for slot %d skipped (no such module)\n", slot);
+                } else {
                     switch (g_system->modules[slot].module_type) {
                         case MOD_DM5120:
                             have_line = load_dm5120_config(fp, slot, line, sizeof(line));
@@ -322,6 +339,10 @@ void load_data(void) {
                             break;
                         case MOD_FG5010:
                             have_line = load_fg5010_config(fp, slot, line, sizeof(line));
+                            break;
+                        default:
+                            printf("Warning: Config block for slot %d skipped (module type %d)\n",
+                                   slot, g_system->modules[slot].module_type);
                             break;
                     }
                 }
@@ -348,14 +369,14 @@ void load_data(void) {
     }
     
     /* Scan forward to the "ModuleData:" marker: the fscanf above leaves the stream
-       mid-line, and a wrong global count would otherwise desync every slot. (FINDINGS #5) */
+       mid-line, and a wrong global count would otherwise desync every slot. */
     {
         int found_marker = 0;
         while (fgets(line, sizeof(line), fp)) {
             if (strncmp(line, "ModuleData", 10) == 0) { found_marker = 1; break; }
         }
         if (!found_marker) {
-            /* Truncated/corrupt file: warn rather than claim success. (review #8) */
+            /* Truncated/corrupt file: warn rather than claim success. */
             printf("Warning: 'ModuleData' section not found - per-module data not loaded\n");
         }
     }
@@ -616,7 +637,7 @@ void load_settings(void) {
             /* Only modules listed in the file stay enabled */
             for (slot = 0; slot < 10; slot++) {
                 g_system->modules[slot].enabled = 0;
-                g_system->modules[slot].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
+                g_system->modules[slot].is_result = 0;  /* stale computed-trace flag */
             }
 
 

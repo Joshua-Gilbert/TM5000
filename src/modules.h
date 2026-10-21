@@ -39,6 +39,7 @@ int dm5120_query_buffer_size(int address);
 /* DM5120 timing */
 float dm5120_get_measurement_rate(int slot, int trigger_mode);
 int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_count);
+#define DM5120_STOINT_BAD_SLOT (-6)
 int dm5120_validate_stoint_settings(int slot, int interval_ms);
 void dm5120_set_storage_interval(int address, int slot, int interval_ms);
 
@@ -188,7 +189,7 @@ void fg5010_set_invert(int address, int enable);
 void fg5010_set_phase(int address, float phase);
 void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth);
 void fg5010_set_burst(int address, int enable, int count, float period);
-int test_fg5010_comm(int address);
+int test_fg5010_comm(int address);  /* 0 = pass, -1 = fail, 1 = declined (not run) */
 float fg5010_read_frequency(int address);
 int fg5010_read_output_status(int address);
 

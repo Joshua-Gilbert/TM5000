@@ -49,10 +49,13 @@ int init_profile_system(void) {
         return PROFILE_ERROR_VERSION;
     }
     
+    /* The menu calls this on every entry; keep the current-profile state after the first */
+    if (!profiles_loaded) {
+        g_current_profile_name[0] = '\0';
+        g_profile_modified = 0;
+    }
     profiles_loaded = 1;
-    g_current_profile_name[0] = '\0';
-    g_profile_modified = 0;
-    
+
     return PROFILE_SUCCESS;
 }
 
@@ -143,7 +146,7 @@ int save_config_profile(char *name, char *description) {
         return PROFILE_ERROR_FILE_IO;
     }
 
-    profile_offset = sizeof(profile_file_header) + (slot * sizeof(config_profile));
+    profile_offset = sizeof(profile_file_header) + ((long) slot * sizeof(config_profile));
 
     if (fseek(file, profile_offset, SEEK_SET) != 0) {
         fclose(file);
@@ -224,7 +227,7 @@ int load_config_profile(char *name) {
     }
 
     profile_offset = sizeof(profile_file_header) +
-                     (existing_profiles[profile_index].slot * sizeof(config_profile));
+                     ((long) existing_profiles[profile_index].slot * sizeof(config_profile));
 
     if (fseek(file, profile_offset, SEEK_SET) != 0) {
         fclose(file);
@@ -293,7 +296,7 @@ int delete_config_profile(char *name) {
     }
     
     profile_offset = sizeof(profile_file_header) +
-                     (existing_profiles[profile_index].slot * sizeof(config_profile));
+                     ((long) existing_profiles[profile_index].slot * sizeof(config_profile));
 
     if (fseek(file, profile_offset, SEEK_SET) != 0) {
         fclose(file);
@@ -343,7 +346,7 @@ int list_config_profiles(profile_list_entry profiles[], int max_count) {
     }
     
     for (i = 0; i < MAX_CONFIG_PROFILES && count < max_count; i++) {
-        profile_offset = sizeof(profile_file_header) + (i * sizeof(config_profile));
+        profile_offset = sizeof(profile_file_header) + ((long) i * sizeof(config_profile));
         
         if (fseek(file, profile_offset, SEEK_SET) != 0) {
             break;

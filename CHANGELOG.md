@@ -15,6 +15,72 @@ The project has three eras:
 
 ---
 
+## [Unreleased] — Audit fixes
+
+Built clean with OpenWatcom 2.0 (no new warnings); not yet run on hardware.
+
+### Fixed — memory safety
+- **Printing:** the text graph's row clear wrote 20 bytes past its line buffers on
+  every row, legend lines overran `label[40]`, and a custom header over 63 characters
+  overran `g_custom_header_text`. Headers are now cut to 63.
+- **GPIB:** a custom command too long for the 128-byte bus buffer is refused with an
+  error instead of overflowing it. A long driver status is cut to fit `g_error_msg`.
+- **Buffers:** `allocate_module_buffer` allocates before freeing, so a failed
+  allocation leaves the old data intact. FFT, derivative, integral, smoothing and
+  dual-trace results grow a too-small target buffer instead of writing past it.
+- `ieeescnf` read 256 bytes into a 128-byte buffer.
+
+### Fixed — files and profiles
+- **`.tm5` load** lost every other module's config, the global data and the module
+  data: each config reader consumed the next header line. Skipped config blocks now
+  print a warning. The file format is unchanged.
+- **`.cfg` load** never applied `[GraphScale]`, and FG5010 slots got no default config.
+- **Profiles:** the checksum covered its own low byte, so about 255 of 256 saved
+  profiles failed verification and vanished from the list. Existing `PROFILES.DAT`
+  files verify again with no version bump. After a delete, load, delete and overwrite
+  acted on the wrong profile. The menu never opened `PROFILES.DAT` at all, because
+  `init_profile_system` had no caller. It now tells I/O, not-a-profile-file and
+  version-mismatch errors apart.
+- Export file sizes of 32 KB and up were truncated to 16 bits. In scientific
+  notation, zero now follows the precision setting.
+
+### Fixed — math
+- **Digital filters** ran the wrong recurrence (feedback read from `a0`, and the
+  highpass `a1` was wrong). *Order* now cascades that many sections.
+- The **no-287 FFT** used small-angle cos/sin approximations over the whole circle,
+  and windowed a longer record than it transformed.
+- Derivative, integral and smoothing gave wrong results when overwriting their own
+  source slot. The integral trace now sets up its axes like the derivative.
+- Removed `calculate_median`, `calculate_mode` and `calculate_frequency_analysis`: they
+  were never called, and they returned scaled values in a 16-bit int.
+
+### Fixed — instruments and UI
+- **FG5010 communication test** reprograms frequency, amplitude and waveform and
+  briefly enables the output. It now asks first, and always switches the output off
+  again, even if the read-back times out. It also runs from the slot-setup
+  "Test communication?" prompt.
+- **DM5120:** the buffered fill sent `STOINT` as readings/s × 1000 (10 r/s sent
+  `STOINT 10000`). The conflict check now tests the configured interval and refuses
+  an invalid slot.
+- **DM5120 bus handling** keyed off `address − 10` for addresses 10–17 only.
+  Addresses are user-assigned, so the SRQ poll and longer settle now apply to every
+  enabled DM5120, which adds about 200 ms per command to a DM5120 at any other
+  address.
+- The DC5010 communication test ran the DC5009 test. The DC5009/DC5010 query
+  functions now fill the caller's buffer.
+- The FPU probe began with a waiting `fclex`, which can hang a machine with no 287.
+- "Select all" left slots 8–9 unselected. ALT-toggle could index `g_traces[-1]`.
+  Graph status text had lowercase letters, which the CGA font draws as spaces.
+  File-menu mouse rows were off by two.
+- Custom GPIB commands starting with `F` (e.g. `FUNCT DCV`) triggered a read and a
+  SEQUENCE error. Only queries (`?`) read now.
+
+### Build
+- Makefile dependencies list each file's direct includes, and `clean` also removes
+  `.err` and `.map`.
+
+---
+
 ## [3.6] — 2026-06-04 — Regression fixes, math, dead-strip
 
 Detailed changelog: [docs/changelogs/CHANGELOG_v3.6.md](docs/changelogs/CHANGELOG_v3.6.md) ·
