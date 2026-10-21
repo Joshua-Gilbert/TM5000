@@ -1,26 +1,15 @@
 /*
- * TM5000 GPIB Control System - Print Module
- * Version 3.4
- * Complete implementation extracted from TM5000L.c
- * 
- * Version History:
- * 3.0 - Initial extraction from TM5000L.c
- * 3.1 - Version update
- * 3.2 - Version update
- * 3.3 - Version update  
- * 3.4 - Added UNIT_POWER support for FFT power spectrum printing
- *     - Fixed print menu with toggle-based custom header control
- *     - Eliminated input buffering bug causing immediate printing
+ * Printing over LPT1: 80-column text graph, PostScript graph (Brother HL-5370),
+ * and the PCL measurement report.
  */
 
 #include "print.h"
-#include "graphics.h"  /* For get_graph_units(), get_frequency_units(), get_db_units() functions */
+#include "graphics.h"  /* unit helpers */
 
-/* Global variables for custom header control */
 int g_use_custom_header = 0;  /* 0 = default header, 1 = custom header */
 char g_custom_header_text[64] = "TM5000 HIGH-PRECISION MEASUREMENT GRAPH";
 
-/* Send a byte to the parallel port (LPT1) */
+/* Poll BUSY (status bit 7, inverted), then pulse STROBE. The byte is dropped on timeout. */
 void lpt_send_byte(unsigned char data) {
     int timeout = 1000;
     
@@ -33,17 +22,15 @@ void lpt_send_byte(unsigned char data) {
     }
 }
 
-/* Send a string to the parallel port */
 void print_string(char *str) {
     while (*str) {
         lpt_send_byte(*str++);
     }
 }
 
-/* Map an internal (uppercase) unit string to its PostScript-friendly glyph form.
-   Single source of truth shared by get_print_units and get_trace_print_units. */
+/* Map the screen's uppercase unit strings to normal case for print. */
 static char *ps_unit_of(char *u) {
-    if (strcmp(u, "UV")   == 0) return "uV";   /* For PostScript /mu glyphshow support */
+    if (strcmp(u, "UV")   == 0) return "uV";   /* PostScript path draws "uV" with /mu glyphshow */
     if (strcmp(u, "MV")   == 0) return "mV";
     if (strcmp(u, "V")    == 0) return "V";
     if (strcmp(u, "HZ")   == 0) return "Hz";
@@ -63,28 +50,23 @@ static char *ps_unit_of(char *u) {
     return u;  /* power spectrum (^2/Hz) and anything else: pass through */
 }
 
-/* Print-specific unit conversion for PostScript glyphs - supports FFT and counter units */
+/* Voltage units only; use get_trace_print_units for other unit types. */
 void get_print_units(float range, char **unit_str, float *scale_factor, int *decimal_places, char **postscript_unit) {
-    /* Get the standard graphics units first */
     get_graph_units(range, unit_str, scale_factor, decimal_places);
     *postscript_unit = ps_unit_of(*unit_str);
 }
 
-/* Enhanced unit detection for trace-specific printing */
+/* Units for the trace's unit_type; voltage if the trace index is invalid or disabled. */
 void get_trace_print_units(int trace_idx, float range, char **unit_str, float *scale_factor, int *decimal_places, char **postscript_unit) {
-    /* Check trace unit type first */
     if (trace_idx >= 0 && trace_idx < 10 && g_traces[trace_idx].enabled) {
         get_units_for_type(g_traces[trace_idx].unit_type, range, unit_str, scale_factor, decimal_places);
     } else {
-        /* Fallback to standard units */
         get_graph_units(range, unit_str, scale_factor, decimal_places);
     }
-    
-    /* Convert to print-friendly PostScript units */
+
     *postscript_unit = ps_unit_of(*unit_str);
 }
 
-/* Print options menu */
 void print_graph_menu(void) {
     int choice;
     char input_buffer[80];
@@ -121,15 +103,13 @@ void print_graph_menu(void) {
             case '4':
                 printf("\n\nEnter custom header text: ");
                 fflush(stdout);
-                /* Clear input buffer first */
+                /* Drain pending keystrokes so they don't land in the header text */
                 while (kbhit()) getch();
-                /* Get the input line */
                 if (fgets(input_buffer, sizeof(input_buffer), stdin)) {
-                    /* Remove newline */
                     input_buffer[strcspn(input_buffer, "\n")] = '\0';
                     if (strlen(input_buffer) > 0) {
                         strcpy(g_custom_header_text, input_buffer);
-                        g_use_custom_header = 1;  /* Automatically enable custom header */
+                        g_use_custom_header = 1;
                     }
                 }
                 break;
@@ -157,7 +137,7 @@ void print_graph_text(void) {
     float scale_factor;
     int decimal_places;
     float min_val, max_val;
-    int graph_lines = 50;  /* Increased from 40 for better resolution */
+    int graph_lines = 50;
     
     printf("\nPrinting text graph...\n");
     
@@ -184,61 +164,56 @@ void print_graph_text(void) {
     {
         char *postscript_unit;
         
-        /* Find the dominant trace to determine units - prioritize FFT traces */
-        /* Check for FFT traces first */
+        /* Y-axis units follow the first trace of the highest-priority type:
+           dB > frequency > derivative > current > resistance > any enabled. */
         for (i = 0; i < 10; i++) {
             if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_DB) {
                 dominant_trace = i;
-                break;  /* FFT trace takes precedence for Y-axis units */
+                break;
             }
         }
-        
-        /* Check for frequency traces (power spectrum) if no dB FFT found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_FREQUENCY) {
                     dominant_trace = i;
-                    break;  /* Power spectrum trace takes precedence */
+                    break;
                 }
             }
         }
-        
-        /* Check for derivative traces if no FFT found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_DERIVATIVE) {
                     dominant_trace = i;
-                    break;  /* Derivative trace takes precedence over current/voltage */
+                    break;
                 }
             }
         }
-        
-        /* Check for current traces if no derivative found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_CURRENT) {
                     dominant_trace = i;
-                    break;  /* Current trace takes precedence over voltage */
+                    break;
                 }
             }
         }
-        
-        /* Check for resistance traces if no current found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_RESISTANCE) {
                     dominant_trace = i;
-                    break;  /* Resistance trace takes precedence over voltage */
+                    break;
                 }
             }
         }
-        
-        /* If no special trace found, use first enabled trace */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0) {
                     dominant_trace = i;
-                    break;  /* Use first enabled trace for units */
+                    break;
                 }
             }
         }
@@ -248,14 +223,13 @@ void print_graph_text(void) {
         } else {
             get_print_units(y_range, &unit_str, &scale_factor, &decimal_places, &postscript_unit);
         }
-        unit_str = postscript_unit;  /* Use print-friendly units */
+        unit_str = postscript_unit;
     }
     
-    lpt_send_byte(0x1B); lpt_send_byte(0x40); /* Reset */
+    lpt_send_byte(0x1B); lpt_send_byte(0x40); /* ESC @: printer reset */
     lpt_send_byte(0x0D); /* CR */
     lpt_send_byte(0x0A); /* LF */
-    
-    /* Print header based on global setting */
+
     if (g_use_custom_header && strlen(g_custom_header_text) > 0) {
         print_string(g_custom_header_text);
         print_string("\r\n");
@@ -292,10 +266,10 @@ void print_graph_text(void) {
         {
             char *range_postscript_unit;
             get_print_units(y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
-            range_unit_str = range_postscript_unit;  /* Use print-friendly units */
+            range_unit_str = range_postscript_unit;
         }
-        
-        /* Calculate range exactly as displayed on grid lines (10 divisions) */
+
+        /* 10 divisions: the graph below labels every 5th of its 50 lines */
         if (range_decimal_places == 0) {
             sprintf(label, "Total Scale: %.0f %s (%.0f %s per division)\r\n", 
                     y_range * range_scale_factor, range_unit_str,
@@ -433,22 +407,22 @@ void print_graph_text(void) {
         }
         
         for (x = 0; x < 65; x++) {
-            line[x + 13] = plot_chars[x];  /* Increased offset for wider labels */
+            line[x + 13] = plot_chars[x];  /* plot area starts after the 13-column label gutter */
         }
         
         print_string(line);
         print_string("\r\n");
     }
     
-    print_string("            +");  /* Adjusted spacing */
+    print_string("            +");
     for (x = 0; x < 65; x++) {
         lpt_send_byte('-');
     }
     print_string("\r\n");
     
-    print_string("            0");  /* Adjusted spacing */
-    
-    /* Check if we have FFT traces for frequency X-axis */
+    print_string("            0");
+
+    /* Any dB (FFT) trace -> frequency X axis (unit_type 2 == UNIT_DB) */
     {
         int has_fft_trace = 0;
         int fft_trace_idx = -1;
@@ -461,12 +435,11 @@ void print_graph_text(void) {
         }
         
         if (has_fft_trace && fft_trace_idx >= 0) {
-            /* FFT frequency X-axis */
             float sample_rate = 1000.0 / g_control_panel.sample_rate_ms;  /* Hz */
             float max_freq = sample_rate / 2.0;  /* Nyquist frequency */
             char *freq_unit;
             float freq_scale;
-            
+
             if (max_freq >= 1000000.0) {
                 freq_unit = "MHz";
                 freq_scale = 1000000.0;
@@ -477,7 +450,7 @@ void print_graph_text(void) {
                 freq_unit = "Hz";
                 freq_scale = 1.0;
             }
-            
+
             for (x = 1; x <= 6; x++) {
                 float freq_val = (max_freq * x) / (6.0 * freq_scale);
                 sprintf(label, "%9.1f", freq_val);
@@ -487,7 +460,6 @@ void print_graph_text(void) {
             sprintf(label, "                              Frequency (%s)\r\n\r\n", freq_unit);
             print_string(label);
         } else {
-            /* Standard sample number X-axis */
             for (x = 1; x <= 6; x++) {
                 sprintf(label, "%10d", (max_samples * x) / 6);
                 print_string(label);
@@ -610,7 +582,8 @@ void print_graph_postscript(void) {
     int trace_count = 0;
     int dominant_trace = -1;
     float x_scale, y_scale;
-    float page_width = 540.0;   
+    /* PostScript points (1/72 in), US Letter */
+    float page_width = 540.0;
     float page_height = 720.0;  
     float graph_x = 72.0;       
     float graph_y = 144.0;      
@@ -649,73 +622,67 @@ void print_graph_postscript(void) {
     {
         char *postscript_unit;
         
-        /* Find the dominant trace to determine units - prioritize FFT traces */
-        /* Check for FFT traces first */
+        /* Same unit priority as print_graph_text */
         for (i = 0; i < 10; i++) {
             if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_DB) {
                 dominant_trace = i;
-                break;  /* FFT trace takes precedence for Y-axis units */
+                break;
             }
         }
-        
-        /* Check for frequency traces (power spectrum) if no dB FFT found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_FREQUENCY) {
                     dominant_trace = i;
-                    break;  /* Power spectrum trace takes precedence */
+                    break;
                 }
             }
         }
-        
-        /* Check for derivative traces if no FFT found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_DERIVATIVE) {
                     dominant_trace = i;
-                    break;  /* Derivative trace takes precedence over current/voltage */
+                    break;
                 }
             }
         }
-        
-        /* Check for current traces if no derivative found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_CURRENT) {
                     dominant_trace = i;
-                    break;  /* Current trace takes precedence over voltage */
+                    break;
                 }
             }
         }
-        
-        /* Check for resistance traces if no current found */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_RESISTANCE) {
                     dominant_trace = i;
-                    break;  /* Resistance trace takes precedence over voltage */
+                    break;
                 }
             }
         }
-        
-        /* If no special trace found, use first enabled trace */
+
         if (dominant_trace == -1) {
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0) {
                     dominant_trace = i;
-                    break;  /* Use first enabled trace for units */
+                    break;
                 }
             }
         }
-        
+
         if (dominant_trace >= 0) {
             get_trace_print_units(dominant_trace, y_range, &unit_str, &scale_factor, &decimal_places, &postscript_unit);
         } else {
             get_print_units(y_range, &unit_str, &scale_factor, &decimal_places, &postscript_unit);
         }
-        unit_str = postscript_unit;  /* Use print-friendly units */
+        unit_str = postscript_unit;
     }
-    
+
     print_string("%!PS-Adobe-3.0\r\n");
     print_string("%%Title: TM5000 High-Precision Measurement Graph\r\n");
     print_string("%%Creator: TM5000 Control System v3.2\r\n");
@@ -736,7 +703,6 @@ void print_graph_postscript(void) {
     print_string("/Times-Roman findfont 16 scalefont setfont\r\n");
     
     print_string("%%Page: 1 1\r\n");
-    /* Set graph title based on global setting */
     {
         char graph_title[GPIB_BUFFER_SIZE];
         if (g_use_custom_header && strlen(g_custom_header_text) > 0) {
@@ -767,7 +733,7 @@ void print_graph_postscript(void) {
     print_string(label);
     if (strcmp(unit_str, "uV") == 0) {
         print_string("( ) show\r\n");
-        print_string("/mu glyphshow\r\n");  /* Direct glyph access */
+        print_string("/mu glyphshow\r\n");
         print_string("(V) show\r\n");
     } else {
         sprintf(label, "(%s) show\r\n", unit_str);
@@ -815,7 +781,7 @@ void print_graph_postscript(void) {
         int actual_samples = 0;
         int active_traces = 0;
         
-        /* Use actual sample count from enabled traces, not max_samples */
+        /* Longest enabled trace (equals max_samples); active_traces counts any trace with data */
         {
             int i;
             for (i = 0; i < 10; i++) {
@@ -901,7 +867,7 @@ void print_graph_postscript(void) {
     print_string("closepath stroke\r\n");
     
     print_string("0.25 setlinewidth\r\n");
-    print_string("[1 2] 0 setdash\r\n");  /* Fine dashed lines */
+    print_string("[1 2] 0 setdash\r\n");  /* dotted 10x10 grid */
     
     for (i = 1; i < 10; i++) {
         y_pos = graph_y + (graph_height * i / 10);
@@ -936,7 +902,7 @@ void print_graph_postscript(void) {
         print_string(label);
     }
     
-    /* Check if we have FFT traces for frequency X-axis */
+    /* Any dB (FFT) trace -> frequency X axis (unit_type 2 == UNIT_DB) */
     {
         int has_fft_trace = 0;
         int fft_trace_idx = -1;
@@ -949,7 +915,6 @@ void print_graph_postscript(void) {
         }
         
         if (has_fft_trace && fft_trace_idx >= 0) {
-            /* FFT frequency X-axis */
             float sample_rate = 1000.0 / g_control_panel.sample_rate_ms;  /* Hz */
             float max_freq = sample_rate / 2.0;  /* Nyquist frequency */
             char *freq_unit;
@@ -971,7 +936,7 @@ void print_graph_postscript(void) {
                 x_pos = graph_x + (graph_width * i / 10);
                 freq_val = (max_freq * i) / (10.0 * freq_scale);
                 
-                if (i % 2 == 0) {  /* Label every other tick for clarity */
+                if (i % 2 == 0) {  /* label every other tick */
                     sprintf(label, "%.1f %.1f moveto\r\n", x_pos - 15, graph_y - 15);
                     print_string(label);
                     sprintf(label, "(%.1f) show\r\n", freq_val);
@@ -985,7 +950,6 @@ void print_graph_postscript(void) {
             sprintf(label, "(Frequency [%s]) show\r\n", freq_unit);
             print_string(label);
         } else {
-            /* Standard sample number X-axis */
             for (i = 0; i <= 10; i++) {
                 x_pos = graph_x + (graph_width * i / 10);
                 sample_num = 0;
@@ -997,7 +961,7 @@ void print_graph_postscript(void) {
                 }
                 sample_num = (sample_num * i) / 10;
                 
-                if (i % 2 == 0) {  /* Label every other tick for clarity */
+                if (i % 2 == 0) {  /* label every other tick */
                     sprintf(label, "%.1f %.1f moveto\r\n", x_pos - 10, graph_y - 15);
                     print_string(label);
                     sprintf(label, "(%d) show\r\n", sample_num);
@@ -1018,7 +982,7 @@ void print_graph_postscript(void) {
     print_string("90 rotate\r\n");
     print_string("0 0 moveto\r\n");
     
-    /* Determine Y-axis label based on trace type */
+    /* Y-axis label from the first enabled trace, not the unit-priority trace above */
     {
         int dominant_trace = -1;
         char *y_label = "Measurement";
@@ -1032,13 +996,13 @@ void print_graph_postscript(void) {
         
         if (dominant_trace >= 0) {
             switch (g_traces[dominant_trace].unit_type) {
-                case 1:  /* Frequency units */
+                case 1:  /* UNIT_FREQUENCY */
                     y_label = "Frequency";
                     break;
-                case 2:  /* dB units for FFT */
+                case 2:  /* UNIT_DB */
                     y_label = "Magnitude";
                     break;
-                default: /* Voltage units */
+                default: /* voltage, current, resistance, derivative, power */
                     y_label = "Measurement";
                     break;
             }
@@ -1176,7 +1140,6 @@ void print_graph_postscript(void) {
                 
                 sprintf(label, "(%.*f) show ", max_dec, max_trace * max_scale);
                 print_string(label);
-                /* Calculate and display average instead of range */
                 {
                     float avg_val = 0.0;
                     int k;
@@ -1220,14 +1183,13 @@ void print_graph_postscript(void) {
     print_string("showpage\r\n");
     print_string("%%EOF\r\n");
     
-    lpt_send_byte(0x04);
-    
+    lpt_send_byte(0x04);  /* Ctrl-D: PostScript end of job */
+
     printf("High-precision PostScript graph printed successfully.\n");
     printf("Press any key to continue...");
     getch();
 }
 
-/* Print measurement report */
 void print_report(void) {
     char buffer[80];
     int i;
@@ -1240,7 +1202,8 @@ void print_report(void) {
     
     clrscr();
     printf("Printing report...\n");
-    
+
+    /* PCL: reset, portrait, fixed-pitch 10 cpi 12 pt Courier */
     print_string("\x1B" "E");
     print_string("\x1B&l0O");
     print_string("\x1B(s0p10h12v0s0b3T");

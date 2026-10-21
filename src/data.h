@@ -1,14 +1,5 @@
 /*
- * TM5000 GPIB Control System - Data Management
- * Version 3.5
- * Header file for data management functions
- * 
- * Version History:
- * 3.0 - Initial extraction from TM5000L.c
- * 3.1 - Version update
- * 3.2 - Fixed load/save module activation issues
- * 3.3 - Fixed fseek reliability issues
- * 3.5 - Enhanced data export with metadata and real-time streaming
+ * TM5000 data management: per-slot sample buffers, data/settings files, and export.
  */
 
 #ifndef DATA_H
@@ -45,7 +36,7 @@ void load_dc5009_config(FILE *fp, int slot);
 void load_dc5010_config(FILE *fp, int slot);
 void load_fg5010_config(FILE *fp, int slot);
 
-/* Enhanced Export System (v3.5) */
+/* Export (export_enhanced.c) */
 
 /* Export format types */
 #define EXPORT_FORMAT_CSV           0
@@ -63,39 +54,37 @@ void load_fg5010_config(FILE *fp, int slot);
 #define EXPORT_FLAG_HEADERS         0x40
 #define EXPORT_FLAG_STATISTICS      0x80
 
-/* Enhanced Export Configuration - optimized member ordering and bit fields */
 #pragma pack(1)
 typedef struct {
-    char custom_header[128];                 /* 128 bytes - largest member first */
-    char filename_template[64];              /* 64 bytes - second largest */
-    char units_override[16];                 /* 16 bytes */
-    time_t export_start_time;                /* 4 bytes - For timestamping */
-    float sample_rate_override;              /* 4 bytes - Override auto-detected sample rate */
-    int precision;                           /* 4 bytes - Decimal places (1-9) */
-    unsigned char format;                    /* 1 byte - Export format type */
-    unsigned char flags;                     /* 1 byte - Option flags */
-    char delimiter;                          /* 1 byte - Custom delimiter character */
+    char custom_header[128];
+    char filename_template[64];
+    char units_override[16];
+    time_t export_start_time;
+    float sample_rate_override;              /* overrides auto-detected sample rate */
+    int precision;                           /* decimal places (1-9) */
+    unsigned char format;                    /* EXPORT_FORMAT_* */
+    unsigned char flags;                     /* EXPORT_FLAG_* */
+    char delimiter;
 } export_config;
 #pragma pack()
 
-/* Real-time Export State - optimized member ordering */
+/* Member order matches the positional initializer in export_enhanced.c. */
 #pragma pack(1)
 typedef struct {
-    export_config config;                   /* Large structure - first */
-    char current_filename[128];              /* 128 bytes - largest simple member */
-    FILE *file;                              /* 4 bytes - Output file handle */
-    unsigned long samples_exported;          /* 4 bytes - Counter for exported samples */
-    time_t session_start;                    /* 4 bytes - Session start timestamp */
-    unsigned char active:1;                  /* 1 bit - active flag */
-    unsigned char reserved:7;                /* 7 bits - reserved */
-    unsigned char error_count;               /* 1 byte - Error counter */
+    export_config config;
+    char current_filename[128];
+    FILE *file;
+    unsigned long samples_exported;
+    time_t session_start;
+    unsigned char active:1;
+    unsigned char reserved:7;
+    unsigned char error_count;
 } realtime_export_state;
 #pragma pack()
 
-/* Global real-time export state */
 extern realtime_export_state g_realtime_export;
 
-/* Enhanced Export Functions */
+/* Export functions */
 int export_data_enhanced(char *filename, export_config *config);
 int export_data_with_metadata(char *filename, export_config *config);
 int export_measurement_summary(char *filename, export_config *config);
@@ -130,15 +119,15 @@ int get_export_file_size(char *filename);
 int get_estimated_export_size(export_config *config);
 int cleanup_export_temp_files(void);
 
-/* Export Statistics - optimized member ordering */
+/* Export statistics */
 #pragma pack(1)
 typedef struct {
-    unsigned long total_exports;             /* 4 bytes - largest members first */
-    unsigned long total_samples_exported;    /* 4 bytes */
-    unsigned long total_bytes_exported;      /* 4 bytes */
-    time_t last_export_time;                 /* 4 bytes */
-    float average_export_time;               /* 4 bytes */
-    unsigned char most_used_format;          /* 1 byte - smallest last */
+    unsigned long total_exports;
+    unsigned long total_samples_exported;
+    unsigned long total_bytes_exported;
+    time_t last_export_time;
+    float average_export_time;
+    unsigned char most_used_format;          /* EXPORT_FORMAT_* */
 } export_statistics;
 #pragma pack()
 

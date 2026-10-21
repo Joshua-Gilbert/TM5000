@@ -1,17 +1,16 @@
 # TM5000 Architecture (as-built, v3.6)
 
-Technical description of the TM5000 GPIB control system as it is actually built in
-[`src/`](../src). It supersedes the original v3.5 *planning* document. For the build
-toolchain see [BUILD.md](BUILD.md); for the cross-version bug history see
-[FINDINGS.md](FINDINGS.md); for version history see [../CHANGELOG.md](../CHANGELOG.md).
+How [`src/`](../src) is built and organized. Toolchain: [BUILD.md](BUILD.md);
+cross-version bug history: [FINDINGS.md](FINDINGS.md); releases:
+[../CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
 ## 1. Overview
 
 TM5000 is a single-process, menu-driven DOS application that controls Tektronix
-TM5000-series instruments over GPIB (IEEE-488) and acquires, analyzes, plots, and
-prints/export their measurements. It is a modular C rewrite (v3.0+) of the original
+TM5000-series instruments over GPIB (IEEE-488) and acquires, analyzes, plots, prints,
+and exports their measurements. It is a modular C rewrite (v3.0+) of the original
 monolithic source, split so every translation unit stays within the DOS 64 KB segment
 limit.
 
@@ -118,20 +117,19 @@ traces survive a `.tm5`/`.cfg` reload, which does not serialize the flag. This i
 - `sync_traces_with_modules()` — preserves the computed trace's `unit_type`/`x_scale`/
   `x_offset` instead of reclassifying it by `module_type`.
 
-This is the v3.6 fix for the long-standing "computed traces get wiped" regression (see
-FINDINGS #1).
+See FINDINGS #1 for the regression this prevents.
 
 ---
 
 ## 6. Math subsystem
 
-- **FFT** (`math_functions.c`): pure-C, power-of-2, 64–1024 points, with
-  Rectangular/Hamming/Hanning/Blackman windows. Uses the 80287 when present; falls back to
-  a coarse software DFT otherwise (approximate, ≤64-point — a coprocessor is recommended).
+- **FFT** (`math_functions.c`): C radix-2 FFT, power-of-2, 64–1024 points, with
+  Rectangular/Hamming/Hanning/Blackman windows. Runs on the 80287 when present; otherwise
+  falls back to a coarse software DFT (approximate, ≤64 points).
   Output formats: dB (threshold `1e-12`, floor `-240 dB`), linear, power. When the requested
   output size is smaller than N/2 the spectrum is **peak-preserving decimated** across the
   full 0..Nyquist span with a correspondingly scaled frequency axis.
-- **Enhanced analysis** (`math_enhanced.c`): dual-trace operations; basic/rolling
+- **Analysis** (`math_enhanced.c`): dual-trace operations; basic/rolling
   statistics; digital filtering; **curve fitting** — linear, polynomial (order 2–3, with X
   centered+scaled for numerical conditioning), and exponential; Pearson **correlation**;
   **cross-correlation** (per-lag overlap-normalized, double-precision accumulators) and
@@ -148,45 +146,42 @@ FINDINGS #1).
   global-count mismatch) and warns if the marker is absent.
 - **Configuration profiles** (`config_profiles.c`): the full multi-instrument + graph/FFT/
   panel state to `PROFILES.DAT`, checksum-validated.
-- **Enhanced export** (`export_enhanced.c`): CSV/TSV with metadata/timestamps/settings and
+- **Export** (`export_enhanced.c`): CSV/TSV with metadata/timestamps/settings and
   optional real-time streaming.
 
 ---
 
 ## 8. Build & code size
 
-OpenWatcom, large model, 286 target — see [BUILD.md](BUILD.md) for the exact flags. Two
-size-relevant build options are enabled:
+OpenWatcom, large model, 286 target; exact flags in [BUILD.md](BUILD.md). Two options
+control size:
 
-- `wcc -zm` — emit each function in its own segment, so that
-- `wlink OPTION ELIMINATE` can **drop every unreferenced function** (and the dormant
-  assembly modules) from the image. OpenWatcom's linker has no identical-code *folding*, so
-  duplicate functions are still consolidated in source (e.g. the DC5009/DC5010 forwarders).
+- `wcc -zm` emits each function in its own segment, so that
+- `wlink OPTION ELIMINATE` can drop every unreferenced function from the image. The linker
+  has no identical-code folding, so duplicate functions are consolidated in source instead
+  (e.g. the DC5009/DC5010 forwarders).
 
-Result: `tm5000.exe` ≈ **270 KB** (dead-stripped), within the 640 KB conventional-memory
-budget with room for the 1024-sample × 10-module far buffers.
+`tm5000.exe` is 275,948 bytes (~270 KB), leaving room in 640 KB for the 1024-sample ×
+10-module far buffers.
 
 ---
 
 ## 9. Assembly modules (dormant)
 
 `cga_asm.asm`, `mem286.asm`, `fixed286.asm`, and `trig287_simple.asm` contain CGA/286/287
-optimization routines that are **not currently called from C** (only `extern`-declared).
-With `OPTION ELIMINATE` they are stripped from the image, so they cost nothing today; they
-remain in the tree as scaffolding to wire in (or remove) later.
+optimization routines that are **not called from C** (only `extern`-declared). With
+`OPTION ELIMINATE` they are stripped from the image; they stay in the tree as
+scaffolding to wire in or remove.
 
 ---
 
-## 10. Known design notes / limitations
+## 10. Known limitations
 
 - The non-287 software-DFT FFT path is approximate and low-resolution; accurate FFTs need a
   coprocessor.
-- `tm5000.h` is a "god header" (all subsystem prototypes); header/API hygiene cleanups are
-  tracked for a future pass.
-- See [FINDINGS.md](FINDINGS.md) for the code-verified cross-version regression analysis and
-  [../CHANGELOG.md](../CHANGELOG.md) for what changed in each release.
+- `tm5000.h` is a "god header" (all subsystem prototypes); header/API cleanup
+  (de-declaring, `MAX_MODULES`, `static`-ization) is left for a future pass.
 
 ---
 
-*As-built for v3.6. Update this document when the module structure, data layout, or build
-options change.*
+*Describes v3.6. Update when the module structure, data layout, or build options change.*

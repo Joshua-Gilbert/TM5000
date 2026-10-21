@@ -1,7 +1,5 @@
 /*
- * TM5000 GPIB Control System - Printing and Export
- * Version 3.3
- * Header file for printing and export functions
+ * TM5000 printing: reports and graphs (text or PostScript) sent directly to LPT1.
  */
 
 #ifndef PRINT_H

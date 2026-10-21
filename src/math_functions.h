@@ -1,14 +1,5 @@
 /*
- * TM5000 GPIB Control System - Mathematical Functions Header
- * Version 3.5
- * 
- * Version History:
- * 3.0 - Initial extraction from TM5000L.c
- * 3.1 - Version update
- * 3.2 - Version update
- * 3.3 - Version update
- * 3.4 - Fixed FFT peak centering and added UNIT_POWER support
- * 3.5 - Enhanced math with dual-trace operations, statistics, and filtering
+ * TM5000 trace math: FFT, calculus, dual-trace ops, statistics, filters, curve fits, correlation.
  */
 
 #ifndef MATH_FUNCTIONS_H
@@ -26,12 +17,11 @@
 #define TRACE_OP_MAX      6
 #define TRACE_OP_DIFF     7
 
-/* Statistics Configuration - optimized member ordering (largest first) */
 typedef struct {
-    float update_rate;                /* 4 bytes - largest member first */
-    int window_size;                  /* 4 bytes - For rolling statistics (10-1000) */
-    int histogram_bins;               /* 4 bytes - Number of histogram bins (10-100) */
-    unsigned char enable_mean:1;      /* Bit fields - pack all flags into 1 byte */
+    float update_rate;
+    int window_size;                  /* rolling statistics (10-1000) */
+    int histogram_bins;               /* 10-100 */
+    unsigned char enable_mean:1;
     unsigned char enable_rms:1;
     unsigned char enable_std_dev:1;
     unsigned char enable_min_max:1;
@@ -48,16 +38,15 @@ typedef struct {
 #define FILTER_TYPE_BANDSTOP  3
 #define FILTER_TYPE_MOVING_AVG 4
 
-/* Digital Filter Configuration - optimized member ordering (largest first) */
 #pragma pack(1)
 typedef struct {
-    float cutoff_freq;                /* 4 bytes - Cutoff frequency (Hz) */
-    float bandwidth;                  /* 4 bytes - For bandpass/bandstop filters */
-    float sample_rate;                /* 4 bytes - Sampling rate (Hz) */
-    float gain;                       /* 4 bytes - Filter gain */
-    int filter_type;                  /* 4 bytes - Filter type constant */
-    int order;                        /* 4 bytes - Filter order (1-4) */
-    int window_size;                  /* 4 bytes - For moving average filter */
+    float cutoff_freq;                /* Hz */
+    float bandwidth;                  /* bandpass/bandstop only */
+    float sample_rate;                /* Hz */
+    float gain;
+    int filter_type;                  /* FILTER_TYPE_* */
+    int order;                        /* 1-4 */
+    int window_size;                  /* moving average only */
 } filter_config;
 #pragma pack()
 
@@ -68,49 +57,45 @@ typedef struct {
 #define FIT_TYPE_LOGARITHMIC   3
 #define FIT_TYPE_POWER         4
 
-/* Curve Fitting Results - optimized member ordering (largest first) */
 #pragma pack(1)
 typedef struct {
-    float coefficients[6];            /* 24 bytes - largest member first */
-    float correlation;                /* 4 bytes - R-squared value */
-    float rms_error;                  /* 4 bytes - RMS error of fit */
-    int fit_type;                     /* 4 bytes */
-    int points_used;                  /* 4 bytes - Number of data points used */
-    unsigned char equation_index;     /* 1 byte - Index into equation text table */
+    float coefficients[6];
+    float correlation;                /* R-squared */
+    float rms_error;
+    int fit_type;                     /* FIT_TYPE_* */
+    int points_used;
+    unsigned char equation_index;     /* see get_equation_text() */
 } curve_fit_result;
 #pragma pack()
 
-/* Statistics Results - optimized member ordering (largest first) */
 #pragma pack(1)
 typedef struct {
-    time_t calculation_time;         /* 4 bytes - largest first */
-    float mean;                      /* 4 bytes */
-    float rms;                       /* 4 bytes */
-    float std_dev;                   /* 4 bytes */
-    float min_value;                 /* 4 bytes */
-    float max_value;                 /* 4 bytes */
-    float peak_to_peak;              /* 4 bytes */
-    float median;                    /* 4 bytes */
-    float mode;                      /* 4 bytes */
-    int sample_count;                /* 4 bytes - int after floats */
+    time_t calculation_time;
+    float mean;
+    float rms;
+    float std_dev;
+    float min_value;
+    float max_value;
+    float peak_to_peak;
+    float median;
+    float mode;
+    int sample_count;
 } statistics_result;
 #pragma pack()
 
-/* Correlation Analysis Results */
 #pragma pack(1)
 typedef struct {
-    float correlation_coefficient;    /* Pearson correlation (-1 to +1) */
-    float covariance;                /* Covariance between traces */
-    float phase_shift;               /* Phase shift in samples */
-    float time_delay;                /* Time delay in seconds */
-    int lag_samples;                 /* Lag for maximum correlation */
+    float correlation_coefficient;    /* Pearson (-1 to +1) */
+    float covariance;
+    float phase_shift;               /* samples */
+    float time_delay;                /* s */
+    int lag_samples;                 /* lag of maximum correlation */
 } correlation_result;
 #pragma pack()
 
-/* Global statistics configuration */
 extern statistics_config g_stats_config;
 
-/* Original mathematical function prototypes */
+/* FFT and calculus (math_functions.c) */
 void perform_fft(void);
 int fft_configuration_menu(void);
 void execute_fft_with_config(void);
@@ -119,7 +104,7 @@ void perform_differentiation(void);
 void perform_integration(void);
 void perform_smoothing(void);
 
-/* Enhanced Math Functions (v3.5) */
+/* Dual-trace and analysis math (math_enhanced.c) */
 
 /* Dual-Trace Operations */
 int perform_dual_trace_operation(int trace1, int trace2, int operation, int result_slot);
@@ -135,10 +120,9 @@ int dual_trace_max(int trace1, int trace2, int result_slot);
 int calculate_realtime_statistics(int trace_slot, statistics_config *config, statistics_result *result);
 int calculate_basic_statistics(float *data, int count, statistics_result *result);
 int calculate_rolling_statistics(int trace_slot, int window_size);
-/* Removed redundant rolling statistics function */
 int get_statistics_result(int trace_slot, statistics_result *result);
 
-/* Advanced Statistics */
+/* Distribution and peak statistics */
 int calculate_histogram(float *data, int count, float *bins, int bin_count);
 int calculate_median(float *data, int count);
 int calculate_mode(float *data, int count);
@@ -193,13 +177,11 @@ int save_math_settings(void);
 int load_math_settings(void);
 int reset_math_settings(void);
 
-/* Memory Management for Rolling Statistics */
 void cleanup_math_buffers(void);
 
-/* Equation text retrieval */
 const char* get_equation_text(unsigned char equation_index);
 
-/* Validation and Error Handling */
+/* Validation */
 int validate_trace_data(int trace_slot);
 int validate_statistics_config(statistics_config *config);
 int validate_filter_config(filter_config *config);

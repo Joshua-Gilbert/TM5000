@@ -1,40 +1,29 @@
 /*
- * TM5000 GPIB Control System - Data Management Module
- * Version 3.5
- * Complete implementation extracted from TM5000L.c
- * 
- * Version History:
- * 3.0 - Initial extraction from TM5000L.c
- * 3.1 - Version update
- * 3.2 - Fixed load/save module activation issues, removed legacy format support, fixed CSV parsing bug with pipe delimiters
- * 3.3 - Fixed fseek reliability issues in configuration and measurement data loading
- * 3.5 - Enhanced data export with metadata, real-time streaming, and compression support
+ * Data files: .tm5 measurement files, .cfg settings files, and the per-module
+ * far sample buffers they load into.
  */
 
 #include "data.h"
 #include "modules.h"
 
-/* Allocate memory buffer for a module's data */
+/* Replaces any existing buffer for the slot. Returns 1 on success. */
 int allocate_module_buffer(int slot, unsigned int size) {
     if (slot < 0 || slot >= 10) return 0;
-    
-    /* Free existing buffer if present */
+
     if (g_system->modules[slot].module_data) {
         _ffree(g_system->modules[slot].module_data);
     }
-    
-    /* Allocate new buffer */
+
     g_system->modules[slot].module_data = (float far *)_fmalloc(size * sizeof(float));
     if (g_system->modules[slot].module_data) {
         g_system->modules[slot].module_data_size = size;
         g_system->modules[slot].module_data_count = 0;
-        return 1;  /* Success */
+        return 1;
     }
-    
-    return 0;  /* Failed */
+
+    return 0;
 }
 
-/* Free memory buffer for a module */
 void free_module_buffer(int slot) {
     if (slot < 0 || slot >= 10) return;
     
@@ -46,7 +35,7 @@ void free_module_buffer(int slot) {
     }
 }
 
-/* Store a data value in a module's buffer */
+/* Appends one sample; silently dropped once the buffer is full. */
 void store_module_data(int slot, float value) {
     if (slot < 0 || slot >= 10) return;
     if (!g_system->modules[slot].module_data) return;
@@ -58,13 +47,12 @@ void store_module_data(int slot, float value) {
     }
 }
 
-/* Clear all data in a module's buffer */
+/* Resets the count only; the buffer stays allocated. */
 void clear_module_data(int slot) {
     if (slot < 0 || slot >= 10) return;
     g_system->modules[slot].module_data_count = 0;
 }
 
-/* Save measurement data to file */
 void save_data(void) {
     FILE *fp;
     char filename[80];
@@ -86,19 +74,16 @@ void save_data(void) {
         return;
     }
     
-    /* Write file header and format version */
     fprintf(fp, "TM5000 Data File v%s\n", TM5000_VERSION);
-    fprintf(fp, "FileFormat: ModuleData\n");  /* Enhanced format indicator */
-    
-    /* Write global sample information */
+    fprintf(fp, "FileFormat: ModuleData\n");  /* load_data rejects files without this line */
+
     fprintf(fp, "GlobalSamples: %u\n", g_system->data_count);
     fprintf(fp, "SampleRateMs: %d\n", g_control_panel.sample_rate_ms);
     fprintf(fp, "RateType: %s\n", g_control_panel.use_custom ? "Custom" : "Preset");
     if (!g_control_panel.use_custom) {
         fprintf(fp, "PresetIndex: %d\n", g_control_panel.selected_rate);
     }
-    
-    /* Write module configuration */
+
     fprintf(fp, "Modules:\n");
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
@@ -116,7 +101,6 @@ void save_data(void) {
         }
     }
     
-    /* Write module-specific configurations */
     fprintf(fp, "ModuleConfigs:\n");
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
@@ -146,17 +130,15 @@ void save_data(void) {
         }
     }
     
-    /* Write global data buffer */
     fprintf(fp, "GlobalData:\n");
     for (i = 0; i < g_system->data_count; i++) {
         fprintf(fp, "%.6e\n", g_system->data_buffer[i]);
     }
     
-    /* Write per-module data */
     fprintf(fp, "ModuleData:\n");
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
-            /* Always write slot entry for enabled modules */
+            /* Slot entry is written even with zero samples */
             unsigned int data_count = 0;
             if (g_system->modules[i].module_data && g_system->modules[i].module_data_count > 0) {
                 data_count = g_system->modules[i].module_data_count;
@@ -165,7 +147,6 @@ void save_data(void) {
             printf("Writing slot %d data section: %u samples\n", i, data_count);
             fprintf(fp, "Slot%d:%u\n", i, data_count);
             
-            /* Only write actual data if it exists */
             if (data_count > 0) {
                 for (j = 0; j < data_count; j++) {
                     fprintf(fp, "%.6e\n", g_system->modules[i].module_data[j]);
@@ -188,7 +169,6 @@ void save_data(void) {
     getch();
 }
 
-/* Load measurement data from file */
 void load_data(void) {
     FILE *fp;
     char filename[80];
@@ -223,7 +203,7 @@ void load_data(void) {
         }
     }
     
-    /* Check file format version - only support v3.2+ enhanced format */
+    /* Line 1 is the version banner; line 2 must be the ModuleData format marker. */
     fgets(line, sizeof(line), fp);
     
     if (!fgets(line, sizeof(line), fp) || !strstr(line, "FileFormat: ModuleData")) {
@@ -234,20 +214,17 @@ void load_data(void) {
         return;
     }
     
-    /* Clear existing data */
     for (i = 0; i < 10; i++) {
         clear_module_data(i);
         g_system->modules[i].enabled = 0;
-        g_system->modules[i].is_result = 0;  /* clear stale computed-trace flag before load (v3.6, FINDINGS #1) */
+        g_system->modules[i].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
     }
     g_system->data_count = 0;
-    
+
     printf("Loading enhanced format file...\n");
-    
-    /* Read global sample count */
+
     fscanf(fp, "GlobalSamples: %u\n", &g_system->data_count);
-    
-    /* Read sample rate information */
+
     fscanf(fp, "SampleRateMs: %d\n", &g_control_panel.sample_rate_ms);
     fgets(line, sizeof(line), fp);  /* RateType line */
     if (strstr(line, "Custom")) {
@@ -258,7 +235,6 @@ void load_data(void) {
         fscanf(fp, "PresetIndex: %d\n", &g_control_panel.selected_rate);
     }
     
-    /* Read module configuration */
     fgets(line, sizeof(line), fp);  /* "Modules:" */
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "ModuleConfigs:", 14) == 0) {
@@ -276,8 +252,8 @@ void load_data(void) {
                 g_system->modules[slot].enabled = 1;
                 g_system->modules[slot].last_reading = 0.0;
                 strcpy(g_system->modules[slot].description, desc);
-                
-                /* Initialize module-specific configuration */
+
+                /* Defaults first; the ModuleConfigs section overrides them. */
                 switch (type) {
                     case MOD_DM5120: 
                         init_dm5120_config(slot); 
@@ -303,24 +279,21 @@ void load_data(void) {
                         break;
                 }
                 
-                /* Allocate buffer only if module has data, but keep module enabled */
+                /* Buffer only if there is data; the module stays enabled even if allocation fails. */
                 if (count > 0) {
                     if (!allocate_module_buffer(slot, count + 100)) {
                         printf("Error: Failed to allocate memory for module %d (%u samples)\n", slot, count);
                         printf("Module %d will remain configured but without data buffer\n", slot);
-                        /* Keep module enabled even if buffer allocation fails */
                     } else {
                     }
                 } else {
                 }
-                /* Module stays enabled regardless of data buffer status */
             } else {
             }
         } else {
         }
     }
     
-    /* Read module-specific configurations if present */
     if (strncmp(line, "ModuleConfigs:", 14) == 0) {
         printf("Loading module configurations...\n");
         while (fgets(line, sizeof(line), fp)) {
@@ -357,7 +330,6 @@ void load_data(void) {
         }
     }
     
-    /* Read global data with enhanced validation */
     if (g_system->data_buffer == NULL) {
         printf("Error: Global data buffer not allocated\n");
         fclose(fp);
@@ -367,7 +339,7 @@ void load_data(void) {
     for (i = 0; i < g_system->data_count && i < g_system->buffer_size; i++) {
         if (fscanf(fp, "%f", &value) != 1) break;
         
-        /* Validate data before storing */
+        /* NaN (value != value) or +/-inf */
         if (value != value || value == HUGE_VAL || value == -HUGE_VAL) {
             printf("Warning: Invalid global data value at index %d, setting to 0.0\n", i);
             value = 0.0;
@@ -376,20 +348,15 @@ void load_data(void) {
         g_system->data_buffer[i] = value;
     }
     
-    /* Read per-module data.
-       Resync to the explicit "ModuleData:" marker rather than blindly skipping one
-       line. The global block above is read with fscanf, which leaves the stream
-       mid-line, so a single-line skip desynced the entire per-module read whenever
-       the global sample count didn't line up (off-by-one -> "failed to read sample"
-       / corrupted import). Scanning forward to the marker tolerates a wrong or
-       off-by-one global count and any leftover partial line. (v3.6, FINDINGS #5) */
+    /* Scan forward to the "ModuleData:" marker: the fscanf above leaves the stream
+       mid-line, and a wrong global count would otherwise desync every slot. (FINDINGS #5) */
     {
         int found_marker = 0;
         while (fgets(line, sizeof(line), fp)) {
             if (strncmp(line, "ModuleData", 10) == 0) { found_marker = 1; break; }
         }
         if (!found_marker) {
-            /* Marker absent (truncated/corrupt file): don't claim success silently. (review #8) */
+            /* Truncated/corrupt file: warn rather than claim success. (review #8) */
             printf("Warning: 'ModuleData' section not found - per-module data not loaded\n");
         }
     }
@@ -400,22 +367,19 @@ void load_data(void) {
             if (slot >= 0 && slot < 10 && g_system->modules[slot].enabled) {
                 printf("Processing slot %d with %u samples...\n", slot, module_count);
                 
-                /* Handle modules with no data (count=0) */
                 if (module_count == 0) {
                     printf("Slot %d configured but has no measurement data\n", slot);
-                    continue;  /* Skip data loading but keep module enabled */
+                    continue;  /* module stays enabled */
                 }
-                
-                /* Validate module has allocated buffer for data loading */
+
                 if (!g_system->modules[slot].module_data) {
                     printf("Warning: Module %d has no data buffer, attempting allocation...\n", slot);
                     if (!allocate_module_buffer(slot, module_count + 100)) {
                         printf("Error: Failed to allocate buffer for module %d data\n", slot);
-                        continue;  /* Skip data loading but keep module enabled */
+                        continue;  /* module stays enabled */
                     }
                 }
-                
-                /* Validate requested count doesn't exceed buffer size */
+
                 if (module_count > g_system->modules[slot].module_data_size) {
                     printf("Warning: Module %d data count (%u) exceeds buffer size (%u), truncating...\n", 
                            slot, module_count, g_system->modules[slot].module_data_size);
@@ -426,10 +390,10 @@ void load_data(void) {
                 
                 for (j = 0; j < module_count; j++) {
                     if (fscanf(fp, "%f", &value) == 1) {
-                        /* Safety check for invalid values */
+                        /* NaN or +/-inf */
                         if (value != value || value == HUGE_VAL || value == -HUGE_VAL) {
                             printf("Warning: Invalid data value detected in slot %d sample %d, setting to 0.0\n", slot, j);
-                            value = 0.0;  /* Use safe default instead of skipping */
+                            value = 0.0;  /* substitute, not skip, so sample indices stay aligned */
                         }
                         store_module_data(slot, value);
                         total_loaded++;
@@ -439,7 +403,6 @@ void load_data(void) {
                     }
                 }
                 
-                /* Update last reading */
                 if (g_system->modules[slot].module_data_count > 0) {
                     g_system->modules[slot].last_reading = 
                         g_system->modules[slot].module_data[
@@ -450,8 +413,7 @@ void load_data(void) {
     }
     
     fclose(fp);
-    
-    /* Display summary */
+
     printf("\nData loaded successfully!\n");
     printf("File format: Enhanced (v3.2)\n");
     printf("Global samples: %u\n", g_system->data_count);
@@ -480,14 +442,13 @@ void load_data(void) {
     }
     
     printf("\nPress any key to continue...");
-    
-    /* Synchronize loaded modules with display traces */
+
     sync_traces_with_modules();
-    
+
     for (i = 0; i < 10; i++) {
     }
-    
-    /* Safety check: Ensure graph scale is valid after loading data */
+
+    /* Reset an empty, inverted or NaN graph scale */
     if (g_graph_scale.max_value <= g_graph_scale.min_value || 
         g_graph_scale.max_value != g_graph_scale.max_value ||
         g_graph_scale.min_value != g_graph_scale.min_value) {
@@ -499,7 +460,6 @@ void load_data(void) {
     getch();
 }
 
-/* Save configuration settings to file */
 void save_settings(void) {
     FILE *fp;
     char filename[80];
@@ -522,7 +482,6 @@ void save_settings(void) {
     
     fprintf(fp, "TM5000 Configuration File v%s\n", TM5000_VERSION);
     
-    /* Control panel settings */
     fprintf(fp, "[ControlPanel]\n");
     fprintf(fp, "SampleRateMs=%d\n", g_control_panel.sample_rate_ms);
     fprintf(fp, "UseCustom=%d\n", g_control_panel.use_custom);
@@ -531,7 +490,6 @@ void save_settings(void) {
     fprintf(fp, "MonitorMask=%d\n", g_control_panel.monitor_mask);
     fprintf(fp, "MonitorAll=%d\n", g_control_panel.monitor_all);
     
-    /* Module configuration */
     fprintf(fp, "\n[Modules]\n");
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
@@ -543,7 +501,6 @@ void save_settings(void) {
         }
     }
     
-    /* Module-specific configurations */
     fprintf(fp, "\n[ModuleConfigs]\n");
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
@@ -566,7 +523,6 @@ void save_settings(void) {
         }
     }
     
-    /* Graph scale settings */
     fprintf(fp, "\n[GraphScale]\n");
     fprintf(fp, "MinValue=%f\n", g_graph_scale.min_value);
     fprintf(fp, "MaxValue=%f\n", g_graph_scale.max_value);
@@ -580,7 +536,6 @@ void save_settings(void) {
     getch();
 }
 
-/* Load configuration settings from file */
 void load_settings(void) {
     FILE *fp;
     char filename[80];
@@ -604,7 +559,6 @@ void load_settings(void) {
         return;
     }
     
-    /* Verify file header */
     fgets(line, sizeof(line), fp);
     if (!strstr(line, "TM5000 Configuration")) {
         printf("Error: Invalid configuration file\n");
@@ -613,17 +567,15 @@ void load_settings(void) {
         return;
     }
     
-    /* Parse configuration file sections */
     while (fgets(line, sizeof(line), fp)) {
-        /* Remove newline characters */
         line[strcspn(line, "\r\n")] = 0;
-        
+
         if (strlen(line) == 0) {
             continue;
         }
-        
-        
-        /* Additional cleanup for any stray characters */
+
+
+        /* Strip trailing whitespace and control characters */
         {
             int i;
             for (i = strlen(line) - 1; i >= 0; i--) {
@@ -636,16 +588,14 @@ void load_settings(void) {
         }
         
         if (strcmp(line, "[ControlPanel]") == 0) {
-            /* Read control panel settings */
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') {
-                    /* Don't use fseek - process the section line directly */
-                    /* Remove newlines from the section line */
+                    /* Next section header is already consumed (fseek back is unreliable on
+                       DOS text files), so it is matched in place: [Modules] by goto, the
+                       others by the strcmp checks below. */
                     line[strcspn(line, "\r\n")] = 0;
-                    
-                    /* Check what section this is and set a flag for main loop */
+
                     if (strcmp(line, "[Modules]") == 0) {
-                        /* Process modules section immediately */
                         goto process_modules_section;
                     }
                     break;
@@ -670,25 +620,22 @@ void load_settings(void) {
         
         if (strcmp(line, "[Modules]") == 0) {
         process_modules_section:
-            /* Clear existing modules - match v2.9 behavior */
+            /* Only modules listed in the file stay enabled */
             for (slot = 0; slot < 10; slot++) {
                 g_system->modules[slot].enabled = 0;
-                g_system->modules[slot].is_result = 0;  /* clear stale computed-trace flag (v3.6, FINDINGS #1) */
+                g_system->modules[slot].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
             }
-            
-            /* Read module configuration */
-            
+
+
             while (fgets(line, sizeof(line), fp)) {
-                
-                /* Remove newline characters */
+
                 line[strcspn(line, "\r\n")] = 0;
-                
+
                 if (strlen(line) == 0) {
                     continue;
                 }
-                
+
                 if (line[0] == '[') {
-                    /* End of section - don't use unreliable fseek */
                     break;
                 }
                 {
@@ -702,7 +649,7 @@ void load_settings(void) {
                         strcpy(g_system->modules[slot].description, desc);
                         g_system->modules[slot].slot_number = slot;
                         
-                        /* Initialize module-specific configurations with defaults first */
+                        /* Defaults first; [ModuleConfigs] overrides them. */
                         switch (type) {
                             case MOD_DC5009:
                                 init_dc5009_config(slot);
@@ -725,10 +672,9 @@ void load_settings(void) {
                                 break;
                         }
                         
-                        /* Allocate data buffer for module */
                         if (!allocate_module_buffer(slot, MAX_SAMPLES_PER_MODULE)) {
                             printf("Error: Failed to allocate memory for module %d\n", slot);
-                            g_system->modules[slot].enabled = 0;  /* Disable if allocation fails */
+                            g_system->modules[slot].enabled = 0;
                         } else {
                         }
                     }
@@ -739,10 +685,8 @@ void load_settings(void) {
         }
         
         if (strcmp(line, "[ModuleConfigs]") == 0) {
-            /* Read module-specific configurations */
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') {
-                    /* End of section - don't use unreliable fseek */
                     break;
                 }
                 if (sscanf(line, "%[^=]=%s", key, value) == 2) {
@@ -769,7 +713,6 @@ void load_settings(void) {
         }
         
         if (strcmp(line, "[GraphScale]") == 0) {
-            /* Read graph scale settings */
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') break;
                 if (sscanf(line, "%[^=]=%s", key, value) == 2) {
@@ -788,8 +731,7 @@ void load_settings(void) {
     }
     
     fclose(fp);
-    
-    /* Display summary */
+
     printf("\nSettings loaded successfully!\n");
     printf("Sample rate: %d ms\n", g_control_panel.sample_rate_ms);
     
@@ -804,27 +746,25 @@ void load_settings(void) {
         }
     }
     
-    /* Put all loaded devices in remote mode */
     for (slot = 0; slot < 10; slot++) {
         if (g_system->modules[slot].enabled) {
             gpib_remote(g_system->modules[slot].gpib_address);
-            delay(100);  /* Shorter delay for batch operation */
+            delay(100);  /* ms between devices */
         }
     }
-    
-    
-    
-    /* Synchronize loaded modules with display traces */
+
+
+
     sync_traces_with_modules();
-    
-    /* Validate and cleanup phantom enabled modules after loading */
+
+    /* Drop phantom enabled slots */
     validate_enabled_modules();
     
     printf("\nPress any key to continue...");
     getch();
 }
 
-/* Save DM5120 configuration to file */
+/* .tm5 per-module config block: a "SlotN:TYPE" header, then key=value|... lines. */
 void save_dm5120_config(FILE *fp, int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     
@@ -839,7 +779,6 @@ void save_dm5120_config(FILE *fp, int slot) {
             cfg->burst_mode, cfg->sample_rate, cfg->lf_termination);
 }
 
-/* Save DM5010 configuration to file */
 void save_dm5010_config(FILE *fp, int slot) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     
@@ -856,7 +795,6 @@ void save_dm5010_config(FILE *fp, int slot) {
             cfg->high_speed_mode, cfg->statistics_enabled, cfg->lf_termination);
 }
 
-/* Save PS5004 configuration to file */
 void save_ps5004_config(FILE *fp, int slot) {
     ps5004_config *cfg = &g_ps5004_config[slot];
     
@@ -869,7 +807,6 @@ void save_ps5004_config(FILE *fp, int slot) {
             cfg->user_enabled, cfg->rqs_enabled, cfg->lf_termination);
 }
 
-/* Save PS5010 configuration to file */
 void save_ps5010_config(FILE *fp, int slot) {
     ps5010_config *cfg = &g_ps5010_config[slot];
     
@@ -890,7 +827,6 @@ void save_ps5010_config(FILE *fp, int slot) {
             cfg->srq_enabled, cfg->error_queue_size, cfg->lf_termination);
 }
 
-/* Save DC5009 configuration to file */
 void save_dc5009_config(FILE *fp, int slot) {
     dc5009_config *cfg = &g_dc5009_config[slot];
     
@@ -907,7 +843,6 @@ void save_dc5009_config(FILE *fp, int slot) {
             cfg->overflow_enabled, cfg->preset_enabled, cfg->srq_enabled, cfg->lf_termination);
 }
 
-/* Save DC5010 configuration to file */
 void save_dc5010_config(FILE *fp, int slot) {
     dc5010_config *cfg = &g_dc5010_config[slot];
     
@@ -926,7 +861,6 @@ void save_dc5010_config(FILE *fp, int slot) {
             cfg->rise_fall_enabled, cfg->burst_mode, cfg->lf_termination);
 }
 
-/* Save FG5010 configuration to file */
 void save_fg5010_config(FILE *fp, int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     
@@ -949,21 +883,19 @@ void save_fg5010_config(FILE *fp, int slot) {
             cfg->units_freq, cfg->units_time, cfg->lf_termination);
 }
 
-/* Load DM5120 configuration from file */
+/* The load_*_config readers stop at the next "Slot" or "GlobalData:" line and
+   consume it (no fseek back), so the caller never sees that line. */
 void load_dm5120_config(FILE *fp, int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     char line[GPIB_BUFFER_SIZE];
     char key[64], value[64];
     char *token;
-    
-    /* Read configuration lines until we hit another section or slot */
+
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
-        
-        /* Parse key=value pairs separated by | */
+
         token = strtok(line, "|");
         while (token) {
             if (sscanf(token, "%[^=]=%s", key, value) == 2) {
@@ -990,7 +922,6 @@ void load_dm5120_config(FILE *fp, int slot) {
     }
 }
 
-/* Load DM5010 configuration from file */
 void load_dm5010_config(FILE *fp, int slot) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     char line[GPIB_BUFFER_SIZE];
@@ -999,7 +930,6 @@ void load_dm5010_config(FILE *fp, int slot) {
     
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
         
@@ -1033,7 +963,6 @@ void load_dm5010_config(FILE *fp, int slot) {
     }
 }
 
-/* Load PS5004 configuration from file */
 void load_ps5004_config(FILE *fp, int slot) {
     ps5004_config *cfg = &g_ps5004_config[slot];
     char line[GPIB_BUFFER_SIZE];
@@ -1042,7 +971,6 @@ void load_ps5004_config(FILE *fp, int slot) {
     
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
         
@@ -1066,7 +994,6 @@ void load_ps5004_config(FILE *fp, int slot) {
     }
 }
 
-/* Load PS5010 configuration from file */
 void load_ps5010_config(FILE *fp, int slot) {
     ps5010_config *cfg = &g_ps5010_config[slot];
     char line[GPIB_BUFFER_SIZE];
@@ -1075,7 +1002,6 @@ void load_ps5010_config(FILE *fp, int slot) {
     
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
         
@@ -1111,7 +1037,6 @@ void load_ps5010_config(FILE *fp, int slot) {
     }
 }
 
-/* Load DC5009 configuration from file */
 void load_dc5009_config(FILE *fp, int slot) {
     dc5009_config *cfg = &g_dc5009_config[slot];
     char line[GPIB_BUFFER_SIZE];
@@ -1120,7 +1045,6 @@ void load_dc5009_config(FILE *fp, int slot) {
     
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
         
@@ -1153,7 +1077,6 @@ void load_dc5009_config(FILE *fp, int slot) {
     }
 }
 
-/* Load DC5010 configuration from file */
 void load_dc5010_config(FILE *fp, int slot) {
     dc5010_config *cfg = &g_dc5010_config[slot];
     char line[GPIB_BUFFER_SIZE];
@@ -1162,7 +1085,6 @@ void load_dc5010_config(FILE *fp, int slot) {
     
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
         
@@ -1197,7 +1119,6 @@ void load_dc5010_config(FILE *fp, int slot) {
     }
 }
 
-/* Load FG5010 configuration from file */
 void load_fg5010_config(FILE *fp, int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     char line[GPIB_BUFFER_SIZE];
@@ -1206,7 +1127,6 @@ void load_fg5010_config(FILE *fp, int slot) {
     
     while (fgets(line, sizeof(line), fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            /* End of this module's config - don't use unreliable fseek */
             break;
         }
         
@@ -1245,8 +1165,3 @@ void load_fg5010_config(FILE *fp, int slot) {
         }
     }
 }
-
-
-/* ============================================================================
- * Enhanced Data Export System (v3.5)
- * ============================================================================ */

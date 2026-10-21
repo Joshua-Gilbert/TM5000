@@ -1,7 +1,5 @@
 /*
- * TM5000 GPIB Control System - GPIB Communication Module
- * Version 3.3
- * Header file for GPIB communication functions
+ * TM5000 GPIB communication over the Personal488 driver (generic and per-instrument I/O).
  */
 
 #ifndef GPIB_H

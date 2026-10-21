@@ -1,14 +1,6 @@
 /*
- * TM5000 GPIB Control System - Configuration Profiles Module
- * Version 3.5
- * Header file for configuration profile management
- * 
- * This module provides save/load functionality for complete system
- * configurations including all instrument settings, graph display
- * settings, FFT configuration, and control panel state.
- * 
- * Version History:
- * 3.5 - Initial implementation for configuration profile management
+ * TM5000 configuration profiles: save/load complete system setups (instrument
+ * configs, graph, FFT, control panel) as named profiles in one file.
  */
 
 #ifndef CONFIG_PROFILES_H
@@ -23,69 +15,64 @@
 #define PROFILE_NAME_LENGTH 32
 #define PROFILE_DESC_LENGTH 64
 
-/* Profile file magic number and version */
+/* Loader rejects a header whose version differs, so bump on any layout change. */
 #define PROFILE_MAGIC "TM5P"
 #define PROFILE_VERSION 0x35
 
-/* Configuration Profile Structure - optimized member ordering and bit fields */
+/* Written raw after the header: this layout, including the embedded *_config
+ * structs from tm5000.h, is the on-disk format. */
 #pragma pack(1)
 typedef struct {
-    /* Largest instrument configuration arrays first */
-    dm5120_config dm5120_configs[10];         /* DM5120 settings - largest first */
-    dm5010_config dm5010_configs[10];         /* DM5010 settings */
-    ps5010_config ps5010_configs[10];         /* PS5010 settings */
-    fg5010_config fg5010_configs[10];         /* FG5010 settings */
-    dc5009_config dc5009_configs[10];         /* DC5009 settings */
-    dc5010_config dc5010_configs[10];         /* DC5010 settings */
-    ps5004_config ps5004_configs[10];         /* PS5004 settings - smallest last */
-    
-    /* String members - largest first */
-    char description[PROFILE_DESC_LENGTH];    /* 64 bytes - User description */
-    char name[PROFILE_NAME_LENGTH];           /* 32 bytes - Profile name */
-    unsigned char reserved[15];               /* 15 bytes - Future expansion */
-    
-    /* System configuration structures */
-    graph_scale graph_settings;               /* Graph display settings */
-    fft_config fft_settings;                 /* FFT configuration */
-    control_panel_state panel_state;          /* Control panel state */
-    
-    /* Module state arrays */
-    unsigned char module_enabled[10];         /* Module enable states */
-    unsigned char module_types[10];           /* Module type assignments */
-    unsigned char gpib_addresses[10];         /* GPIB address assignments */
-    
-    /* Timestamps and integers */
-    time_t created;                           /* 4 bytes - Creation timestamp */
-    time_t modified;                          /* 4 bytes - Last modification */
-    unsigned short checksum;                  /* 2 bytes - Profile data checksum */
-    unsigned char flags;                      /* 1 byte - Configuration flags */
+    dm5120_config dm5120_configs[10];
+    dm5010_config dm5010_configs[10];
+    ps5010_config ps5010_configs[10];
+    fg5010_config fg5010_configs[10];
+    dc5009_config dc5009_configs[10];
+    dc5010_config dc5010_configs[10];
+    ps5004_config ps5004_configs[10];
+
+    char description[PROFILE_DESC_LENGTH];
+    char name[PROFILE_NAME_LENGTH];
+    unsigned char reserved[15];
+
+    graph_scale graph_settings;
+    fft_config fft_settings;
+    control_panel_state panel_state;
+
+    unsigned char module_enabled[10];
+    unsigned char module_types[10];
+    unsigned char gpib_addresses[10];
+
+    time_t created;
+    time_t modified;
+    unsigned short checksum;
+    unsigned char flags;                      /* PROFILE_FLAG_* */
 } config_profile;
 #pragma pack()
 
-/* Profile file header structure - optimized member ordering */
+/* On-disk file header */
 #pragma pack(1)
 typedef struct {
-    unsigned char reserved[20];               /* 20 bytes - largest member first */
-    char magic[4];                            /* 4 bytes - Magic number "TM5P" */
-    time_t created;                           /* 4 bytes - File creation time */
-    unsigned short file_checksum;             /* 2 bytes - File integrity checksum */
-    unsigned char version;                    /* 1 byte - File format version */
-    unsigned char profile_count;              /* 1 byte - Number of profiles in file */
+    unsigned char reserved[20];
+    char magic[4];                            /* PROFILE_MAGIC, not NUL-terminated */
+    time_t created;
+    unsigned short file_checksum;
+    unsigned char version;                    /* PROFILE_VERSION */
+    unsigned char profile_count;
 } profile_file_header;
 #pragma pack()
 
-/* Profile list entry for UI display - optimized member ordering and bit fields */
+/* Profile list entry for UI display */
 #pragma pack(1)
 typedef struct {
-    char description[PROFILE_DESC_LENGTH];    /* 64 bytes - largest first */
-    char name[PROFILE_NAME_LENGTH];           /* 32 bytes */
-    time_t modified;                          /* 4 bytes */
-    unsigned char valid:1;                    /* 1 bit - valid profile flag */
-    unsigned char reserved:7;                 /* 7 bits - reserved */
+    char description[PROFILE_DESC_LENGTH];
+    char name[PROFILE_NAME_LENGTH];
+    time_t modified;
+    unsigned char valid:1;
+    unsigned char reserved:7;
 } profile_list_entry;
 #pragma pack()
 
-/* Global profile management state */
 extern char g_current_profile_name[PROFILE_NAME_LENGTH];
 extern unsigned char g_profile_modified;
 

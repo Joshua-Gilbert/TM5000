@@ -1,12 +1,11 @@
 # Building TM5000
 
-TM5000 is a 16-bit MS-DOS application. It is built with the **OpenWatcom
-C/C++ 1.9** toolchain targeting real-mode DOS, and it runs on period hardware
-(or DOSBox / 86Box) — not on a modern OS directly.
+TM5000 is a 16-bit real-mode MS-DOS application built with the **OpenWatcom
+C/C++** toolchain. It runs on period hardware or DOSBox / 86Box, not on a modern
+OS directly.
 
-The canonical, buildable source tree is [`src/`](../src) (TM5000 v3.6).
-Historical versions live under [`archive/`](../archive) and are kept for
-reference; this guide describes building the current `src/` tree.
+This guide covers the current tree, [`src/`](../src) (v3.6). Versions under
+[`archive/`](../archive) are reference only.
 
 ---
 
@@ -14,26 +13,31 @@ reference; this guide describes building the current `src/` tree.
 
 | Component | Requirement |
 |-----------|-------------|
-| Compiler  | OpenWatcom C/C++ **1.9** (`wcc`, the **16-bit** compiler — *not* `wcc386`) |
+| Compiler  | OpenWatcom C/C++ **1.9** or **2.0** (`wcc`, the **16-bit** compiler — *not* `wcc386`); v3.6 is built with 2.0 |
 | Assembler | OpenWatcom `wasm` (for the `.asm` optimization modules) |
 | Linker    | OpenWatcom `wlink` |
 | Build tool| `wmake` (native) **or** GNU `make` calling the Watcom `.exe`s |
 | Run target| MS-DOS 3.3+ on a 286/287, CGA graphics, a Personal488 (IOtech) GPIB card — or [DOSBox](https://www.dosbox.com/) for testing without hardware |
 
-Install OpenWatcom 1.9 and make sure `WATCOM\binnt` (Windows) or
-`watcom/binl` (Linux) is on your `PATH`. The OpenWatcom installer normally
-sets the `WATCOM`, `INCLUDE`, and `PATH` environment variables via
-`owsetenv.bat` / `owsetenv.sh`.
+Install OpenWatcom and make sure `WATCOM\binnt` (Windows) or
+`watcom/binl` (Linux) is on your `PATH`. The installer sets `WATCOM`,
+`INCLUDE`, and `PATH` via `owsetenv.bat` / `owsetenv.sh`.
+
+The makefile calls the tools through `WATCOM_BIN`, which defaults to
+`/mnt/c/WATCOM/BINNT` (a WSL build running the Windows `.exe`s). Override it for
+any other install, e.g. `wmake WATCOM_BIN=C:/WATCOM/binnt`.
 
 ---
 
-## 2. Build flags (what they mean)
+## 2. Build flags
 
 The `makefile` compiles with:
 
 ```
-CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100
+CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100 -zm
 ```
+
+and links with `wlink option eliminate system dos ...`.
 
 | Flag | Meaning | Why it matters |
 |------|---------|----------------|
@@ -44,13 +48,14 @@ CFLAGS = -ml -2 -bt=dos -os -d0 -zc -zt100
 | `-d0` | No debug info | Smaller binary (use `-d2` for a debug build) |
 | `-zc` | Place `const` data in the **code** segment | Frees scarce `DGROUP` data space |
 | `-zt100` | Data threshold 100 | Items ≥100 bytes go *far* automatically, keeping `DGROUP` under 64 KB |
+| `-zm` | One segment per function | Lets `wlink option eliminate` drop unreferenced functions from the image |
 
-Assembly modules build with `-ml -2`; `trig287_simple.asm` additionally uses
+Assembly modules build with `-2` only: they declare `.MODEL SMALL` themselves,
+and OpenWatcom 2.0's `wasm` rejects a forced `-ml`. `trig287_simple.asm` adds
 `-fp2` (287 FPU instructions).
 
-> These flags are **load-bearing** for a 286/287/CGA DOS target. Changing the
-> memory model or data threshold will break the 64 KB-segment compliance the
-> code depends on.
+> Changing the memory model or data threshold breaks the 64 KB-segment layout
+> the code depends on.
 
 ---
 
@@ -64,16 +69,16 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (~276 KB).
+Output: `tm5000.exe` (275,948 bytes, ~270 KB).
 
 Other makefile targets:
 
 - `wmake clean` — remove `*.obj` and the executable
 - `wmake help`  — print build help
 
-> **Note:** the `wcl` shortcut target is **incomplete** — it omits several C
-> modules and all assembly objects, so it produces a different/broken binary.
-> Use the default `all` target (`wmake` with no argument).
+The `wcl` target is **incomplete**: it omits `math_enhanced.c`,
+`ui_math_menus.c`, `config_profiles.c`, `export_enhanced.c`, and all assembly
+objects, so it produces a partial binary. Use the default `all` target.
 
 ---
 
@@ -84,29 +89,18 @@ On real hardware or DOSBox:
 1. Ensure the Personal488 driver (`DRVR488.EXE`) is loaded (for GPIB hardware).
 2. Run `TM5000.EXE` from the DOS prompt.
 
-To test the UI without GPIB hardware, launch under DOSBox — the program starts
-and the menus are navigable; instrument operations will simply time out with no
-hardware attached.
+Without GPIB hardware, the program still starts under DOSBox and the menus work;
+instrument operations time out.
 
 ---
 
-## 5. Known build-system issues (carried over from v3.5)
+## 5. Build-system caveats
 
-These are documented here so they can be cleaned up incrementally. See the
-modernization notes in [the changelog](../CHANGELOG.md).
-
-1. **Hardcoded toolchain paths.** The v3.5 makefile referenced absolute WSL
-   paths (`/mnt/c/WATCOM/BINNT/wcc.exe`). A portable makefile should use
-   `$(WATCOM)` / `PATH` instead.
-2. **Duplicated object list.** The link line repeats the object list instead of
-   referencing `$(OBJS)`, so the two can silently drift when a module is added.
-3. **Phantom assembly rules.** The makefile contained a build rule and `help`
-   text for `trig287.asm` and `fft_286.asm`, which **do not exist** — only
-   `trig287_simple.asm` ships. These are dead/misleading entries.
-4. **Vendored header.** `ieeeio_w.c` needs `IEEEIO.H`; v3.5 relied on picking it
-   up from the v3.0 folder. The modern `src/` tree vendors `IEEEIO.H` directly
+1. **Duplicated object list.** The link line repeats the object list instead of
+   using `$(OBJS)`, so the two can drift when a module is added.
+2. **Vendored header.** `ieeeio_w.c` needs `ieeeio.h`, which is vendored in `src/`
    so the build is self-contained.
-5. **Dormant assembly.** `cga_asm.asm`, `mem286.asm`, `fixed286.asm`, and
-   `trig287_simple.asm` are assembled and linked but **not currently called**
-   from C (only `extern` declarations exist). They are optimization scaffolding;
-   verify the call wiring before relying on — or pruning — them.
+3. **Dormant assembly.** `cga_asm.asm`, `mem286.asm`, `fixed286.asm`, and
+   `trig287_simple.asm` are assembled and linked but nothing in C calls them (only
+   `extern` declarations exist). Check the call wiring before relying on, or
+   pruning, them.

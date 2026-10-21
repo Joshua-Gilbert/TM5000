@@ -1,14 +1,13 @@
 /*
- * TM5000 GPIB Control System - Module Functions Implementation
- * Version 3.5
- * Command modifications for DM5120
+ * Interactive module menus: custom-command console, raw GPIB terminal, and the
+ * DM5120 / PS5004 / PS5010 advanced configuration screens.
  */
 
 #include "modules.h"
 #include "module_funcs.h"
 #include "gpib.h"
 
-/* Send custom GPIB command to selected module */
+/* Command loop to one configured slot; reads a reply when the command looks like a query. */
 void send_custom_command(void) {
     int slot, i;
     char command[GPIB_BUFFER_SIZE];
@@ -133,7 +132,6 @@ void send_custom_command(void) {
     }
 }
 
-/* Advanced configuration for DM5120 modules */
 void configure_dm5120_advanced(int slot) {
     int choice, done = 0;
     int address = g_system->modules[slot].gpib_address;
@@ -446,7 +444,6 @@ void configure_dm5120_advanced(int slot) {
     }
 }
 
-/* Advanced configuration for PS5004 power supply */
 void configure_ps5004_advanced(int slot) {
     int choice, done = 0;
     int address = g_system->modules[slot].gpib_address;
@@ -667,7 +664,6 @@ void configure_ps5004_advanced(int slot) {
     }
 }
 
-/* Advanced configuration for PS5010 dual power supply */
 void configure_ps5010_advanced(int slot) {
     int choice, done = 0;
     int address = g_system->modules[slot].gpib_address;
@@ -899,7 +895,7 @@ void configure_ps5010_advanced(int slot) {
                 getch();
                 break;
                 
-            case '9':  /* Test tracking mode */
+            case '9':  /* VTRA tracking-voltage test */
                 printf("\n\nTesting tracking voltage command...\n");
                 printf("Note: Hardware tracking mode is set by front panel switch.\n");
                 printf("VTRA command sets both POS and NEG to same voltage.\n\n");
@@ -924,7 +920,7 @@ void configure_ps5010_advanced(int slot) {
     }
 }
 
-/* GPIB terminal mode for direct instrument communication */
+/* Raw Driver488 console: each line is sent with CRLF, then a reply is always read. */
 void gpib_terminal_mode(void) {
     char command[GPIB_BUFFER_SIZE];
     char response[GPIB_BUFFER_SIZE];
@@ -998,16 +994,15 @@ void gpib_terminal_mode(void) {
     }
 }
 
-/* DM5120 Enhanced Menu Functions - Optimized for DOS Memory */
+/* DM5120 buffer/STOINT/SRQ submenus. Option tables and reply buffers are far to spare DGROUP. */
 
-/* Menu option structure for compact storage */
 static const char* __far buffer_opts[] = {
     "Count", "Average", "Min", "Max", "Size", "One Val", "All Vals", "Set Size", "Clear", "Exit"
 };
 
 void dm5120_buffer_query_menu(int address) {
     char choice;
-    static char __far response[128];  /* Shared buffer */
+    static char __far response[128];
     float value;
     int count, i, buffer_size;
     int done = 0;
@@ -1180,7 +1175,7 @@ static const char* __far srq_opts[] = {
 
 void dm5120_srq_menu(int address, int slot) {
     char choice;
-    static char __far response[64];  /* Shared smaller buffer */
+    static char __far response[64];
     char done = 0;
     char full_enabled = 0, half_enabled = 0, rdy_enabled = 0, opc_enabled = 0;
     dm5120_config *cfg = &g_dm5120_config[slot];

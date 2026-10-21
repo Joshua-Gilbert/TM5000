@@ -1,11 +1,6 @@
 /*
- * TM5000 GPIB Control System - GPIB Communication Module
- * Version 3.3
- * Full implementation extracted from TM5000L.c
- * 
- * Version History:
- * 3.0 - Initial extraction from TM5000L.c
- * 3.1 - Version update
+ * GPIB I/O through the Personal488 (Driver488) devices \DEV\IEEEOUT and \DEV\IEEEIN.
+ * Driver488 enforces strict command/response pairing.
  */
 
 #include "gpib.h"
@@ -26,14 +21,14 @@ int ieee_read(char *buffer, int maxlen) {
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
     } else if (bytes_read < 0) {
-        if (errno == 5) {  /* General failure - often means no data available */
+        if (errno == 5) {  /* general failure: usually just no data available */
             buffer[0] = '\0';
-            return 0;  /* Return 0 to indicate no data, not error */
-        } else if (errno == 9) {  /* Bad file number - READFAULT condition */
+            return 0;  /* no data, not an error */
+        } else if (errno == 9) {  /* bad file number: READFAULT */
             printf("DEBUG: READFAULT detected (errno=9) - attempting recovery\n");
             buffer[0] = '\0';
-            return -1;  /* Return error to trigger fallback methods */
-        } else if (errno == 6) {  /* Invalid handle or device not ready */
+            return -1;  /* callers fall back on -1 */
+        } else if (errno == 6) {  /* invalid handle or device not ready */
             printf("DEBUG: Invalid handle or device not ready (errno=6)\n");
             buffer[0] = '\0';
             return -1;
@@ -149,7 +144,7 @@ void gpib_remote(int address) {
     
     sprintf(cmd_buffer, "remote %2d\r\n", address);
     ieee_write(cmd_buffer);
-    delay(100);  /* Increased delay for DM5120 */
+    delay(100);  /* longer settle, for the DM5120 */
 }
 
 void gpib_local(int address) {
@@ -168,6 +163,10 @@ void gpib_clear(int address) {
     delay(100);
 }
 
+/*
+ * DM5120 variants: each finds the slot by address and terminates with LF only when
+ * that slot's lf_termination is set (instrument front panel shows "LF"), else CRLF.
+ */
 void gpib_write_dm5120(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
     int slot;
@@ -185,9 +184,9 @@ void gpib_write_dm5120(int address, char *command) {
     }
     
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
-        termination = "\n";  /* LF only for instruments showing "LF" */
+        termination = "\n";
     } else {
-        termination = "\r\n";  /* Standard CRLF */
+        termination = "\r\n";
     }
     
     gpib_check_srq(address);
@@ -217,9 +216,9 @@ int gpib_read_dm5120(int address, char *buffer, int maxlen) {
     }
     
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
-        termination = "\n";  /* LF only for instruments showing "LF" */
+        termination = "\n";
     } else {
-        termination = "\r\n";  /* Standard CRLF */
+        termination = "\r\n";
     }
     
     sprintf(cmd_buffer, "enter %2d%s", address, termination);
@@ -255,9 +254,9 @@ int gpib_read_float_dm5120(int address, float *value) {
     }
     
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
-        termination = "\n";  /* LF only for instruments showing "LF" */
+        termination = "\n";
     } else {
-        termination = "\r\n";  /* Standard CRLF */
+        termination = "\r\n";
     }
     
     sprintf(cmd_buffer, "enter %2d%s", address, termination);
@@ -294,9 +293,9 @@ void gpib_remote_dm5120(int address) {
     }
     
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
-        termination = "\n";  /* LF only for instruments showing "LF" */
+        termination = "\n";
     } else {
-        termination = "\r\n";  /* Standard CRLF */
+        termination = "\r\n";
     }
     
     sprintf(cmd_buffer, "remote %2d%s", address, termination);
@@ -321,9 +320,9 @@ void gpib_local_dm5120(int address) {
     }
     
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
-        termination = "\n";  /* LF only for instruments showing "LF" */
+        termination = "\n";
     } else {
-        termination = "\r\n";  /* Standard CRLF */
+        termination = "\r\n";
     }
     
     sprintf(cmd_buffer, "local %2d%s", address, termination);
@@ -348,9 +347,9 @@ void gpib_clear_dm5120(int address) {
     }
     
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
-        termination = "\n";  /* LF only for instruments showing "LF" */
+        termination = "\n";
     } else {
-        termination = "\r\n";  /* Standard CRLF */
+        termination = "\r\n";
     }
     
     sprintf(cmd_buffer, "abort%s", termination);
@@ -456,7 +455,7 @@ int init_gpib_system(void) {
     }
     
     printf("Waiting before opening input device...\n");
-    delay(400);  /* 400ms delay to let driver settle */
+    delay(400);  /* let the driver settle before opening IEEEIN */
     
     ieee_in = open("\\dev\\ieeein", O_RDONLY | O_BINARY);
     if (ieee_in < 0) {
@@ -475,11 +474,11 @@ int init_gpib_system(void) {
         struct SREGS segs;
         char break_cmd[] = "BREAK";
         
-        regs.x.ax = 0x4403;     /* IOCTL write */
-        regs.x.bx = ieee_out;   /* File handle */
-        regs.x.cx = 5;          /* Length of "BREAK" */
+        regs.x.ax = 0x4403;     /* IOCTL write to the driver's control channel */
+        regs.x.bx = ieee_out;
+        regs.x.cx = 5;          /* strlen("BREAK") */
         regs.x.dx = (unsigned)break_cmd;
-        segread(&segs);         /* Get current segment registers */
+        segread(&segs);         /* current DS supplies the segment of DS:DX */
         
         intdosx(&regs, &regs, &segs);
         
@@ -493,7 +492,6 @@ int init_gpib_system(void) {
     
     printf("Initializing IEEE subsystem...\n");
     
-    /* Simple v2.9/v3.0 style initialization */
     ieee_write("hello\r\n");
     delay(100);
     
@@ -688,7 +686,7 @@ void send_custom_command(void) {
 }
 #endif
 
-/* Check GPIB error status and handle errors */
+/* Query driver STATUS into gpib_error/g_error_msg; a SEQUENCE error gets one ABORT to clear it. */
 void check_gpib_error(void) {
     char status[GPIB_BUFFER_SIZE];
     int bytes_read;
@@ -719,7 +717,7 @@ void check_gpib_error(void) {
                 if (bytes_read > 0) {
                     printf("Status after abort: %s\n", status);
                     if (!strstr(status, "ERROR")) {
-                        gpib_error = 0;  /* Error cleared */
+                        gpib_error = 0;
                     }
                 }
             }

@@ -1,26 +1,21 @@
 /*
- * IEEEIO.C - Modified for OpenWatcom compatibility
- * Changed from varargs.h to stdarg.h for ANSI C compliance
+ * Personal488 IEEEIO.C helper library, ported to OpenWatcom (stdarg.h, ANSI ieeeprtf).
  */
 
 #include <fcntl.h>
 #include <dos.h>
 #include <io.h>
 #include <stdio.h>
-#include <stdarg.h>    /* Changed from varargs.h */
-#include <string.h>    /* Added for strlen */
-#include "ieeeio.h"    /* Include header file for macros and declarations */
+#include <stdarg.h>
+#include <string.h>
+#include "ieeeio.h"
 
-int ieee; /* holds file descriptor (handle) for IEEE I/O routines */
+int ieee; /* Driver488 handle used by the ieee* routines below */
 
-/***************************************************************************
- *
- *  The segment and offset macros/functions are defined in ieeeio.h
- *  For small or medium models, segment() is a function (defined below)
- *  and offset is a macro.
- *  For large models, both are macros defined in the header.
- *   
- ***************************************************************************/
+/*
+ * segment()/offset() come from ieeeio.h. Small/medium models need segment() as a
+ * function (below) to fetch DS; large-data models get both as macros.
+ */
 
 #if defined(M_I86SM) || defined(M_I86MM)    /* small or medium model */
 /******************** SMALL DATA MODEL *************************************/
@@ -32,24 +27,13 @@ int segment(ptr)
 }
 #endif
 
-/****************************************************************************
- *
- * ioctl_rd(fd,buf,bufsize) and ioctl_wt(fd,buf,bufsize) are just like
- * the unbuffered 'read' and 'write' routines, except that they read
- * and write to the I/O control path (the "back door") of the device.
- * See the Aztec C library manual for descriptions of 'read' and 'write'.
- *
- * These routines are used to control special features of devices by
- * providing an additional method of communicating with their driver
- * that does not transfer data to or from the device.
- *
- * ioctl_wt is used with Driver488 to send the "BREAK" command, and
- * ioctl_rd is used to read the internal state of Driver488.  See
- * Chapter 6 of the Personal488 manual for more details.
- *
- ***************************************************************************/
+/*
+ * ioctl_io() reads (iocall 0x4402) or writes (0x4403) the driver's IOCTL control
+ * channel, like read()/write() but bypassing the device data path. Driver488 takes
+ * "BREAK" this way and reports its internal state (Personal488 manual, ch. 6).
+ */
 
-extern int errno;	/* Holds error code, if any */ 
+extern int errno;
 
 int ioctl_io(handle,chars,size,iocall)
   int handle,
@@ -63,7 +47,7 @@ int ioctl_io(handle,chars,size,iocall)
   regs.x.ax=iocall;
   regs.x.bx=handle;
   regs.x.cx=size;
-  regs.x.dx=(unsigned int)chars;  /* Direct cast instead of offset macro */
+  regs.x.dx=(unsigned int)chars;
   segs.ds=segment(chars);
   intdosx(&regs,&regs,&segs);
   if (regs.x.cflag) {
@@ -74,36 +58,24 @@ int ioctl_io(handle,chars,size,iocall)
   }
 }
 
-/****************************************************************************
- *
- * cklpint() is a function that is true if light pen interrupt is pending.
- *
- * _false_() is a function that does returns zero (false).
- *
- * (*ieee_cki)() is a pointer to a function that is used during IEEE I/O to
- * check for the light pen interrupt.  It is usually set to cklpint or 
- * _false_.
- *
- * no_op() is a function that does nothing.
- *
- * (*ieee_isr)() is a pointer to a function that is executed when the
- * IEEE I/O routines detect an interrupt by checking (*ieee_cki)().
- * ieee_isr is usually set to no_op, but it may be set by the programmer
- * to point to the desired interrupt service routine.
- *
- ****************************************************************************/
+/*
+ * Driver488 can report events as a light-pen interrupt. Before each write,
+ * _ieeewt() calls (*ieee_cki)() (cklpint or _false_) and, if it returns true,
+ * runs (*ieee_isr)() (no_op unless the program installs a handler).
+ */
 
+/* True if a light-pen interrupt is pending. */
 int cklpint()
 { union REGS regs;
   char buf;
   unsigned int firstresponse;
 
-  if (ioctl_io(ieee,&buf,1,0x4402) != 1) return 0;  /* Direct call instead of macro */
+  if (ioctl_io(ieee,&buf,1,0x4402) != 1) return 0;
   if (buf != '0') return 0;
-  regs.x.ax=0x0400; /* Function 4: check light pen status */
+  regs.x.ax=0x0400; /* INT 10h fn 4: read light pen status */
   int86(0x10,&regs,&regs);
   firstresponse=regs.h.ah;
-  regs.x.ax=0x0400; /* Function 4: check light pen status */
+  regs.x.ax=0x0400;
   int86(0x10,&regs,&regs);
   return (regs.h.ah | firstresponse);
 }
@@ -118,15 +90,10 @@ void no_op()
 
 void (*ieee_isr)() = no_op;
 
-/****************************************************************************
- *
- * ieeewt(chars) writes the zero-terminated string to the file 'ieee' and
- * checks for errors.
- *
- * ieeerd(chars) reads chars from the file 'ieee'. 'chars' must be an array
- * so that sizeof(chars) will give the number of bytes in chars.
- *
- ***************************************************************************/ 
+/*
+ * _ieeewt(handle,chars) writes a NUL-terminated string; _ieeerd(handle,chars,size)
+ * reads up to size bytes. Both print the errno on failure and return -1.
+ */
 
 int _ieeewt(handle,chars)
   int handle;
@@ -159,17 +126,11 @@ int _ieeerd(handle,chars,size)
   return red;
 }
 
-/****************************************************************************
- *
- * ieeeprtf(format,vars) is equivalent to printf(format,vars) except that
- *   it writes to Personal488.
- *
- * ieeescnf(format,&vars) is equivalent to scanf(format,&vars) except that
- *   it reads from Personal488 and is limited to 5 arguments.
- *
- ***************************************************************************/
+/*
+ * ieeeprtf()/ieeescnf() are printf/scanf to and from Personal488.
+ * ieeeprtf formats into 128 bytes; ieeescnf takes at most 5 arguments.
+ */
 
-/* ANSI C style variable arguments for OpenWatcom */
 int ieeeprtf(char *format, ...)
 { 
   char buffer[128];
@@ -180,10 +141,9 @@ int ieeeprtf(char *format, ...)
   vsprintf(buffer, format, arg_ptr);
   va_end(arg_ptr);
   
-  return _ieeewt(ieee, buffer);  /* Call _ieeewt directly */
+  return _ieeewt(ieee, buffer);
 }
 
-/* Keep the 5-argument version as-is since it works */
 int ieeescnf(format,a,b,c,d,e)
 char *format,*a,*b,*c,*d,*e;
 { char buffer[128];
@@ -193,16 +153,10 @@ char *format,*a,*b,*c,*d,*e;
   return sscanf(buffer,format,a,b,c,d,e);
 }
 
-/*****************************************************************************
- *
- * int rawmode(handle) -- sets file described by 'handle' into raw mode.
- *
- * In raw mode control characters returned from the file are not checked.
- * In particular, control-Z does not mark the end-of-file.  This is very
- * useful when trying to read binary data from files (including the IEEE
- * driver). Returns -1 if an error occurred.
- *
- ****************************************************************************/
+/*
+ * Put a device handle in raw mode so DOS stops interpreting control characters
+ * (Ctrl-Z would otherwise end a read of driver data). Returns -1 on error.
+ */
 
 int rawmode(handle)
   int handle;
@@ -231,28 +185,19 @@ int rawmode(handle)
  return 0;
 }
 
-/****************************************************************************
- *
- * int ieeeinit() -- initializes Personal488 for I/O.
- *
- * Opens the external file 'ieee' for communication with Personal488,
- * sets the file into raw mode, sends IOCTL "BREAK" to get the attention
- * of Personal488, sends the "RESET" command to reset the system.  Sets
- * EOL OUT to line feed so that command strings need only be follwed by
- * \n, and sets EOL IN to NULL ($000) so that returned data is automatically
- * made into a valid string.
- *
- * Returns -1 if an error occurred.
- *
- ****************************************************************************/
+/*
+ * Open the "ieee" device in raw mode, IOCTL BREAK for the driver's attention, then
+ * RESET; EOL OUT LF so commands need only end in \n, EOL IN $0 so replies arrive
+ * NUL-terminated, FILL ERROR. Returns -1 on error.
+ */
 
 int ieeeinit()
 { if ( ( (ieee=open("ieee",O_RDWR | O_BINARY))	== -1) ||
          (rawmode(ieee)             		== -1) ||
-         (ioctl_io(ieee,"break",5,0x4403)  	== -1) ||  /* Direct call instead of macro */
-         (_ieeewt(ieee,"reset\r\n")       	== -1) ||  /* Direct call */
-         (_ieeewt(ieee,"eol out lf\r\n")  	== -1) ||  /* Direct call */
-         (_ieeewt(ieee,"eol in $0\n")     	== -1) ||  /* Direct call */
-         (_ieeewt(ieee,"fill error\n")      	== -1)) return -1; /* Direct call */
+         (ioctl_io(ieee,"break",5,0x4403)  	== -1) ||
+         (_ieeewt(ieee,"reset\r\n")       	== -1) ||
+         (_ieeewt(ieee,"eol out lf\r\n")  	== -1) ||
+         (_ieeewt(ieee,"eol in $0\n")     	== -1) ||
+         (_ieeewt(ieee,"fill error\n")      	== -1)) return -1;
   return 0;
 }

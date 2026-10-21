@@ -1,22 +1,12 @@
 /*
- * TM5000 GPIB Control System - Mathematical Functions UI Menus
- * Version 3.5
- * User interface menus for advanced mathematical analysis functions
- * 
- * This module provides CGA-optimized menu interfaces for:
- * - Dual-trace operations (add, subtract, multiply, divide)
- * - Digital filtering (low-pass, high-pass, band-pass)
- * - Curve fitting (linear, polynomial, exponential)
- * - Correlation analysis and signal processing
- * 
- * Memory optimized for DOS 16-bit environment with minimal overhead.
+ * TM5000 - text-mode menus for dual-trace ops, digital filters, curve fitting
+ * and correlation (math_enhanced.c does the work).
  */
 
 #include "tm5000.h"
 #include "math_functions.h"
 #include "ui.h"
 
-/* Dual-trace operations menu */
 void dual_trace_operations_menu(void) {
     int choice;
     int done = 0;
@@ -100,8 +90,7 @@ void dual_trace_operations_menu(void) {
                     case MATH_SUCCESS:
                         printf("Operation completed successfully!\n");
                         printf("Result stored in slot %d\n", result_slot);
-                        
-                        /* Set up trace for display */
+
                         g_traces[result_slot].enabled = 1;
                         g_traces[result_slot].slot = result_slot;
                         g_traces[result_slot].color = 0x0C; /* Light red for computed data */
@@ -137,14 +126,12 @@ void dual_trace_operations_menu(void) {
     }
 }
 
-/* Digital filter configuration and application menu */
 void digital_filter_menu(void) {
     int choice;
     int done = 0;
     int trace_slot, result;
     filter_config config;
-    
-    /* Initialize default filter configuration */
+
     config.filter_type = FILTER_TYPE_LOWPASS;
     config.cutoff_freq = 100.0;
     config.bandwidth = 50.0;
@@ -287,7 +274,6 @@ void digital_filter_menu(void) {
     }
 }
 
-/* Curve fitting menu */
 void curve_fitting_menu(void) {
     int choice;
     int done = 0;
@@ -400,7 +386,6 @@ void curve_fitting_menu(void) {
     }
 }
 
-/* Correlation analysis menu */
 void correlation_analysis_menu(void) {
     int choice;
     int done = 0;
@@ -489,9 +474,9 @@ void correlation_analysis_menu(void) {
                     corr = (float *)malloc(count * sizeof(float));
 
                     if (count >= 2 && corr) {
-                        printf("Computing cross-correlation (%d points)...\n", count);  /* O(n^2) - can be slow (review #12) */
+                        printf("Computing cross-correlation (%d points)...\n", count);  /* O(n^2): slow on a 286 */
                         if (calculate_cross_correlation(d1, d2, count, corr) == MATH_SUCCESS) {
-                            /* scan only the reliable lag range (tail is zeroed) (review) */
+                            /* Lags past count/2 are zeroed; scanning them could pick 0.0 on anti-correlated traces. */
                             for (lag = 0; lag <= count / 2; lag++) {
                                 if (corr[lag] > best) { best = corr[lag]; best_lag = lag; }
                             }
@@ -532,7 +517,7 @@ void correlation_analysis_menu(void) {
 
                 sample_rate = (g_control_panel.sample_rate_ms > 0)
                               ? (1000.0 / g_control_panel.sample_rate_ms) : 1.0;
-                printf("Computing phase/delay (cross-correlation)...\n");  /* O(n^2) - can be slow (review #12) */
+                printf("Computing phase/delay (cross-correlation)...\n");  /* O(n^2): slow on a 286 */
                 lag = calculate_phase_shift(trace1, trace2, sample_rate);
 
                 printf("\n");
