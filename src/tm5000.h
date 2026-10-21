@@ -179,6 +179,8 @@ typedef struct {
     unsigned char reserved:7;
 } trace_info;
 
+/* The *_config structs below are written raw into PROFILES.DAT (config_profiles.h):
+   any layout change needs a PROFILE_VERSION bump. */
 typedef struct {
     char function[12];      /* Current function (DCV, ACV, OHMS, etc.) */
     int range_mode;         /* 0=AUTO, 1-7=Manual range */

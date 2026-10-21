@@ -17,7 +17,7 @@ extern void fast_memcpy_286(void *dest, void *src, unsigned int count);
 
 void init_graphics(void) {
     union REGS regs;
-    regs.h.ah = 0x00;  /* Set video mode */
+    regs.h.ah = 0x00;
     regs.h.al = 0x04;  /* 320x200 4-color CGA graphics */
     int86(0x10, &regs, &regs);
     
@@ -27,7 +27,7 @@ void init_graphics(void) {
 
 void text_mode(void) {
     union REGS regs;
-    regs.h.ah = 0x00;  /* Set video mode */
+    regs.h.ah = 0x00;
     regs.h.al = 0x03;  /* 80x25 color text mode */
     int86(0x10, &regs, &regs);
 }
@@ -48,7 +48,7 @@ void clrscr(void) {
 /* 1-based column/row */
 void gotoxy(int x, int y) {
     union REGS regs;
-    regs.h.ah = 0x02;    /* Set cursor position */
+    regs.h.ah = 0x02;
     regs.h.bh = 0;       /* Video page 0 */
     regs.h.dh = y - 1;   /* Row (0-based) */
     regs.h.dl = x - 1;   /* Column (0-based) */
@@ -743,7 +743,7 @@ void snap_graph_scale_to_clean_values(void) {
         control_word |= 0x0300;
         _asm {
             fldcw control_word
-            fclex               /* Clear exceptions */
+            fclex
         }
     }
     

@@ -91,8 +91,8 @@ state for save/restore.
 
 ## 4. GPIB & instruments
 
-- All bus I/O funnels through `gpib.c` over the Personal488 shim (`ieeeio_w.c`); logical
-  slot ↔ GPIB address mapping is `address = slot + base`.
+- All bus I/O funnels through `gpib.c` over the Personal488 shim (`ieeeio_w.c`). Each
+  slot's GPIB address (1–30) is set by the user in the slot-setup menu; addresses must be unique.
 - Seven instrument drivers live in `modules.c`. **DC5009 and DC5010 share one
   implementation**: the 22 byte-identical `dc5010_*` routines forward to their `dc5009_*`
   counterparts; only the DC5010-unique features (rise/fall time, A±B totalize, burst) are

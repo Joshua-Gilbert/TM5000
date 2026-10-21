@@ -162,7 +162,7 @@ int rawmode(handle)
   int handle;
 { union REGS regs;
 
-  regs.x.ax=0x4400;	/* Get device data */
+  regs.x.ax=0x4400;
   regs.x.bx=handle;
   intdos(&regs,&regs);
   if (regs.x.cflag) {
@@ -174,7 +174,7 @@ int rawmode(handle)
   regs.x.dx |= 0x20;	/* Set raw mode in device attributes */
   regs.x.dx &= 0xFF;	/* Set DH=0 */
 
-  regs.x.ax=0x4401;	/* Set device data */
+  regs.x.ax=0x4401;
   regs.x.bx=handle;
   intdos(&regs,&regs);
   if (regs.x.cflag) {

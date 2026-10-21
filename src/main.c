@@ -123,6 +123,8 @@ int main(void) {
     g_has_287 = 0;
 
     _asm {
+        ; Without a 287 a waiting FPU instruction can hang, so only no-wait
+        ; (FN*) forms belong before the probe result is known.
         fclex
 
         fninit

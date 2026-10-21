@@ -98,8 +98,7 @@ Release notes: [docs/changelogs/v3.5-release-notes.md](docs/changelogs/v3.5-rele
   (`config_profiles.c`, persisted to `PROFILES.DAT`).
 - Data export — CSV/TSV with metadata, timestamps, custom formatting, and
   real-time streaming export (`export_enhanced.c`).
-- `math_enhanced.c` (~1,100 lines; a working implementation, not the "stub" the
-  original docs called it): dual-trace operations, rolling statistics, digital
+- `math_enhanced.c`: dual-trace operations, rolling statistics, digital
   filtering, curve fitting, correlation, with descriptive trace legends.
 - Direct-memory-access CGA assembly; 286/287 assembly modules.
 

@@ -578,7 +578,7 @@ void gpib_terminal_mode(void) {
             regs.x.bx = ieee_out;   /* File handle */
             regs.x.cx = 5;          /* Length of "BREAK" */
             regs.x.dx = (unsigned)response;
-            segread(&segs);         /* Get current segment registers */
+            segread(&segs);
             
             intdosx(&regs, &regs, &segs);
             

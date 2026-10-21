@@ -5043,7 +5043,7 @@ void single_measurement(void) {
     if (active_count > 0) {
         ieee_write("*OPC?\r\n");
         delay(100); /* Allow time for all modules to complete */
-        drain_input_buffer(); /* Clear any response */
+        drain_input_buffer();
     }
     
     printf("Collecting results:\n");

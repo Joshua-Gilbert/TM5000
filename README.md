@@ -124,7 +124,8 @@ See [docs/BUILD.md](docs/BUILD.md).
 ```sh
 # Build (from the source tree)
 cd src
-wmake                     # produces tm5000.exe (~270 KB)
+wmake                     # tm5000.exe (~270 KB); a prebuilt copy is committed
+# WATCOM_BIN defaults to a WSL path; elsewhere: wmake WATCOM_BIN=C:/WATCOM/binnt
 
 # Run on DOS / DOSBox
 #   1. load the Personal488 driver (DRVR488.EXE) if using GPIB hardware

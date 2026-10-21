@@ -14,8 +14,8 @@ The full tree is in the [README](README.md#repository-layout).
 
 ## Building & running
 
-See [docs/BUILD.md](docs/BUILD.md). In short: OpenWatcom C/C++ (1.9 or 2.0), then
-`wmake` in `src/`, producing `tm5000.exe`. Test under DOSBox if you don't have
+See [docs/BUILD.md](docs/BUILD.md). In short: OpenWatcom C/C++ (2.0 verified), then
+build in `src/`, producing `tm5000.exe`. Test under DOSBox if you don't have
 period hardware.
 
 ## Coding conventions

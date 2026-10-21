@@ -18,7 +18,8 @@ OBJS = main.obj gpib.obj modules.obj graphics.obj ui.obj data.obj print.obj math
 all: $(TARGET)
 
 # OPTION ELIMINATE drops unreferenced segments: with -zm, uncalled C functions
-# and the unused assembly modules stay out of the image.
+# and the unused assembly modules stay out of the image. The file list is not
+# $(OBJS): keep the two in sync.
 $(TARGET): $(OBJS)
 	$(LINKER) option eliminate system dos file main.obj,gpib.obj,modules.obj,graphics.obj,ui.obj,data.obj,print.obj,math_functions.obj,math_enhanced.obj,ui_math_menus.obj,module_funcs.obj,ieeeio_w.obj,config_profiles.obj,export_enhanced.obj,cga_asm.obj,mem286.obj,trig287_simple.obj,fixed286.obj name $(TARGET)
 
@@ -90,12 +91,12 @@ wcl: main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c mod
 	$(WATCOM_BIN)/wcl.exe $(CFLAGS) main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c -fe=$(TARGET)
 
 help:
-	@echo TM5000 Version 3.6 Assembly Optimized Build System
-	@echo =================================================
+	@echo TM5000 Version 3.6 Build System
+	@echo ===============================
 	@echo ""
 	@echo Available targets:
-	@echo   all     - Build complete system with assembly optimizations (default)
-	@echo   wcl     - Build using wcl single command (C only)
+	@echo   all     - Build tm5000.exe (default)
+	@echo   wcl     - Partial single-command build (C only, incomplete)
 	@echo   clean   - Remove object files and executable
 	@echo   help    - Show this help
 	@echo.
@@ -103,15 +104,15 @@ help:
 	@echo   main.c           - Main program and initialization
 	@echo   gpib.c           - GPIB communication functions
 	@echo   modules.c        - Instrument module support
-	@echo   graphics.c       - Display and graphics functions (CGA optimized)
+	@echo   graphics.c       - CGA display and graph engine
 	@echo   ui.c             - User interface and menus
 	@echo   data.c           - Data management and storage
-	@echo   print.c          - Printing and export functions
-	@echo   math_functions.c - Mathematical functions (287 optimized)
-	@echo   math_enhanced.c  - Enhanced math operations
+	@echo   print.c          - Text and PostScript printing
+	@echo   math_functions.c - FFT, calculus, smoothing, statistics
+	@echo   math_enhanced.c  - Dual-trace math, filters, curve fit, correlation
 	@echo.
-	@echo Assembly Optimizations (286/287/CGA):
-	@echo   cga_asm.asm         - CGA graphics acceleration
+	@echo Assembly modules (unreferenced; dropped by OPTION ELIMINATE):
+	@echo   cga_asm.asm         - CGA line/clear/copy routines
 	@echo   mem286.asm          - 286 memory operations
 	@echo   trig287_simple.asm  - 287 trigonometric helpers
 	@echo   fixed286.asm        - Fixed-point math fallback

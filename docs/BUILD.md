@@ -13,19 +13,18 @@ This guide covers the current tree, [`src/`](../src) (v3.6). Versions under
 
 | Component | Requirement |
 |-----------|-------------|
-| Compiler  | OpenWatcom C/C++ **1.9** or **2.0** (`wcc`, the **16-bit** compiler — *not* `wcc386`); v3.6 is built with 2.0 |
+| Compiler  | OpenWatcom C/C++ **2.0** (`wcc`, the **16-bit** compiler — *not* `wcc386`). v3.6 is verified with 2.0; 1.9 is untested with `-zm` / `OPTION ELIMINATE` |
 | Assembler | OpenWatcom `wasm` (for the `.asm` optimization modules) |
 | Linker    | OpenWatcom `wlink` |
 | Build tool| `wmake` (native) **or** GNU `make` calling the Watcom `.exe`s |
 | Run target| MS-DOS 3.3+ on a 286/287, CGA graphics, a Personal488 (IOtech) GPIB card — or [DOSBox](https://www.dosbox.com/) for testing without hardware |
 
-Install OpenWatcom and make sure `WATCOM\binnt` (Windows) or
-`watcom/binl` (Linux) is on your `PATH`. The installer sets `WATCOM`,
-`INCLUDE`, and `PATH` via `owsetenv.bat` / `owsetenv.sh`.
+Install OpenWatcom and run `owsetenv.bat` / `owsetenv.sh`: the compiler needs
+`WATCOM` and `INCLUDE` to find its headers and libraries.
 
-The makefile calls the tools through `WATCOM_BIN`, which defaults to
-`/mnt/c/WATCOM/BINNT` (a WSL build running the Windows `.exe`s). Override it for
-any other install, e.g. `wmake WATCOM_BIN=C:/WATCOM/binnt`.
+The makefile ignores `PATH` and calls the tools through `WATCOM_BIN`, which
+defaults to `/mnt/c/WATCOM/BINNT` (a WSL build running the Windows `.exe`s).
+Override it for any other install, e.g. `wmake WATCOM_BIN=C:/WATCOM/binnt`.
 
 ---
 
