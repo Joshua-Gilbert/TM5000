@@ -6,7 +6,7 @@
 
 #include "gpib.h"
 
-extern void rawmode(int handle);
+extern int rawmode(int handle);
 
 int ieee_write(const char *str) {
     if (ieee_out < 0) return -1;
@@ -116,32 +116,50 @@ int ieee_spoll(int address, unsigned char *status) {
     return -1;
 }
 
-void gpib_write(int address, char *command) {
-    char cmd_buffer[GPIB_BUFFER_SIZE];
-    
-    if (g_system && address >= 10 && address < 18) {
-        int slot = address - 10;
-        if (slot >= 0 && slot < 10 && 
-            g_system->modules[slot].module_type == MOD_DM5120) {
-            gpib_check_srq(address);
-            delay(50);
+/* Addresses are user-assigned and a disabled slot may still hold a stale one. */
+static int find_dm5120_slot(int address) {
+    int i;
+
+    if (!g_system) return -1;
+    for (i = 0; i < 10; i++) {
+        if (g_system->modules[i].enabled &&
+            g_system->modules[i].gpib_address == address &&
+            g_system->modules[i].module_type == MOD_DM5120) {
+            return i;
         }
     }
-    
-    sprintf(cmd_buffer, "output %2d;%s\r\n", address, command);
-    ieee_write(cmd_buffer);
-    
-    if (g_system && address >= 10 && address < 18) {
-        int slot = address - 10;
-        if (slot >= 0 && slot < 10 && 
-            g_system->modules[slot].module_type == MOD_DM5120) {
-            delay(100);
-        } else {
-            delay(50);
-        }
-    } else {
+    return -1;
+}
+
+/* Never send a truncated command to an instrument. */
+static int command_fits(int len, int address) {
+    if (len < 0 || len >= GPIB_BUFFER_SIZE) {
+        printf("Error: command for GPIB address %d is too long, not sent\n", address);
+        return 0;
+    }
+    return 1;
+}
+
+/* Returns 0 once the command is handed to the driver, -1 if it was refused or the write failed. */
+int gpib_write(int address, char *command) {
+    char cmd_buffer[GPIB_BUFFER_SIZE];
+    int is_dm5120;
+
+    if (!command_fits(snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d;%s\r\n", address, command), address)) {
+        return -1;
+    }
+
+    is_dm5120 = (find_dm5120_slot(address) != -1);
+
+    if (is_dm5120) {
+        gpib_check_srq(address);
         delay(50);
     }
+
+    if (ieee_write(cmd_buffer) < 0) return -1;
+
+    delay(is_dm5120 ? 100 : 50);
+    return 0;
 }
 
 int gpib_read(int address, char *buffer, int maxlen) {
@@ -207,35 +225,30 @@ void gpib_clear(int address) {
  * DM5120 variants: each finds the slot by address and terminates with LF only when
  * that slot's lf_termination is set (instrument front panel shows "LF"), else CRLF.
  */
-void gpib_write_dm5120(int address, char *command) {
+int gpib_write_dm5120(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
     int slot;
     char *termination;
-    
-    slot = -1;
-    {
-        int i;
-        for (i = 0; i < 10; i++) {
-            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
-                slot = i;
-                break;
-            }
-        }
-    }
-    
+
+    slot = find_dm5120_slot(address);
+
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
         termination = "\n";
     } else {
         termination = "\r\n";
     }
-    
+
+    if (!command_fits(snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d; %s%s", address, command, termination), address)) {
+        return -1;
+    }
+
     gpib_check_srq(address);
     delay(50);
-    
-    sprintf(cmd_buffer, "output %2d; %s%s", address, command, termination);
-    ieee_write(cmd_buffer);
-    
+
+    if (ieee_write(cmd_buffer) < 0) return -1;
+
     delay(200);
+    return 0;
 }
 
 int gpib_read_dm5120(int address, char *buffer, int maxlen) {
@@ -244,17 +257,8 @@ int gpib_read_dm5120(int address, char *buffer, int maxlen) {
     int slot;
     char *termination;
     
-    slot = -1;
-    {
-        int i;
-        for (i = 0; i < 10; i++) {
-            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
-                slot = i;
-                break;
-            }
-        }
-    }
-    
+    slot = find_dm5120_slot(address);
+
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
         termination = "\n";
     } else {
@@ -266,7 +270,7 @@ int gpib_read_dm5120(int address, char *buffer, int maxlen) {
     
     delay(100);
     
-    bytes_read = ieee_read(buffer, maxlen-1);
+    bytes_read = ieee_read(buffer, maxlen);   /* ieee_read already keeps one byte for the NUL */
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
     } else {
@@ -282,17 +286,8 @@ int gpib_read_float_dm5120(int address, float *value) {
     int slot;
     char *termination;
     
-    slot = -1;
-    {
-        int i;
-        for (i = 0; i < 10; i++) {
-            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
-                slot = i;
-                break;
-            }
-        }
-    }
-    
+    slot = find_dm5120_slot(address);
+
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
         termination = "\n";
     } else {
@@ -321,17 +316,8 @@ void gpib_remote_dm5120(int address) {
     int slot;
     char *termination;
     
-    slot = -1;
-    {
-        int i;
-        for (i = 0; i < 10; i++) {
-            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
-                slot = i;
-                break;
-            }
-        }
-    }
-    
+    slot = find_dm5120_slot(address);
+
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
         termination = "\n";
     } else {
@@ -348,17 +334,8 @@ void gpib_local_dm5120(int address) {
     int slot;
     char *termination;
     
-    slot = -1;
-    {
-        int i;
-        for (i = 0; i < 10; i++) {
-            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
-                slot = i;
-                break;
-            }
-        }
-    }
-    
+    slot = find_dm5120_slot(address);
+
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
         termination = "\n";
     } else {
@@ -375,17 +352,8 @@ void gpib_clear_dm5120(int address) {
     int slot;
     char *termination;
     
-    slot = -1;
-    {
-        int i;
-        for (i = 0; i < 10; i++) {
-            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
-                slot = i;
-                break;
-            }
-        }
-    }
-    
+    slot = find_dm5120_slot(address);
+
     if (slot != -1 && g_dm5120_config[slot].lf_termination) {
         termination = "\n";
     } else {
@@ -401,16 +369,20 @@ void gpib_clear_dm5120(int address) {
     delay(200);
 }
 
-void gpib_write_dm5010(int address, char *command) {
+int gpib_write_dm5010(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
-    
+
+    if (!command_fits(snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d; %s\r\n", address, command), address)) {
+        return -1;
+    }
+
     gpib_check_srq(address);
     delay(50);
-    
-    sprintf(cmd_buffer, "output %2d; %s\r\n", address, command);
-    ieee_write(cmd_buffer);
-    
+
+    if (ieee_write(cmd_buffer) < 0) return -1;
+
     delay(100);
+    return 0;
 }
 
 int gpib_read_dm5010(int address, char *buffer, int maxlen) {
@@ -422,7 +394,7 @@ int gpib_read_dm5010(int address, char *buffer, int maxlen) {
     
     delay(100);
     
-    bytes_read = ieee_read(buffer, maxlen-1);
+    bytes_read = ieee_read(buffer, maxlen);   /* ieee_read already keeps one byte for the NUL */
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
     } else {
@@ -444,9 +416,6 @@ int gpib_read_float_dm5010(int address, float *value) {
     if (ieee_read(buffer, sizeof(buffer)) > 0) {
         if (sscanf(buffer, "%e", value) == 1) return 1;
         if (sscanf(buffer, "%f", value) == 1) return 1;
-        if (sscanf(buffer, "%eV", value) == 1) return 1;
-        if (sscanf(buffer, "%eA", value) == 1) return 1;
-        if (sscanf(buffer, "%eR", value) == 1) return 1;
     }
     
     return 0;
@@ -574,7 +543,8 @@ void check_gpib_error(void) {
         printf("GPIB Status: %s\n", status);
         
         if (strstr(status, "ERROR") || strstr(status, "Error")) {
-            strcpy(g_error_msg, status);
+            strncpy(g_error_msg, status, sizeof(g_error_msg) - 1);
+            g_error_msg[sizeof(g_error_msg) - 1] = '\0';
             gpib_error = 1;
             
             if (strstr(status, "SEQUENCE")) {

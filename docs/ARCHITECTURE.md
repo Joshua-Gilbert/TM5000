@@ -179,7 +179,7 @@ control size:
   has no identical-code folding, so duplicate functions are consolidated in source instead
   (e.g. the DC5009/DC5010 forwarders).
 
-`tm5000.exe` is 296,728 bytes and `tm5000g.exe` 296,634 bytes (~290 KB each), leaving
+`tm5000.exe` is 316,738 bytes and `tm5000g.exe` 316,468 bytes (~310 KB each), leaving
 room in 640 KB for the pooled 10×1024-sample far buffers (8 bytes per sample plus a
 4-byte time stamp). `tm5000g.exe` swaps `gpib.c` for `gpib_gg.c` + `gridgpib.c` and
 builds `modules.c` / `module_funcs.c` with `-DGRIDGPIB`.
@@ -192,6 +192,20 @@ builds `modules.c` / `module_funcs.c` with `-DGRIDGPIB`.
 optimization routines that are **not called from C** (only `extern`-declared). With
 `OPTION ELIMINATE` they are stripped from the image; they stay in the tree as
 scaffolding to wire in or remove.
+
+They are not safe to call as written:
+
+- All four are `.MODEL SMALL` with near procedures reading stack arguments at `[bp+4]`,
+  while the C side is large-model with Watcom's register calling convention.
+- `cga_asm.asm`: the `PUBLIC` names (`cga_draw_hline_`, …) don't match the procedure names
+  (`_cga_draw_hline`, …). `cga_draw_hline` exits its leading-pixel loop with `cx` still
+  pushed. `cga_clear_screen` writes 32 KB, past CGA's 16 KB.
+- `mem286.asm`: in `fast_fmemcpy_286`, `cmp cx,1000h` clobbers the carry from `shr`, so
+  every aligned copy of an even count moves one extra byte. `fast_memcmp_286` compares
+  the later byte of a mismatched word first, so its sign can disagree with `memcmp`.
+- `fixed286.asm`: `fixed_mul_286`, `fixed_div_286`, `fixed_cos_286` and `fixed_sqrt_286`
+  have wrong arithmetic or stack handling, and `FIXED_PI`, `FIXED_2PI` and `FIXED_PI2`
+  are wrong.
 
 ---
 

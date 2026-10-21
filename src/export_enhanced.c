@@ -377,7 +377,7 @@ int format_scientific_notation(char *buffer, int buffer_size, double value, int 
     }
     
     if (value == 0.0) {
-        snprintf(buffer, buffer_size, "0.000000E+00");
+        snprintf(buffer, buffer_size, "%.*fE+00", precision, 0.0);
         return EXPORT_SUCCESS;
     }
     
@@ -482,7 +482,7 @@ int validate_export_config(export_config *config) {
     return EXPORT_SUCCESS;
 }
 
-int get_export_file_size(char *filename) {
+long get_export_file_size(char *filename) {
     FILE *file;
     long size;
     
@@ -498,8 +498,8 @@ int get_export_file_size(char *filename) {
     fseek(file, 0, SEEK_END);
     size = ftell(file);
     fclose(file);
-    
-    return (int)size;
+
+    return (size < 0) ? 0 : size;
 }
 
 int update_export_statistics(unsigned long samples, unsigned long bytes, float duration) {

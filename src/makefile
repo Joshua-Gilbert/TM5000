@@ -40,53 +40,53 @@ gpib_gg.obj: gpib_gg.c gpib.h gridgpib.h tm5000.h
 gridgpib.obj: gridgpib.c gridgpib.h
 	$(CC) $(CFLAGS) gridgpib.c
 
-modules_g.obj: modules.c modules.h tm5000.h gpib.h data.h
+modules_g.obj: modules.c modules.h tm5000.h gpib.h data.h graphics.h
 	$(CC) $(CFLAGS) -DGRIDGPIB -fo=modules_g.obj modules.c
 
-module_funcs_g.obj: module_funcs.c module_funcs.h tm5000.h
+module_funcs_g.obj: module_funcs.c module_funcs.h tm5000.h modules.h gpib.h
 	$(CC) $(CFLAGS) -DGRIDGPIB -fo=module_funcs_g.obj module_funcs.c
 
-main.obj: main.c tm5000.h
+main.obj: main.c tm5000.h gpib.h graphics.h ui.h data.h
 	$(CC) $(CFLAGS) main.c
 
 gpib.obj: gpib.c gpib.h tm5000.h
 	$(CC) $(CFLAGS) gpib.c
 
-modules.obj: modules.c modules.h tm5000.h gpib.h
+modules.obj: modules.c modules.h tm5000.h gpib.h data.h graphics.h
 	$(CC) $(CFLAGS) modules.c
 
-graphics.obj: graphics.c graphics.h tm5000.h
+graphics.obj: graphics.c graphics.h tm5000.h data.h
 	$(CC) $(CFLAGS) graphics.c
 
-ui.obj: ui.c ui.h tm5000.h graphics.h
+ui.obj: ui.c ui.h tm5000.h graphics.h module_funcs.h math_functions.h modules.h config_profiles.h data.h print.h
 	$(CC) $(CFLAGS) ui.c
 
-data.obj: data.c data.h tm5000.h
+data.obj: data.c data.h tm5000.h modules.h
 	$(CC) $(CFLAGS) data.c
 
-print.obj: print.c print.h tm5000.h graphics.h
+print.obj: print.c print.h tm5000.h graphics.h data.h
 	$(CC) $(CFLAGS) print.c
 
-math_functions.obj: math_functions.c math_functions.h tm5000.h
+math_functions.obj: math_functions.c math_functions.h tm5000.h data.h
 	$(CC) $(CFLAGS) math_functions.c
 
-math_enhanced.obj: math_enhanced.c math_functions.h tm5000.h
+math_enhanced.obj: math_enhanced.c math_functions.h tm5000.h modules.h data.h
 	$(CC) $(CFLAGS) math_enhanced.c
 
-ui_math_menus.obj: ui_math_menus.c ui.h math_functions.h tm5000.h
+ui_math_menus.obj: ui_math_menus.c ui.h math_functions.h tm5000.h data.h
 	$(CC) $(CFLAGS) ui_math_menus.c
 
-module_funcs.obj: module_funcs.c module_funcs.h tm5000.h
+module_funcs.obj: module_funcs.c module_funcs.h tm5000.h modules.h gpib.h
 	$(CC) $(CFLAGS) module_funcs.c
 
 # External GPIB driver library
-ieeeio_w.obj: ieeeio_w.c
+ieeeio_w.obj: ieeeio_w.c ieeeio.h
 	$(CC) $(CFLAGS) ieeeio_w.c
 
-config_profiles.obj: config_profiles.c config_profiles.h tm5000.h
+config_profiles.obj: config_profiles.c config_profiles.h tm5000.h data.h modules.h
 	$(CC) $(CFLAGS) config_profiles.c
 
-export_enhanced.obj: export_enhanced.c data.h tm5000.h
+export_enhanced.obj: export_enhanced.c data.h tm5000.h modules.h
 	$(CC) $(CFLAGS) export_enhanced.c
 
 # Assembly modules (unreferenced; kept out of the exe by OPTION ELIMINATE)
@@ -108,6 +108,8 @@ clean:
 	-del *.obj 2>nul || rm -f *.obj
 	-del $(TARGET) 2>nul || rm -f $(TARGET)
 	-del $(TARGET_G) 2>nul || rm -f $(TARGET_G)
+	-del *.err 2>nul || rm -f *.err
+	-del *.map 2>nul || rm -f *.map
 
 # Incomplete single-command build of tm5000.exe only: omits math_enhanced.c,
 # ui_math_menus.c, config_profiles.c, export_enhanced.c and the .asm files. Use `all`.

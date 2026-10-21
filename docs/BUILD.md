@@ -68,8 +68,8 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (Driver488, 296,728 bytes) and `tm5000g.exe` (GRIDGPIB,
-296,634 bytes), ~290 KB each. Prebuilt copies of both are committed in `src/`.
+Output: `tm5000.exe` (Driver488, 316,738 bytes) and `tm5000g.exe` (GRIDGPIB,
+316,468 bytes), ~310 KB each. Prebuilt copies of both are committed in `src/`.
 
 `tm5000g.exe` uses `gpib_gg.c` + `gridgpib.c` instead of `gpib.c`, and compiles
 `modules.c` / `module_funcs.c` a second time with `-DGRIDGPIB` (as
@@ -89,7 +89,7 @@ GRiDCase 1520.
 
 Other makefile targets:
 
-- `wmake clean` — remove `*.obj` and both executables
+- `wmake clean` — remove `*.obj`, `*.err`, `*.map` and both executables
 - `wmake help`  — print build help
 
 The `wcl` target is **incomplete**: it omits `math_enhanced.c`,

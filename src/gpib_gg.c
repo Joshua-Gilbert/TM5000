@@ -78,7 +78,10 @@ static int d488_command(const char *line)
 
     /* copy without the trailing CR/LF */
     n = strcspn(line, "\r\n");
-    if (n >= (int)sizeof(cmd)) n = sizeof(cmd) - 1;
+    if (n >= (int)sizeof(cmd)) {          /* refuse rather than send a truncated OUTPUT */
+        strcpy(last_err, "ERROR SYNTAX");
+        return -1;
+    }
     memcpy(cmd, line, n);
     cmd[n] = '\0';
     p = skipsp(cmd);
@@ -257,10 +260,12 @@ int ieee_spoll(int address, unsigned char *status)
     return 0;
 }
 
-void gpib_write(int address, char *command)
+/* 0 sent, -1 failed or refused (gg_puts never truncates an over-long command) */
+int gpib_write(int address, char *command)
 {
     int e = gg_puts(address, command);
-    if (e < 0) note_error(e);
+    if (e < 0) { note_error(e); return -1; }
+    return 0;
 }
 
 /* Per-byte read timeout for instruments slow to produce a reading; 0 leaves
@@ -313,10 +318,10 @@ void gpib_clear(int address)  { note_error(gg_clear(address)); }
 /* Serial-poll before each DM5120 write to clear a pending SRQ, as gpib.c does;
  * it costs about 0.5 ms here. lf_termination is ignored: it only changed the
  * Driver488 command line, never the bus data. */
-void gpib_write_dm5120(int address, char *command)
+int gpib_write_dm5120(int address, char *command)
 {
     gpib_check_srq(address);
-    gpib_write(address, command);
+    return gpib_write(address, command);
 }
 
 /* The DM5120 (6.5 digits, AUTOCAL ON) sometimes goes quiet for over 2 s, with
@@ -355,10 +360,10 @@ void gpib_clear_dm5120(int address)
     gpib_clear(address);               /* SDC alone clears it; no ABORT (IFC) as in gpib.c */
 }
 
-void gpib_write_dm5010(int address, char *command)
+int gpib_write_dm5010(int address, char *command)
 {
     gpib_check_srq(address);
-    gpib_write(address, command);
+    return gpib_write(address, command);
 }
 
 int gpib_read_dm5010(int address, char *buffer, int maxlen)
@@ -373,9 +378,6 @@ int gpib_read_float_dm5010(int address, float *value)
     if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
         if (sscanf(buffer, "%e", value) == 1) return 1;
         if (sscanf(buffer, "%f", value) == 1) return 1;
-        if (sscanf(buffer, "%eV", value) == 1) return 1;
-        if (sscanf(buffer, "%eA", value) == 1) return 1;
-        if (sscanf(buffer, "%eR", value) == 1) return 1;
     }
     return 0;
 }

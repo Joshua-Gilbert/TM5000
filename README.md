@@ -137,7 +137,7 @@ See [docs/BUILD.md](docs/BUILD.md).
 ```sh
 # Build (from the source tree)
 cd src
-wmake                     # tm5000.exe + tm5000g.exe (~290 KB each); prebuilt copies are committed
+wmake                     # tm5000.exe + tm5000g.exe (~310 KB each); prebuilt copies are committed
 # WATCOM_BIN defaults to a WSL path; elsewhere: wmake WATCOM_BIN=C:/WATCOM/binnt
 
 # Run on DOS / DOSBox

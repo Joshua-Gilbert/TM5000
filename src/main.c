@@ -132,11 +132,12 @@ int main(void) {
     printf("GPIB driver: %s\n", gpib_driver_name);
     printf("(C) 2025 - For Gridcase 1520\n\n");
     g_has_287 = 0;
+    control_word = 0;   /* without an FPU FNSTCW stores nothing; stack garbage must not read as 0x037F */
 
     _asm {
         ; Without a 287 a waiting FPU instruction can hang, so only no-wait
         ; (FN*) forms belong before the probe result is known.
-        fclex
+        fnclex
 
         fninit
 

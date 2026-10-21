@@ -8,6 +8,7 @@
 #include "gpib.h"
 #include "graphics.h"
 #include <stdarg.h>
+#include <signal.h>
 
 /* Shared GPIB scratch buffers; far to stay out of DGROUP */
 static char __far gpib_cmd_buffer[80];
@@ -201,16 +202,18 @@ void dc5009_clear_overflow(int address) {
 }
 
 /* DC5009 Query Commands */
-void dc5009_query_function(int address, char *buffer) {
+void dc5009_query_function(int address, char *buffer, int size) {
+    buffer[0] = '\0';
     gpib_write(address, "FUNC?");
     GPIB_PACE(50);
-    gpib_read(address, gpib_response_buffer, 80);
+    gpib_read(address, buffer, size);
 }
 
-void dc5009_query_id(int address, char *buffer) {
+void dc5009_query_id(int address, char *buffer, int size) {
+    buffer[0] = '\0';
     gpib_write(address, "ID?");
     GPIB_PACE(50);
-    gpib_read(address, gpib_response_buffer, 80);
+    gpib_read(address, buffer, size);
 }
 
 int dc5009_query_error(int address) {
@@ -386,12 +389,12 @@ void dc5010_measure_fall_time(int address) {
 }
 
 /* DC5010 Query Commands */
-void dc5010_query_function(int address, char *buffer) {
-    dc5009_query_function(address, buffer);
+void dc5010_query_function(int address, char *buffer, int size) {
+    dc5009_query_function(address, buffer, size);
 }
 
-void dc5010_query_id(int address, char *buffer) {
-    dc5009_query_id(address, buffer);
+void dc5010_query_id(int address, char *buffer, int size) {
+    dc5009_query_id(address, buffer, size);
 }
 
 int dc5010_query_error(int address) {
@@ -784,14 +787,14 @@ void configure_dc5009_advanced(int slot) {
                 switch(choice) {
                     case '1': {
                         char func_buffer[80];
-                        dc5009_query_function(address, func_buffer);
-                        printf("   %s\n", gpib_response_buffer);
+                        dc5009_query_function(address, func_buffer, sizeof(func_buffer));
+                        printf("   %s\n", func_buffer);
                         break;
                     }
                     case '2': {
                         char id_buffer[80];
-                        dc5009_query_id(address, id_buffer);
-                        printf("   %s\n", gpib_response_buffer);
+                        dc5009_query_id(address, id_buffer, sizeof(id_buffer));
+                        printf("   %s\n", id_buffer);
                         break;
                     }
                     case '3': {
@@ -1036,14 +1039,14 @@ void configure_dc5010_advanced(int slot) {
                 switch(choice) {
                     case '1': {
                         char func_buffer[80];
-                        dc5010_query_function(address, func_buffer);
-                        printf("   %s\n", gpib_response_buffer);
+                        dc5010_query_function(address, func_buffer, sizeof(func_buffer));
+                        printf("   %s\n", func_buffer);
                         break;
                     }
                     case '2': {
                         char id_buffer[80];
-                        dc5010_query_id(address, id_buffer);
-                        printf("   %s\n", gpib_response_buffer);
+                        dc5010_query_id(address, id_buffer, sizeof(id_buffer));
+                        printf("   %s\n", id_buffer);
                         break;
                     }
                     case '3': {
@@ -1479,35 +1482,30 @@ void configure_fg5010_advanced(int slot) {
 
 /* FG5010 GPIB Control Functions */
 void fg5010_set_frequency(int address, float freq) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "FREQ %.3f", freq);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
 }
 
 void fg5010_set_amplitude(int address, float amp) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "AMPL %.3f", amp);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
 }
 
 void fg5010_set_offset(int address, float offset) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "OFFS %.3f", offset);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
 }
 
 void fg5010_set_waveform(int address, char *waveform) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "FUNC %s", waveform);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
 }
 
 void fg5010_set_duty_cycle(int address, float duty) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "DCYC %.1f", duty);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
@@ -1519,7 +1517,6 @@ void fg5010_enable_output(int address, int enable) {
 }
 
 void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq, float time) {
-    char cmd[100];
     if (enable) {
         sprintf(gpib_cmd_buffer, "SWE:STAT ON;SWE:STAR %.3f;SWE:STOP %.3f;SWE:TIME %.3f", 
                 start_freq, stop_freq, time);
@@ -1531,7 +1528,6 @@ void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq
 }
 
 void fg5010_set_trigger(int address, char *source, char *slope, float level) {
-    char cmd[100];
     sprintf(gpib_cmd_buffer, "TRIG:SOUR %s;TRIG:SLOP %s;TRIG:LEV %.2f", source, slope, level);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
@@ -1548,14 +1544,12 @@ void fg5010_set_invert(int address, int enable) {
 }
 
 void fg5010_set_phase(int address, float phase) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "PHAS %.1f", phase);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
 }
 
 void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth) {
-    char cmd[100];
     if (enable) {
         sprintf(gpib_cmd_buffer, "MOD:STAT ON;MOD:TYP %s;MOD:FREQ %.2f;MOD:DEPT %.1f", 
                 type, freq, depth);
@@ -1567,7 +1561,6 @@ void fg5010_set_modulation(int address, int enable, char *type, float freq, floa
 }
 
 void fg5010_set_burst(int address, int enable, int count, float period) {
-    char cmd[100];
     if (enable) {
         sprintf(gpib_cmd_buffer, "BURS:STAT ON;BURS:NCYC %d;BURS:INT:PER %.3f", count, period);
     } else {
@@ -1578,14 +1571,30 @@ void fg5010_set_burst(int address, int enable, int count, float period) {
 }
 
 int test_fg5010_comm(int address) {
-    
+
     int test_passed = 1;
-    
+    void (*old_sigint)(int);
+    void (*old_sigbreak)(int);
+
     clrscr();
     printf("FG5010 Function Generator Communication Test\n");
     printf("==========================================\n\n");
     printf("Testing FG5010 at GPIB address %d...\n\n", address);
-    
+
+    /* The test overwrites the user's settings and drives whatever is wired to the output */
+    printf("WARNING: this test sets 1 kHz,\n");
+    printf("2 Vpp, SINE and briefly turns the\n");
+    printf("output ON, then leaves it OFF.\n");
+    printf("Current settings will be lost.\n");
+    printf("Continue? (y/n): ");
+    if (toupper(getch()) != 'Y') {
+        printf("\n\nFG5010 test not run.\n");
+        printf("Press any key to continue...");
+        getch();
+        return 1;
+    }
+    printf("\n\n");
+
     printf("Test 1: Device Identification... ");
     gpib_write(address, "*IDN?");
     GPIB_PACE(100);
@@ -1637,6 +1646,9 @@ int test_fg5010_comm(int address) {
     }
     
     printf("\nTest 5: Output Control... ");
+    /* Ctrl-C/Ctrl-Break here would exit with the output live */
+    old_sigint = signal(SIGINT, SIG_IGN);
+    old_sigbreak = signal(SIGBREAK, SIG_IGN);
     gpib_write(address, "OUTP ON");
     GPIB_PACE(100);
     gpib_write(address, "OUTP?");
@@ -1644,14 +1656,20 @@ int test_fg5010_comm(int address) {
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
-        
-        /* Turn output back off for safety */
-        gpib_write(address, "OUTP OFF");
-        GPIB_PACE(50);
     } else {
         printf("FAILED\n");
         test_passed = 0;
     }
+    /* A failed read does not mean OUTP ON was ignored */
+    if (gpib_write(address, "OUTP OFF") != 0) {
+        printf("\n*** OUTPUT MAY STILL BE ON: turn it off at the FG5010 front panel. ***\n");
+        printf("Press any key to continue...");
+        getch();
+        test_passed = 0;
+    }
+    GPIB_PACE(50);
+    signal(SIGINT, old_sigint);
+    signal(SIGBREAK, old_sigbreak);
     
     printf("\nTest 6: Error Status Check... ");
     gpib_write(address, "SYST:ERR?");
@@ -1679,7 +1697,6 @@ int test_fg5010_comm(int address) {
 }
 
 float fg5010_read_frequency(int address) {
-    char buffer[50];
     gpib_write(address, "FREQ?");
     GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
@@ -1689,7 +1706,6 @@ float fg5010_read_frequency(int address) {
 }
 
 int fg5010_read_output_status(int address) {
-    char buffer[20];
     gpib_write(address, "OUTP?");
     GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
@@ -1724,6 +1740,7 @@ void validate_enabled_modules(void) {
                 g_system->modules[i].gpib_address = 0;
                 strcpy(g_system->modules[i].description, "");
                 free_module_buffer(i);
+                forget_trace_slot(i);
             }
         }
     }
@@ -1920,6 +1937,7 @@ void configure_modules(void) {
                 g_system->modules[slot].gpib_address = 0;
                 strcpy(g_system->modules[slot].description, "");
                 free_module_buffer(slot);
+                forget_trace_slot(slot);
             } else if (module_type >= 1 && module_type <= 7) {
                 printf("Enter GPIB address (1-30): ");
                 scanf("%d", &address);
@@ -2010,11 +2028,16 @@ void configure_modules(void) {
                             
                             switch (module_type) {
                                 case MOD_DC5009:
-                                case MOD_DC5010:
                                     test_dc5009_comm(address);
+                                    break;
+                                case MOD_DC5010:
+                                    test_dc5010_comm(address);
                                     break;
                                 case MOD_DM5010:
                                     test_dm5010_comm(address);
+                                    break;
+                                case MOD_FG5010:
+                                    test_fg5010_comm(address);
                                     break;
                                 case MOD_DM5120:
                                     test_dm5120_comm(address);
@@ -2096,31 +2119,29 @@ void display_trace_selection_menu(void) {
     }
 }
 
+/* A slot's trace is shown the first time it has data; after that the user's choice is
+   kept, even across a sync where its buffer was freed (pool resize). A slot that gets a
+   new occupant (module removed, file loaded) must be forgotten with forget_trace_slot. */
+static unsigned char shown_before[10];
+static unsigned char hidden_no_data[10];  /* enabled was forced 0, not the user's choice */
+static unsigned char user_enabled[10];
+
+void forget_trace_slot(int slot) {
+    if (slot < 0 || slot >= 10) return;
+    shown_before[slot] = 0;
+    hidden_no_data[slot] = 0;
+    user_enabled[slot] = 0;
+}
+
 void sync_traces_with_modules(void) {
     int i;
-    int user_enabled[10];  /* user's trace visibility, restored after rebinding */
-    int first_sync = 1;   /* no trace bound yet: show every trace with data */
-    
-    
+
     for (i = 0; i < 10; i++) {
-        if (g_traces[i].data != NULL) {
-            first_sync = 0;
-            break;
-        }
-    }
-    
-    if (!first_sync) {
-        for (i = 0; i < 10; i++) {
+        if (shown_before[i] && !hidden_no_data[i]) {
             user_enabled[i] = g_traces[i].enabled;
         }
-    }
-    
-    for (i = 0; i < 10; i++) {
         g_traces[i].data = NULL;
         g_traces[i].data_count = 0;
-        if (first_sync) {
-            g_traces[i].enabled = 0;
-        }
     }
     
     for (i = 0; i < 10; i++) {
@@ -2154,16 +2175,20 @@ void sync_traces_with_modules(void) {
                     }
                 }
                 
-                if (first_sync) {
-                    g_traces[i].enabled = 1;
-                } else {
-                    g_traces[i].enabled = user_enabled[i];
+                if (!shown_before[i]) {
+                    shown_before[i] = 1;
+                    user_enabled[i] = 1;
                 }
+                g_traces[i].enabled = user_enabled[i];
+                hidden_no_data[i] = 0;
             } else {
                 g_traces[i].enabled = 0;
+                hidden_no_data[i] = 1;
             }
         } else {
             g_traces[i].enabled = 0;
+            shown_before[i] = 0;
+            hidden_no_data[i] = 0;
         }
     }
 }
@@ -2199,13 +2224,11 @@ void init_dm5120_config_enhanced(int slot) {
     g_dm5120_config[slot].sample_rate = 10.0;  /* 10 readings/sec */
 }
 void dm5120_set_function(int address, char *function) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "FUNCT %s", function);
     gpib_write_dm5120(address, gpib_cmd_buffer);
     GPIB_PACE(100);
 }
 void dm5120_set_range(int address, int range) {
-    char cmd[50];
     if (range == 0) {
         gpib_write_dm5120(address, "RANGE AUTO");
     } else {
@@ -2215,7 +2238,6 @@ void dm5120_set_range(int address, int range) {
     delay(50);
 }
 void dm5120_set_filter(int address, int enabled, int value) {
-    char cmd[50];
     
     if (enabled) {
         gpib_write_dm5120(address, "FILTER ON");
@@ -2230,7 +2252,6 @@ void dm5120_set_filter(int address, int enabled, int value) {
     }
 }
 void dm5120_set_trigger(int address, char *source, char *mode) {
-    char cmd[50];
 
     if (!source || !mode) {
         printf("ERROR: dm5120_set_trigger requires both source and mode\n");
@@ -2254,7 +2275,6 @@ void dm5120_set_trigger(int address, char *source, char *mode) {
     GPIB_PACE(50);
 }
 void dm5120_set_digits(int address, int digits) {
-    char cmd[50];
     if (digits >= 3 && digits <= 6) {
         sprintf(gpib_cmd_buffer, "DIGITS %d", digits);
         gpib_write_dm5120(address, gpib_cmd_buffer);
@@ -2262,7 +2282,6 @@ void dm5120_set_digits(int address, int digits) {
     }
 }
 void dm5120_set_null(int address, int enabled, float value) {
-    char cmd[50];
     if (enabled) {
         sprintf(gpib_cmd_buffer, "NULL %.6e", value);
         gpib_write_dm5120(address, gpib_cmd_buffer);
@@ -2407,7 +2426,6 @@ int dm5120_calculate_delay(int slot, int operation_type, int sample_count) {
 }
 
 void dm5120_enable_buffering(int address, int slot, int buffer_size) {
-    char cmd[50];
     
     /* DM5120 internal buffer holds 500 readings */
     if (buffer_size > 500) {
@@ -2425,9 +2443,13 @@ void dm5120_enable_buffering(int address, int slot, int buffer_size) {
     delay(dm5120_calculate_delay(slot, 1, buffer_size));
 }
 
-/* Check a STOINT interval against the manual's listed conflicts; 0 = OK, <0 = conflict code */
+/* Check a STOINT interval against the manual's listed conflicts; 0 = OK, -1..-5 = conflict
+   code, DM5120_STOINT_BAD_SLOT = slot out of range */
 int dm5120_validate_stoint_settings(int slot, int interval_ms) {
-    dm5120_config *cfg = &g_dm5120_config[slot];
+    dm5120_config *cfg;
+
+    if (slot < 0 || slot >= 10) return DM5120_STOINT_BAD_SLOT;
+    cfg = &g_dm5120_config[slot];
 
     /* STOINT 1-14 ms conflicts with: */
     if (interval_ms >= 1 && interval_ms <= 14) {
@@ -2457,12 +2479,25 @@ int dm5120_validate_stoint_settings(int slot, int interval_ms) {
     return 0; /* No conflicts */
 }
 
-/* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict */
-void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
-    char cmd[50];
+/* STOINT interval for cfg->sample_rate (readings/s); 100 ms if the rate is unusable */
+static int dm5120_stoint_from_rate(dm5120_config *cfg) {
+    if (cfg->sample_rate >= 0.05 && cfg->sample_rate <= 1000.0) {
+        return (int)(1000.0 / cfg->sample_rate + 0.5);
+    }
+    return 100;
+}
+
+/* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict, sends nothing
+   for a bad slot. Returns 0 if sent, -1 if not. */
+int dm5120_set_storage_interval(int address, int slot, int interval_ms) {
     int validation_result;
+    int status;
 
     validation_result = dm5120_validate_stoint_settings(slot, interval_ms);
+    if (validation_result == DM5120_STOINT_BAD_SLOT) {
+        printf("ERROR: invalid DM5120 slot %d (valid: 0-9), STOINT not sent\n", slot);
+        return -1;
+    }
     if (validation_result != 0) {
         printf("WARNING: STOINT %d conflicts with current settings (code %d)\n", 
                interval_ms, validation_result);
@@ -2471,13 +2506,15 @@ void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
     
     if (interval_ms == 0) {
         /* One shot mode - store one reading per trigger */
-        gpib_write_dm5120(address, "STOINT ONE");
+        status = gpib_write_dm5120(address, "STOINT ONE");
     } else {
         sprintf(gpib_cmd_buffer, "STOINT %d", interval_ms);
-        gpib_write_dm5120(address, gpib_cmd_buffer);
+        status = gpib_write_dm5120(address, gpib_cmd_buffer);
     }
+    if (status != 0) return -1;
 
     delay(dm5120_calculate_measurement_time(slot, 3, 1));
+    return 0;
 }
 
 int dm5120_query_storage_interval(int address) {
@@ -2503,7 +2540,6 @@ int dm5120_query_storage_interval(int address) {
 
 /* Set FULL/HALF/RDY/OPC event masks, then enable RQS */
 void dm5120_configure_srq_events(int address, int enable_full, int enable_half, int enable_rdy, int enable_opc) {
-    char cmd[50];
 
     sprintf(gpib_cmd_buffer, "FULL %s", enable_full ? "ON" : "OFF");
     gpib_write_dm5120(address, gpib_cmd_buffer);
@@ -2581,7 +2617,6 @@ int dm5120_check_buffer_status(int address) {
    and read it back; returns samples read */
 int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, int max_samples) {
     dm5120_config *cfg = &g_dm5120_config[slot];
-    char cmd[50];
     char response[GPIB_BUFFER_SIZE];
     float value;
     int count = 0;
@@ -2790,7 +2825,7 @@ int dm5120_validate_configuration(int slot) {
     }
 
     if (cfg->buffer_enabled) {
-        int stoint_result = dm5120_validate_stoint_settings(slot, 100); /* Test with 100ms */
+        int stoint_result = dm5120_validate_stoint_settings(slot, dm5120_stoint_from_rate(cfg));
         if (stoint_result != 0) {
             printf("WARNING: STOINT timing conflicts detected (code %d)\n", stoint_result);
             switch (stoint_result) {
@@ -2799,6 +2834,7 @@ int dm5120_validate_configuration(int slot) {
                 case -3: printf("  - CIRCULAR buffer conflicts with fast intervals\n"); break;
                 case -4: printf("  - High resolution (5-6 digits) conflicts\n"); break;
                 case -5: printf("  - Very fast intervals conflict with resolution\n"); break;
+                case DM5120_STOINT_BAD_SLOT: printf("  - Invalid slot\n"); break;
             }
             warnings++;
         }
@@ -2924,7 +2960,7 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
 
     dm5120_enable_buffering(address, slot, buffer_size);
 
-    dm5120_set_storage_interval(address, slot, cfg->sample_rate > 0 ? (int)(cfg->sample_rate * 1000) : 100);
+    dm5120_set_storage_interval(address, slot, dm5120_stoint_from_rate(cfg));
 
     total_wait_time = dm5120_calculate_delay(slot, 2, buffer_size);
     printf("Collecting %d samples at %d digits - estimated time: %dms\n",
@@ -3110,7 +3146,6 @@ float dm5120_get_buffer_max(int address) {
 }
 
 void dm5120_set_buffer_size(int address, int size) {
-    char cmd[50];
     
     if (size == 0) {
         gpib_write_dm5120(address, "BUFSZ CIRCULAR");
@@ -3517,19 +3552,19 @@ void test_dm5120_comm_debug(int address) {
     
     printf("\n2. Sending function setup:\n");
     sprintf(gpib_cmd_buffer, "output %2d; FUNCT DCV\r\n", address);
-    printf("   %s\n", gpib_response_buffer);
+    printf("   %s\n", gpib_cmd_buffer);
     ieee_write(gpib_cmd_buffer);
     GPIB_PACE(200);
     
     printf("\n3. Requesting reading:\n");
     sprintf(gpib_cmd_buffer, "output %2d; READ ADC\r\n", address);
-    printf("   %s\n", gpib_response_buffer);
+    printf("   %s\n", gpib_cmd_buffer);
     ieee_write(gpib_cmd_buffer);
     GPIB_PACE(200);
     
     printf("\n4. Reading response:\n");
     sprintf(gpib_cmd_buffer, "enter %2d\r\n", address);
-    printf("   %s\n", gpib_response_buffer);
+    printf("   %s\n", gpib_cmd_buffer);
     ieee_write(gpib_cmd_buffer);
     GPIB_PACE(200);
     
@@ -3799,91 +3834,82 @@ void configure_dm5010_advanced(int slot) {
     }
 }
 void dm5010_set_function(int address, char *function) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "CONF:%s", function);
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 void dm5010_set_range(int address, char *function, float range) {
-    char cmd[100];
     if (range == 0.0) {
         sprintf(gpib_cmd_buffer, "CONF:%s AUTO", function);
     } else {
         sprintf(gpib_cmd_buffer, "CONF:%s %e", function, range);
     }
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 void dm5010_set_filter(int address, int enabled, int count) {
-    char cmd[50];
     if (enabled) {
         sprintf(gpib_cmd_buffer, "AVER:STAT ON");
-        gpib_write_dm5010(address, cmd);
+        gpib_write_dm5010(address, gpib_cmd_buffer);
         sprintf(gpib_cmd_buffer, "AVER:COUN %d", count);
-        gpib_write_dm5010(address, cmd);
+        gpib_write_dm5010(address, gpib_cmd_buffer);
     } else {
         sprintf(gpib_cmd_buffer, "AVER:STAT OFF");
-        gpib_write_dm5010(address, cmd);
+        gpib_write_dm5010(address, gpib_cmd_buffer);
     }
 }
 void dm5010_set_trigger(int address, char *mode) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "TRIG:SOUR %s", mode);
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 void dm5010_set_autozero(int address, int enabled) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "ZERO:AUTO %s", enabled ? "ON" : "OFF");
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 void dm5010_set_null(int address, int enabled, float value) {
-    char cmd[50];
     if (enabled) {
         sprintf(gpib_cmd_buffer, "CALC:NULL:OFFS %e", value);
-        gpib_write_dm5010(address, cmd);
+        gpib_write_dm5010(address, gpib_cmd_buffer);
         sprintf(gpib_cmd_buffer, "CALC:NULL:STAT ON");
-        gpib_write_dm5010(address, cmd);
+        gpib_write_dm5010(address, gpib_cmd_buffer);
     } else {
         sprintf(gpib_cmd_buffer, "CALC:NULL:STAT OFF");
-        gpib_write_dm5010(address, cmd);
+        gpib_write_dm5010(address, gpib_cmd_buffer);
     }
 }
 void dm5010_set_calculation(int address, int mode, float factor, float offset) {
-    char cmd[100];
     switch(mode) {
         case 1: /* Average */
             sprintf(gpib_cmd_buffer, "CALC:AVER:STAT ON");
             break;
         case 2: /* Scale */
             sprintf(gpib_cmd_buffer, "CALC:SCAL:GAIN %e", factor);
-            gpib_write_dm5010(address, cmd);
+            gpib_write_dm5010(address, gpib_cmd_buffer);
             sprintf(gpib_cmd_buffer, "CALC:SCAL:OFFS %e", offset);
-            gpib_write_dm5010(address, cmd);
+            gpib_write_dm5010(address, gpib_cmd_buffer);
             sprintf(gpib_cmd_buffer, "CALC:SCAL:STAT ON");
             break;
         case 3: /* dBm */
             sprintf(gpib_cmd_buffer, "CALC:DBM:REF %e", factor);
-            gpib_write_dm5010(address, cmd);
+            gpib_write_dm5010(address, gpib_cmd_buffer);
             sprintf(gpib_cmd_buffer, "CALC:DBM:STAT ON");
             break;
         case 4: /* dBr */
             sprintf(gpib_cmd_buffer, "CALC:DB:REF %e", factor);
-            gpib_write_dm5010(address, cmd);
+            gpib_write_dm5010(address, gpib_cmd_buffer);
             sprintf(gpib_cmd_buffer, "CALC:DB:STAT ON");
             break;
         default:
             sprintf(gpib_cmd_buffer, "CALC:STAT OFF");
             break;
     }
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 void dm5010_beeper(int address, int enabled) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "SYST:BEEP:STAT %s", enabled ? "ON" : "OFF");
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 void dm5010_lock_front_panel(int address, int locked) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "SYST:LOCK %s", locked ? "ON" : "OFF");
-    gpib_write_dm5010(address, cmd);
+    gpib_write_dm5010(address, gpib_cmd_buffer);
 }
 float read_dm5010_enhanced(int address, int slot) {
     
@@ -4042,7 +4068,6 @@ void ps5004_init(int address) {
     GPIB_PACE(100);
 }
 void ps5004_set_voltage(int address, float voltage) {
-    char cmd[50];
     if (voltage < 0.0) voltage = 0.0;
     if (voltage > 20.0) voltage = 20.0;
     sprintf(gpib_cmd_buffer, "VOLTAGE %.4f", voltage);
@@ -4050,7 +4075,6 @@ void ps5004_set_voltage(int address, float voltage) {
     GPIB_PACE(50);
 }
 void ps5004_set_current(int address, float current) {
-    char cmd[50];
     if (current < 0.01) current = 0.01;    /* 10mA minimum */
     if (current > 0.305) current = 0.305;  /* 305mA maximum */
     sprintf(gpib_cmd_buffer, "CURRENT %.3f", current);
@@ -4066,7 +4090,6 @@ void ps5004_set_output(int address, int on) {
     delay(50);
 }
 void ps5004_set_display(int address, char *mode) {
-    char cmd[50];
     sprintf(gpib_cmd_buffer, "DISPLAY %s", mode);
     gpib_write(address, gpib_cmd_buffer);
     GPIB_PACE(50);
@@ -4211,7 +4234,6 @@ void ps5010_init(int address) {
     delay(500);  /* PS5010 needs time for reset */
 }
 void ps5010_set_voltage(int address, int channel, float voltage) {
-    char cmd[50];
     
     switch(channel) {
         case 1:  /* Positive floating supply */
@@ -4237,7 +4259,6 @@ void ps5010_set_voltage(int address, int channel, float voltage) {
     GPIB_PACE(50);
 }
 void ps5010_set_current(int address, int channel, float current) {
-    char cmd[50];
     
     switch(channel) {
         case 1:  /* Positive supply */
@@ -4263,7 +4284,6 @@ void ps5010_set_current(int address, int channel, float current) {
     GPIB_PACE(50);
 }
 void ps5010_set_output(int address, int channel, int on) {
-    char cmd[50];
     
     switch(channel) {
         case 0:  /* All outputs */
@@ -4283,7 +4303,6 @@ void ps5010_set_output(int address, int channel, int on) {
     GPIB_PACE(50);
 }
 void ps5010_set_tracking_voltage(int address, float voltage) {
-    char cmd[50];
     
     if (voltage < 0.0) voltage = 0.0;
     if (voltage > 40.0) voltage = 40.0;

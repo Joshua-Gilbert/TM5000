@@ -48,13 +48,14 @@ void save_dc5009_config(FILE *fp, int slot);
 void save_dc5010_config(FILE *fp, int slot);
 void save_fg5010_config(FILE *fp, int slot);
 
-void load_dm5120_config(FILE *fp, int slot);
-void load_dm5010_config(FILE *fp, int slot);
-void load_ps5004_config(FILE *fp, int slot);
-void load_ps5010_config(FILE *fp, int slot);
-void load_dc5009_config(FILE *fp, int slot);
-void load_dc5010_config(FILE *fp, int slot);
-void load_fg5010_config(FILE *fp, int slot);
+/* Return 1 with the next section header left in line, 0 at end of file */
+int load_dm5120_config(FILE *fp, int slot, char *line, int line_size);
+int load_dm5010_config(FILE *fp, int slot, char *line, int line_size);
+int load_ps5004_config(FILE *fp, int slot, char *line, int line_size);
+int load_ps5010_config(FILE *fp, int slot, char *line, int line_size);
+int load_dc5009_config(FILE *fp, int slot, char *line, int line_size);
+int load_dc5010_config(FILE *fp, int slot, char *line, int line_size);
+int load_fg5010_config(FILE *fp, int slot, char *line, int line_size);
 
 /* Export (export_enhanced.c) */
 
@@ -135,7 +136,7 @@ int estimate_compressed_size(char *filename);
 
 /* Export Validation and Utilities */
 int validate_export_config(export_config *config);
-int get_export_file_size(char *filename);
+long get_export_file_size(char *filename);
 int get_estimated_export_size(export_config *config);
 int cleanup_export_temp_files(void);
 

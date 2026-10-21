@@ -7,6 +7,7 @@
 #include "data.h"
 #include "modules.h"
 #include <stdlib.h>
+#include <stddef.h>
 
 char g_current_profile_name[PROFILE_NAME_LENGTH] = "";
 unsigned char g_profile_modified = 0;
@@ -40,15 +41,21 @@ int init_profile_system(void) {
 
     fclose(file);
 
-    if (memcmp(file_header.magic, PROFILE_MAGIC, 4) != 0 || 
-        file_header.version != PROFILE_VERSION) {
+    if (memcmp(file_header.magic, PROFILE_MAGIC, 4) != 0) {
         return PROFILE_ERROR_CORRUPT;
     }
-    
+
+    if (file_header.version != PROFILE_VERSION) {
+        return PROFILE_ERROR_VERSION;
+    }
+
+    /* The menu calls this on every entry; keep the current-profile state after the first */
+    if (!profiles_loaded) {
+        g_current_profile_name[0] = '\0';
+        g_profile_modified = 0;
+    }
     profiles_loaded = 1;
-    g_current_profile_name[0] = '\0';
-    g_profile_modified = 0;
-    
+
     return PROFILE_SUCCESS;
 }
 
@@ -57,8 +64,8 @@ int save_config_profile(char *name, char *description) {
     config_profile *profile;
     FILE *file;
     long profile_offset;
-    int profile_index, i;
-    profile_list_entry existing_profiles[MAX_CONFIG_PROFILES];
+    int profile_index, i, j, slot, result;
+    static profile_list_entry existing_profiles[MAX_CONFIG_PROFILES];  /* static: the DOS stack is 2 KB */
     int profile_count;
 
     profile = (config_profile *) malloc(sizeof(config_profile));
@@ -90,19 +97,23 @@ int save_config_profile(char *name, char *description) {
         }
     }
     
-    if (profile_index == -1) {
+    if (profile_index != -1) {
+        slot = existing_profiles[profile_index].slot;
+    } else {
         if (profile_count >= MAX_CONFIG_PROFILES) {
             free(profile);
             return PROFILE_ERROR_FULL;
         }
-        for (i = 0; i < MAX_CONFIG_PROFILES; i++) {
-            if (!existing_profiles[i].valid) {
-                profile_index = i;
+        /* First file slot not held by a listed profile */
+        for (slot = 0; slot < MAX_CONFIG_PROFILES; slot++) {
+            for (j = 0; j < profile_count; j++) {
+                if (existing_profiles[j].slot == slot) {
+                    break;
+                }
+            }
+            if (j == profile_count) {
                 break;
             }
-        }
-        if (profile_index == -1) {
-            profile_index = profile_count;
         }
     }
 
@@ -117,15 +128,16 @@ int save_config_profile(char *name, char *description) {
     strncpy(profile->description, description, PROFILE_DESC_LENGTH - 1);
     profile->description[PROFILE_DESC_LENGTH - 1] = '\0';
     
-    profile->created = (profile_index == -1) ? time(NULL) : existing_profiles[profile_index].modified;
     profile->modified = time(NULL);
+    profile->created = (profile_index == -1) ? profile->modified : existing_profiles[profile_index].created;
     profile->flags = PROFILE_FLAG_AUTO_TIMESTAMP;
 
     profile->checksum = calculate_profile_checksum(profile);
 
-    if (validate_config_profile(profile) != PROFILE_SUCCESS) {
+    result = validate_config_profile(profile);
+    if (result != PROFILE_SUCCESS) {
         free(profile);
-        return PROFILE_ERROR_INVALID_NAME;
+        return result;
     }
 
     file = fopen(profile_file_path, "r+b");
@@ -134,7 +146,7 @@ int save_config_profile(char *name, char *description) {
         return PROFILE_ERROR_FILE_IO;
     }
 
-    profile_offset = sizeof(profile_file_header) + (profile_index * sizeof(config_profile));
+    profile_offset = sizeof(profile_file_header) + ((long) slot * sizeof(config_profile));
 
     if (fseek(file, profile_offset, SEEK_SET) != 0) {
         fclose(file);
@@ -149,8 +161,8 @@ int save_config_profile(char *name, char *description) {
     }
 
     /* New slot past the old count: bump the header's profile_count */
-    if (profile_count <= profile_index) {
-        file_header.profile_count = profile_index + 1;
+    if (file_header.profile_count <= slot) {
+        file_header.profile_count = slot + 1;
 
         if (fseek(file, 0, SEEK_SET) != 0) {
             fclose(file);
@@ -180,7 +192,7 @@ int load_config_profile(char *name) {
     FILE *file;
     long profile_offset;
     int profile_index, i;
-    profile_list_entry existing_profiles[MAX_CONFIG_PROFILES];
+    static profile_list_entry existing_profiles[MAX_CONFIG_PROFILES];  /* static: the DOS stack is 2 KB */
     int profile_count;
 
     profile = (config_profile *) malloc(sizeof(config_profile));
@@ -214,7 +226,8 @@ int load_config_profile(char *name) {
         return PROFILE_ERROR_FILE_IO;
     }
 
-    profile_offset = sizeof(profile_file_header) + (profile_index * sizeof(config_profile));
+    profile_offset = sizeof(profile_file_header) +
+                     ((long) existing_profiles[profile_index].slot * sizeof(config_profile));
 
     if (fseek(file, profile_offset, SEEK_SET) != 0) {
         fclose(file);
@@ -250,8 +263,8 @@ int load_config_profile(char *name) {
 
 /* Zeroes the slot in place; later slots do not move. */
 int delete_config_profile(char *name) {
-    profile_list_entry existing_profiles[MAX_CONFIG_PROFILES];
-    config_profile empty_profile;
+    static profile_list_entry existing_profiles[MAX_CONFIG_PROFILES];  /* static: the DOS stack is 2 KB */
+    static config_profile empty_profile;
     FILE *file;
     long profile_offset;
     int profile_index, i;
@@ -282,8 +295,9 @@ int delete_config_profile(char *name) {
         return PROFILE_ERROR_FILE_IO;
     }
     
-    profile_offset = sizeof(profile_file_header) + (profile_index * sizeof(config_profile));
-    
+    profile_offset = sizeof(profile_file_header) +
+                     ((long) existing_profiles[profile_index].slot * sizeof(config_profile));
+
     if (fseek(file, profile_offset, SEEK_SET) != 0) {
         fclose(file);
         return PROFILE_ERROR_FILE_IO;
@@ -304,8 +318,8 @@ int delete_config_profile(char *name) {
     return PROFILE_SUCCESS;
 }
 
-/* Returns valid (named, checksum-OK) profiles packed into profiles[0..count-1], so
-   a list index is not a file slot once a slot has been deleted. Also reloads file_header. */
+/* Returns valid (named, checksum-OK) profiles packed into profiles[0..count-1]; a list
+   index is not a file slot, use .slot for that. Also reloads file_header. */
 int list_config_profiles(profile_list_entry profiles[], int max_count) {
     FILE *file;
     config_profile *profile;
@@ -332,7 +346,7 @@ int list_config_profiles(profile_list_entry profiles[], int max_count) {
     }
     
     for (i = 0; i < MAX_CONFIG_PROFILES && count < max_count; i++) {
-        profile_offset = sizeof(profile_file_header) + (i * sizeof(config_profile));
+        profile_offset = sizeof(profile_file_header) + ((long) i * sizeof(config_profile));
         
         if (fseek(file, profile_offset, SEEK_SET) != 0) {
             break;
@@ -349,7 +363,9 @@ int list_config_profiles(profile_list_entry profiles[], int max_count) {
             strncpy(profiles[count].description, profile->description, PROFILE_DESC_LENGTH - 1);
             profiles[count].description[PROFILE_DESC_LENGTH - 1] = '\0';
             
+            profiles[count].created = profile->created;
             profiles[count].modified = profile->modified;
+            profiles[count].slot = (unsigned char) i;
             profiles[count].valid = 1;
             count++;
         }
@@ -415,21 +431,24 @@ int apply_config_profile(config_profile *profile) {
         g_system->modules[i].module_type = profile->module_types[i];
         g_system->modules[i].gpib_address = profile->gpib_addresses[i];
         g_system->modules[i].is_result = 0;  /* profiles hold real modules only (FINDINGS #1) */
+        forget_trace_slot(i);
     }
     
     return PROFILE_SUCCESS;
 }
 
-/* Rotating byte sum over all but the last 2 bytes of the struct. checksum is not the
-   last field (packed, flags follows it), so its low byte is included and flags is not. */
+/* Rotating byte sum over all but the last 2 bytes of the struct (flags is not covered).
+   That range includes the checksum field's low byte, which is hashed as 0 so save
+   (field still 0) and verify (field set) agree and existing files still verify. */
 unsigned short calculate_profile_checksum(config_profile *profile) {
     unsigned short checksum = 0;
     unsigned char *data = (unsigned char *)profile;
     int size = sizeof(config_profile) - sizeof(profile->checksum);
+    int skip = offsetof(config_profile, checksum);
     int i;
-    
+
     for (i = 0; i < size; i++) {
-        checksum += data[i];
+        checksum += (i >= skip) ? 0 : data[i];
         checksum = (checksum << 1) | (checksum >> 15);  /* Rotate left */
     }
     
@@ -475,7 +494,7 @@ int validate_config_profile(config_profile *profile) {
     /* GPIB primary addresses are 0-30 */
     for (i = 0; i < 10; i++) {
         if (profile->gpib_addresses[i] > 30) {
-            return PROFILE_ERROR_INVALID_NAME;
+            return PROFILE_ERROR_INVALID_ADDR;
         }
     }
     
@@ -485,7 +504,7 @@ int validate_config_profile(config_profile *profile) {
 /* Header plus MAX_CONFIG_PROFILES zeroed slots, so every slot offset is seekable. */
 int create_profile_file(void) {
     FILE *file;
-    config_profile empty_profile;
+    static config_profile empty_profile;  /* static: the DOS stack is 2 KB */
     int i;
 
     memset(&file_header, 0, sizeof(profile_file_header));
