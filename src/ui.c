@@ -423,9 +423,11 @@ void configuration_profiles_menu(void) {
     if (result != PROFILE_SUCCESS) {
         if (result == PROFILE_ERROR_CORRUPT) {
             printf("\nPROFILES.DAT in the current directory is not a TM5000 profile file.\n");
+            printf("Rename or delete it to start a new one.\n");
         } else if (result == PROFILE_ERROR_VERSION) {
             printf("\nPROFILES.DAT in the current directory was written by a different\n");
-            printf("TM5000 version. The file was left unchanged.\n");
+            printf("TM5000 version. The file was left unchanged; use that version, or\n");
+            printf("rename it to start a new one here.\n");
         } else {
             printf("\nCannot create or read PROFILES.DAT in the current directory.\n");
         }

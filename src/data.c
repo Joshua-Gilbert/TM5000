@@ -38,6 +38,10 @@ void free_module_buffer(int slot) {
     if (slot < 0 || slot >= 10) return;
     
     if (g_system->modules[slot].module_data) {
+        if (g_traces[slot].data == g_system->modules[slot].module_data) {
+            g_traces[slot].data = NULL;
+            g_traces[slot].data_count = 0;
+        }
         _ffree(g_system->modules[slot].module_data);
         g_system->modules[slot].module_data = NULL;
         g_system->modules[slot].module_data_size = 0;

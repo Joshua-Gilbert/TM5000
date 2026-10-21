@@ -1132,11 +1132,14 @@ void dm5120_stoint_menu(int address, int slot) {
                 printf("\nEnter ms (1-999999): ");
                 scanf("%d", &interval);
                 if (interval >= 1 && interval <= 999999) {
-                    dm5120_set_storage_interval(address, slot, interval);
-                    printf("Set to %d ms\n", interval);
-                    validation_result = dm5120_validate_stoint_settings(slot, interval);
-                    if (validation_result < 0) {
-                        printf("WARNING: %s\n", conflict_msgs[-validation_result-1]);
+                    if (dm5120_set_storage_interval(address, slot, interval) == 0) {
+                        printf("Set to %d ms\n", interval);
+                        validation_result = dm5120_validate_stoint_settings(slot, interval);
+                        if (validation_result < 0) {
+                            printf("WARNING: %s\n", conflict_msgs[-validation_result-1]);
+                        }
+                    } else {
+                        printf("STOINT not set\n");
                     }
                 } else {
                     printf("Invalid range\n");

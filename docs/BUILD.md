@@ -68,7 +68,7 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (280,284 bytes, ~274 KB).
+Output: `tm5000.exe` (282,470 bytes, ~276 KB).
 
 Other makefile targets:
 

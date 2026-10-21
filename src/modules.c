@@ -6,6 +6,7 @@
 #include "modules.h"
 #include "gpib.h"
 #include "graphics.h"
+#include <signal.h>
 
 /* Shared GPIB scratch buffers; far to stay out of DGROUP */
 static char __far gpib_cmd_buffer[80];
@@ -1569,8 +1570,10 @@ void fg5010_set_burst(int address, int enable, int count, float period) {
 }
 
 int test_fg5010_comm(int address) {
-    
+
     int test_passed = 1;
+    void (*old_sigint)(int);
+    void (*old_sigbreak)(int);
     
     clrscr();
     printf("FG5010 Function Generator Communication Test\n");
@@ -1578,8 +1581,10 @@ int test_fg5010_comm(int address) {
     printf("Testing FG5010 at GPIB address %d...\n\n", address);
 
     /* The test overwrites the user's settings and drives whatever is wired to the output */
-    printf("WARNING: This test sets 1 kHz, 2 Vpp, SINE and briefly turns\n");
-    printf("the output ON. Current generator settings will be lost.\n");
+    printf("WARNING: this test sets 1 kHz,\n");
+    printf("2 Vpp, SINE and briefly turns the\n");
+    printf("output ON, then leaves it OFF.\n");
+    printf("Current settings will be lost.\n");
     printf("Continue? (y/n): ");
     if (toupper(getch()) != 'Y') {
         printf("\n\nFG5010 test not run.\n");
@@ -1640,6 +1645,9 @@ int test_fg5010_comm(int address) {
     }
     
     printf("\nTest 5: Output Control... ");
+    /* Ctrl-C/Ctrl-Break here would exit with the output live */
+    old_sigint = signal(SIGINT, SIG_IGN);
+    old_sigbreak = signal(SIGBREAK, SIG_IGN);
     gpib_write(address, "OUTP ON");
     delay(100);
     gpib_write(address, "OUTP?");
@@ -1652,8 +1660,15 @@ int test_fg5010_comm(int address) {
         test_passed = 0;
     }
     /* A failed read does not mean OUTP ON was ignored */
-    gpib_write(address, "OUTP OFF");
+    if (gpib_write(address, "OUTP OFF") != 0) {
+        printf("\n*** OUTPUT MAY STILL BE ON: turn it off at the FG5010 front panel. ***\n");
+        printf("Press any key to continue...");
+        getch();
+        test_passed = 0;
+    }
     delay(50);
+    signal(SIGINT, old_sigint);
+    signal(SIGBREAK, old_sigbreak);
     
     printf("\nTest 6: Error Status Check... ");
     gpib_write(address, "SYST:ERR?");
@@ -2620,14 +2635,15 @@ static int dm5120_stoint_from_rate(dm5120_config *cfg) {
 }
 
 /* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict, sends nothing
-   for a bad slot */
-void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
+   for a bad slot. Returns 0 if sent, -1 if not. */
+int dm5120_set_storage_interval(int address, int slot, int interval_ms) {
     int validation_result;
+    int status;
 
     validation_result = dm5120_validate_stoint_settings(slot, interval_ms);
     if (validation_result == DM5120_STOINT_BAD_SLOT) {
-        printf("ERROR: invalid DM5120 slot %d, STOINT not sent\n", slot);
-        return;
+        printf("ERROR: invalid DM5120 slot %d (valid: 0-9), STOINT not sent\n", slot);
+        return -1;
     }
     if (validation_result != 0) {
         printf("WARNING: STOINT %d conflicts with current settings (code %d)\n", 
@@ -2637,13 +2653,15 @@ void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
     
     if (interval_ms == 0) {
         /* One shot mode - store one reading per trigger */
-        gpib_write_dm5120(address, "STOINT ONE");
+        status = gpib_write_dm5120(address, "STOINT ONE");
     } else {
         sprintf(gpib_cmd_buffer, "STOINT %d", interval_ms);
-        gpib_write_dm5120(address, gpib_cmd_buffer);
+        status = gpib_write_dm5120(address, gpib_cmd_buffer);
     }
-    
+    if (status != 0) return -1;
+
     delay(dm5120_calculate_measurement_time(slot, 3, 1));
+    return 0;
 }
 
 int dm5120_query_storage_interval(int address) {

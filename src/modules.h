@@ -41,7 +41,7 @@ float dm5120_get_measurement_rate(int slot, int trigger_mode);
 int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_count);
 #define DM5120_STOINT_BAD_SLOT (-6)
 int dm5120_validate_stoint_settings(int slot, int interval_ms);
-void dm5120_set_storage_interval(int address, int slot, int interval_ms);
+int dm5120_set_storage_interval(int address, int slot, int interval_ms);
 
 /* DM5120 SRQ events */
 void dm5120_configure_srq_events(int address, int enable_full, int enable_half, int enable_rdy, int enable_opc);

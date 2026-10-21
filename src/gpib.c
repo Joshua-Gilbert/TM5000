@@ -91,16 +91,22 @@ static int find_dm5120_slot(int address) {
     return -1;
 }
 
-void gpib_write(int address, char *command) {
+/* Never send a truncated command to an instrument. */
+static int command_fits(int len, int address) {
+    if (len < 0 || len >= GPIB_BUFFER_SIZE) {
+        printf("Error: command for GPIB address %d is too long, not sent\n", address);
+        return 0;
+    }
+    return 1;
+}
+
+/* Returns 0 once the command is handed to the driver, -1 if it was refused or the write failed. */
+int gpib_write(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
     int is_dm5120;
-    int len;
 
-    /* Never send a truncated command to an instrument. */
-    len = snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d;%s\r\n", address, command);
-    if (len < 0 || len >= (int)sizeof(cmd_buffer)) {
-        printf("Error: GPIB command too long, not sent\n");
-        return;
+    if (!command_fits(snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d;%s\r\n", address, command), address)) {
+        return -1;
     }
 
     is_dm5120 = (find_dm5120_slot(address) != -1);
@@ -110,9 +116,10 @@ void gpib_write(int address, char *command) {
         delay(50);
     }
 
-    ieee_write(cmd_buffer);
+    if (ieee_write(cmd_buffer) < 0) return -1;
 
     delay(is_dm5120 ? 100 : 50);
+    return 0;
 }
 
 int gpib_read(int address, char *buffer, int maxlen) {
@@ -178,10 +185,9 @@ void gpib_clear(int address) {
  * DM5120 variants: each finds the slot by address and terminates with LF only when
  * that slot's lf_termination is set (instrument front panel shows "LF"), else CRLF.
  */
-void gpib_write_dm5120(int address, char *command) {
+int gpib_write_dm5120(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
     int slot;
-    int len;
     char *termination;
 
     slot = find_dm5120_slot(address);
@@ -192,18 +198,17 @@ void gpib_write_dm5120(int address, char *command) {
         termination = "\r\n";
     }
 
-    len = snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d; %s%s", address, command, termination);
-    if (len < 0 || len >= (int)sizeof(cmd_buffer)) {
-        printf("Error: GPIB command too long, not sent\n");
-        return;
+    if (!command_fits(snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d; %s%s", address, command, termination), address)) {
+        return -1;
     }
 
     gpib_check_srq(address);
     delay(50);
 
-    ieee_write(cmd_buffer);
-    
+    if (ieee_write(cmd_buffer) < 0) return -1;
+
     delay(200);
+    return 0;
 }
 
 int gpib_read_dm5120(int address, char *buffer, int maxlen) {
@@ -324,16 +329,20 @@ void gpib_clear_dm5120(int address) {
     delay(200);
 }
 
-void gpib_write_dm5010(int address, char *command) {
+int gpib_write_dm5010(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
-    
+
+    if (!command_fits(snprintf(cmd_buffer, sizeof(cmd_buffer), "output %2d; %s\r\n", address, command), address)) {
+        return -1;
+    }
+
     gpib_check_srq(address);
     delay(50);
-    
-    sprintf(cmd_buffer, "output %2d; %s\r\n", address, command);
-    ieee_write(cmd_buffer);
-    
+
+    if (ieee_write(cmd_buffer) < 0) return -1;
+
     delay(100);
+    return 0;
 }
 
 int gpib_read_dm5010(int address, char *buffer, int maxlen) {

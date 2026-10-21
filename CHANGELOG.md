@@ -23,8 +23,9 @@ Built clean with OpenWatcom 2.0 (no new warnings); not yet run on hardware.
 - **Printing:** the text graph's row clear wrote 20 bytes past its line buffers on
   every row, legend lines overran `label[40]`, and a custom header over 63 characters
   overran `g_custom_header_text`. Headers are now cut to 63.
-- **GPIB:** a custom command too long for the 128-byte bus buffer is refused with an
-  error instead of overflowing it. A long driver status is cut to fit `g_error_msg`.
+- **GPIB:** a command too long for the 128-byte bus buffer is refused with an
+  error instead of overflowing it. `gpib_write`, `gpib_write_dm5120` and
+  `gpib_write_dm5010` return -1 when a command was refused or the write failed. A long driver status is cut to fit `g_error_msg`.
 - **Buffers:** `allocate_module_buffer` allocates before freeing, so a failed
   allocation leaves the old data intact. FFT, derivative, integral, smoothing and
   dual-trace results grow a too-small target buffer instead of writing past it.
@@ -57,7 +58,8 @@ Built clean with OpenWatcom 2.0 (no new warnings); not yet run on hardware.
 ### Fixed — instruments and UI
 - **FG5010 communication test** reprograms frequency, amplitude and waveform and
   briefly enables the output. It now asks first, and always switches the output off
-  again, even if the read-back times out. It also runs from the slot-setup
+  again, even if the read-back times out. Ctrl-C/Ctrl-Break are ignored while the
+  output is on. If the `OUTP OFF` write fails, a front-panel warning is shown. It also runs from the slot-setup
   "Test communication?" prompt.
 - **DM5120:** the buffered fill sent `STOINT` as readings/s × 1000 (10 r/s sent
   `STOINT 10000`). The conflict check now tests the configured interval and refuses

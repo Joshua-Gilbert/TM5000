@@ -11,7 +11,7 @@
 int init_gpib_system(void);
 int ieee_write(const char *str);
 int ieee_read(char *buffer, int maxlen);
-void gpib_write(int address, char *command);
+int gpib_write(int address, char *command);
 int gpib_read(int address, char *buffer, int maxlen);
 int gpib_read_float(int address, float *value);
 void gpib_remote(int address);
@@ -21,7 +21,7 @@ int gpib_check_srq(int address);
 int ieee_spoll(int address, unsigned char *status);
 
 /* DM5120-specific GPIB functions */
-void gpib_write_dm5120(int address, char *command);
+int gpib_write_dm5120(int address, char *command);
 int gpib_read_dm5120(int address, char *buffer, int maxlen);
 int gpib_read_float_dm5120(int address, float *value);
 void gpib_remote_dm5120(int address);
@@ -29,7 +29,7 @@ void gpib_local_dm5120(int address);
 void gpib_clear_dm5120(int address);
 
 /* DM5010-specific GPIB functions */
-void gpib_write_dm5010(int address, char *command);
+int gpib_write_dm5010(int address, char *command);
 int gpib_read_dm5010(int address, char *buffer, int maxlen);
 int gpib_read_float_dm5010(int address, float *value);
 

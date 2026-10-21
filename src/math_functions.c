@@ -383,7 +383,7 @@ void execute_fft_with_config(void) {
     
     freq_resolution = sample_rate / N;
     out_bin_hz = freq_resolution;  /* reset below by each spectrum path */
-    printf("Frequency resolution: %.3f Hz\n", freq_resolution);
+    printf("Frequency resolution: %.3f Hz\n", g_has_287 ? freq_resolution : sample_rate / dft_size);
     
     real_data = (float far *)_fmalloc(N * sizeof(float));
     imag_data = (float far *)_fmalloc(N * sizeof(float));
