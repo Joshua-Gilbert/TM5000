@@ -1740,6 +1740,7 @@ void validate_enabled_modules(void) {
                 g_system->modules[i].gpib_address = 0;
                 strcpy(g_system->modules[i].description, "");
                 free_module_buffer(i);
+                forget_trace_slot(i);
             }
         }
     }
@@ -1936,6 +1937,7 @@ void configure_modules(void) {
                 g_system->modules[slot].gpib_address = 0;
                 strcpy(g_system->modules[slot].description, "");
                 free_module_buffer(slot);
+                forget_trace_slot(slot);
             } else if (module_type >= 1 && module_type <= 7) {
                 printf("Enter GPIB address (1-30): ");
                 scanf("%d", &address);
@@ -2117,14 +2119,22 @@ void display_trace_selection_menu(void) {
     }
 }
 
+/* A slot's trace is shown the first time it has data; after that the user's choice is
+   kept, even across a sync where its buffer was freed (pool resize). A slot that gets a
+   new occupant (module removed, file loaded) must be forgotten with forget_trace_slot. */
+static unsigned char shown_before[10];
+static unsigned char hidden_no_data[10];  /* enabled was forced 0, not the user's choice */
+static unsigned char user_enabled[10];
+
+void forget_trace_slot(int slot) {
+    if (slot < 0 || slot >= 10) return;
+    shown_before[slot] = 0;
+    hidden_no_data[slot] = 0;
+    user_enabled[slot] = 0;
+}
+
 void sync_traces_with_modules(void) {
     int i;
-    /* A slot's trace is shown the first time it has data; after that the user's choice
-       is kept, even across a sync where its buffer was freed (pool resize, file load).
-       Removing the module forgets the slot. */
-    static unsigned char shown_before[10];
-    static unsigned char hidden_no_data[10];  /* enabled was forced 0, not the user's choice */
-    static unsigned char user_enabled[10];
 
     for (i = 0; i < 10; i++) {
         if (shown_before[i] && !hidden_no_data[i]) {

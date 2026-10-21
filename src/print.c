@@ -207,14 +207,14 @@ static int val_dec(int dec, double res) {
 
 /* reference value as text in the unit that suits its size, with enough
    decimals to match one grid step */
-static void ref_text(char *buf, int trace, double ref, double step, char **unit) {
+static void ref_text(char *buf, int size, int trace, double ref, double step, char **unit) {
     char *u;
     double sc;
     int d, d2;
     get_trace_print_units(trace, fabs(ref), &u, &sc, &d, unit);
     d2 = step_dec(step * sc);
     if (d2 > d) d = d2;
-    sprintf(buf, "%.*f", d, ref * sc);
+    snprintf(buf, size, "%.*f", d, ref * sc);
 }
 
 /* ---- Run duration and x-axis time for printouts -----------------------
@@ -491,8 +491,8 @@ void print_graph_text(void) {
     }
     print_string(label);
     if (off_mode) {
-        char rs[24], *ru;
-        ref_text(rs, dominant_trace, off_ref, y_range / 10.0, &ru);
+        char rs[64], *ru;
+        ref_text(rs, sizeof(rs), dominant_trace, off_ref, y_range / 10.0, &ru);
         snprintf(label, sizeof(label), "Y axis: offset from %s %s, in %s\r\n", rs, ru, unit_str);
         print_string(label);
     }
@@ -1210,8 +1210,8 @@ void print_graph_postscript(void) {
     }
     
     if (off_mode) {     /* the reference the offset labels count from */
-        char rs[24], *ru;
-        ref_text(rs, dominant_trace, off_ref, y_range / 10.0, &ru);
+        char rs[64], *ru;
+        ref_text(rs, sizeof(rs), dominant_trace, off_ref, y_range / 10.0, &ru);
         print_string("/Times-Roman findfont 10 scalefont setfont\r\n");
         snprintf(label, sizeof(label), "%.1f %.1f moveto\r\n", graph_x, graph_y + graph_height + 6);
         print_string(label);

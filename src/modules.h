@@ -14,6 +14,7 @@ void validate_enabled_modules(void);
 int module_is_result(int slot);   /* is_result set, or MOD_NONE slot that holds data */
 void display_trace_selection_menu(void);
 void sync_traces_with_modules(void);
+void forget_trace_slot(int slot);
 
 /* DM5120 functions */
 void init_dm5120_config(int slot);

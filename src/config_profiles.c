@@ -431,6 +431,7 @@ int apply_config_profile(config_profile *profile) {
         g_system->modules[i].module_type = profile->module_types[i];
         g_system->modules[i].gpib_address = profile->gpib_addresses[i];
         g_system->modules[i].is_result = 0;  /* profiles hold real modules only (FINDINGS #1) */
+        forget_trace_slot(i);
     }
     
     return PROFILE_SUCCESS;

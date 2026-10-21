@@ -353,6 +353,7 @@ void load_data(void) {
     
     for (i = 0; i < 10; i++) {
         clear_module_data(i);
+        forget_trace_slot(i);
         g_system->modules[i].enabled = 0;
         g_system->modules[i].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
     }
@@ -771,6 +772,7 @@ void load_settings(void) {
             for (slot = 0; slot < 10; slot++) {
                 g_system->modules[slot].enabled = 0;
                 g_system->modules[slot].is_result = 0;  /* stale computed-trace flag (FINDINGS #1) */
+                forget_trace_slot(slot);
             }
 
 

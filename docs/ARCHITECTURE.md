@@ -179,7 +179,7 @@ control size:
   has no identical-code folding, so duplicate functions are consolidated in source instead
   (e.g. the DC5009/DC5010 forwarders).
 
-`tm5000.exe` is 316,626 bytes and `tm5000g.exe` 316,356 bytes (~310 KB each), leaving
+`tm5000.exe` is 316,738 bytes and `tm5000g.exe` 316,468 bytes (~310 KB each), leaving
 room in 640 KB for the pooled 10×1024-sample far buffers (8 bytes per sample plus a
 4-byte time stamp). `tm5000g.exe` swaps `gpib.c` for `gpib_gg.c` + `gridgpib.c` and
 builds `modules.c` / `module_funcs.c` with `-DGRIDGPIB`.
