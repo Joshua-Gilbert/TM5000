@@ -1,13 +1,23 @@
 /*
- * TM5000 math menu operations: FFT, differentiation, integration, smoothing.
- * Results go to the first free slot (or overwrite the source) as is_result traces.
+ * TM5000 GPIB Control System - Mathematical Functions Module
+ * Version 3.5 - Assembly Optimized
+ * Complete implementation extracted from TM5000L.c
+ * 
+ * Version History:
+ * 3.0 - Initial extraction from TM5000L.c
+ * 3.1 - Version update
+ * 3.2 - Version update
+ * 3.3 - Version update  
+ * 3.4 - Removed FFT buffer size constraints for 1024-sample optimization
+ * 3.5 - Added 286/287 assembly optimizations for performance
  */
 
 #include "tm5000.h"
 #include "math_functions.h"
+#include "data.h"
 #include <math.h>
 
-/* 286/287 assembly routines */
+/* Assembly function prototypes for 286/287 optimizations */
 extern void init_fpu_287_(void);
 extern void fft_butterfly_asm_(float far *real_data, float far *imag_data, 
                                int k, int ip, float ur, float ui);
@@ -16,10 +26,13 @@ extern double fast_sqrt_287_simple_(double x);
 extern double fast_mult_287_(double a, double b);
 extern double fast_div_287_(double a, double b);
 
+/* Memory optimization functions */
 extern void fast_memcpy_286(void *dest, void *src, unsigned int count);
 extern void fast_fmemcpy_286(void far *dest, void far *src, unsigned int count);
 
-/* Kahan (compensated) summation accumulator */
+/* 287-optimized precision routines per scientific programming guide */
+
+/* Kahan summation accumulator for high-precision accumulation */
 typedef struct {
     double sum;
     double compensation;
@@ -39,15 +52,16 @@ void kahan_add(kahan_accumulator *acc, double value) {
     acc->sum = t;
 }
 
-/* Cosine with explicit reduction to [0, 2*PI) and quadrant folding before libm sin/cos. */
+/* 287-safe cosine with range reduction - simplified for 287 compatibility */
 double cos_287_safe(double x) {
+    /* Use standard library cosine for now - can be optimized later */
     const double PI = 3.14159265358979323846;
     const double PIOVER4 = 0.78539816339744830962;
     double reduced = fmod(x, 2.0 * PI);
     
     if (reduced < 0.0) reduced += 2.0 * PI;
     
-    /* Fold so sin/cos see |arg| <= PI/4 (the last range, > 7*PI/4, is not folded) */
+    /* Reduce to first quadrant for calculation */
     if (reduced > PIOVER4 && reduced <= 3.0 * PIOVER4) {
         return sin(PI / 2.0 - reduced);
     } else if (reduced > 3.0 * PIOVER4 && reduced <= 5.0 * PIOVER4) {
@@ -59,27 +73,29 @@ double cos_287_safe(double x) {
     }
 }
 
-/* Reset the 287 and select 64-bit extended precision (finit leaves round-to-nearest). */
+/* Initialize FPU to optimal state for precision */
 void init_fpu_precision(void) {
     if (g_has_287) {
+        /* Use inline assembly for now */
         unsigned short control_word;
-
+        
         _asm {
-            finit
-            fstcw   control_word
+            finit                   /* Initialize FPU */
+            fstcw   control_word    /* Get control word */
         }
-
-        control_word &= ~0x0300;  /* PC bits 8-9 */
-        control_word |= 0x0300;   /* 11b = 64-bit extended */
+        
+        /* Set to extended precision (64-bit) and round to nearest */
+        control_word &= ~0x0300;  /* Clear precision bits */
+        control_word |= 0x0300;   /* Set extended precision */
         
         _asm {
             fldcw control_word
-            fclex
+            fclex               /* Clear exceptions */
         }
     }
 }
 
-/* window_type indexes window_names[]: 0 rect, 1 Hamming, 2 Hanning, 3 Blackman */
+/* Window function generator using 287-optimized trigonometry */
 void generate_window_function(float far *window, int N, int window_type) {
     int i;
     double angle, cos_val;
@@ -119,7 +135,7 @@ void generate_window_function(float far *window, int N, int window_type) {
     }
 }
 
-/* Returns 1 to run the FFT, 0 on cancel. */
+/* FFT Configuration Menu */
 int fft_configuration_menu(void) {
     int choice;
     int done = 0;
@@ -127,8 +143,8 @@ int fft_configuration_menu(void) {
     float temp_float;
     char *window_names[] = {"Rectangular", "Hamming", "Hanning", "Blackman"};
     char *format_names[] = {"dB Magnitude", "Linear Magnitude", "Power Spectrum"};
-    int valid_sizes[] = {64, 128, 256, 512, 1024};
-    int num_sizes = 5;
+    int valid_sizes[] = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
+    int num_sizes = 8;     /* Grid-OS: up to 8192 (pooled buffers hold 8192) */
     int i, size_index;
     
     while (!done) {
@@ -150,12 +166,12 @@ int fft_configuration_menu(void) {
             printf("  Sample rate: Auto-detect\n");
         }
         
-        printf("\nMemory usage: ~%dKB working space\n", 
-               (g_fft_config.input_points * 8 + 1023) / 1024);
+        printf("\nMemory usage: ~%ldKB working space\n", 
+               ((long)g_fft_config.input_points * 12 + (long)g_fft_config.output_points * 12 + 1023) / 1024);
         
         printf("\nOptions:\n");
-        printf("1. Input Size [64|128|256|512|1024]\n");
-        printf("2. Output Resolution [32|64|128|256|512|1024]\n");
+        printf("1. Input Size [64 ... 8192]\n");
+        printf("2. Output Resolution [64 ... input size]\n");
         printf("3. Window Function\n");
         printf("4. Processing Options\n");
         printf("5. Sample Rate\n");
@@ -270,15 +286,18 @@ int fft_configuration_menu(void) {
     return 0;
 }
 
+/* FFT - Fast Fourier Transform with configuration */
 void perform_fft(void) {
+    /* Show configuration menu first */
     if (!fft_configuration_menu()) {
-        return;
+        return;  /* User cancelled */
     }
-
+    
+    /* Execute FFT with current configuration */
     execute_fft_with_config();
 }
 
-/* FFT of a user-chosen slot using g_fft_config. */
+/* Core FFT execution with configuration parameters */
 void execute_fft_with_config(void) {
     int slot, i, j, k;
     int N, pow2;
@@ -293,7 +312,8 @@ void execute_fft_with_config(void) {
     float max_mag = 0.0;
     int target_slot = -1;
     int le, le2;
-    float ur, ui, sr, si;
+    double ur, ui, sr, si, ur_old;   /* Grid-OS: double twiddles - the float
+                                        recurrence drifted over 4096 steps */
     int ip;
     int dft_size;
     float sum_real, sum_imag;
@@ -308,7 +328,7 @@ void execute_fft_with_config(void) {
     char *window_names[] = {"Rectangular", "Hamming", "Hanning", "Blackman"};
     char *format_names[] = {"dB Magnitude", "Linear Magnitude", "Power Spectrum"};
     float mag_linear;
-    float out_bin_hz;   /* Hz per displayed output bin */
+    float out_bin_hz;   /* Hz per displayed output bin (== freq_resolution unless decimated) */
 
     clrscr();
     printf("\n\nFFT Execution\n");
@@ -345,7 +365,7 @@ void execute_fft_with_config(void) {
         if ((1 << pow2) < N) pow2++;
         N = 1 << pow2;
     } else {
-        /* log2 of configured size (already a power of 2) */
+        /* Find power of 2 for configured size */
         int temp = N;
         pow2 = 0;
         while (temp > 1) {
@@ -357,18 +377,22 @@ void execute_fft_with_config(void) {
     printf("\nConfiguration: %d input -> %d FFT -> %d output points\n", 
            actual_input_size, N, g_fft_config.output_points);
     
+    /* Sample rate calculation */
     if (g_fft_config.custom_sample_rate > 0.0) {
         sample_rate = g_fft_config.custom_sample_rate;
         printf("Sample rate: %.2f Hz (custom)\n", sample_rate);
     } else {
-        sample_rate = 1000.0 / g_control_panel.sample_rate_ms;
-        printf("Sample rate: %.2f Hz (auto-detect)\n", sample_rate);
+        /* Grid-OS: the source's measured sample interval (includes AUTO
+           rate, slow passes and averaging), not the set rate */
+        sample_rate = (float)(1.0 / slot_interval_s(slot));
+        printf("Sample rate: %.4f Hz (measured)\n", sample_rate);
     }
     
     freq_resolution = sample_rate / N;
-    out_bin_hz = freq_resolution;  /* reset below by each spectrum path */
+    out_bin_hz = freq_resolution;  /* default; overridden below if the spectrum is decimated */
     printf("Frequency resolution: %.3f Hz\n", freq_resolution);
     
+    /* Allocate memory for FFT */
     real_data = (float far *)_fmalloc(N * sizeof(float));
     imag_data = (float far *)_fmalloc(N * sizeof(float));
     magnitude = (float far *)_fmalloc(g_fft_config.output_points * sizeof(float));
@@ -385,11 +409,13 @@ void execute_fft_with_config(void) {
         return;
     }
     
+    /* Generate window function */
     printf("\nApplying %s window...\n", window_names[g_fft_config.window_type]);
-
+    
+    /* Initialize FPU for optimal precision */
     init_fpu_precision();
-
-    /* Scrub NaN (x != x) and clip extremes; this modifies the source slot in place */
+    
+    /* Validate data before processing */
     printf("Validating input data...\n");
     for (i = 0; i < actual_input_size; i++) {
         if (g_system->modules[slot].module_data[i] != g_system->modules[slot].module_data[i]) {
@@ -407,6 +433,7 @@ void execute_fft_with_config(void) {
         }
     }
     
+    /* Generate window coefficients */
     generate_window_function(window_data, actual_input_size, g_fft_config.window_type);
     
     /* Copy input data with windowing and zero padding */
@@ -437,7 +464,7 @@ void execute_fft_with_config(void) {
     if (g_has_287) {
         printf("Using 287 coprocessor with C implementation...\n");
         
-        /* Bit-reversal permutation (C; the asm FFT routines above are not used) */
+        /* Bit-reversal permutation - pure C version */
         j = 0;
         for (i = 0; i < N - 1; i++) {
             if (i < j) {
@@ -457,7 +484,7 @@ void execute_fft_with_config(void) {
             j += k;
         }
         
-        /* Radix-2 butterflies */
+        /* Butterfly operations - pure C version */
         for (i = 1; i <= pow2; i++) {
             double angle;
             le = 1 << i;
@@ -465,8 +492,8 @@ void execute_fft_with_config(void) {
             ur = 1.0;
             ui = 0.0;
             
-            /* Per-stage twiddle step (angle <= PI, so the guard never fires) */
-            angle = 3.14159 / le2;
+            /* Calculate twiddle factors with range validation */
+            angle = 3.14159265358979 / le2;
             if (angle > 1000.0 || angle < -1000.0) {
                 printf("Warning: Extreme twiddle angle detected, using approximation\n");
                 sr = 1.0 - angle*angle/2.0;  /* cos approximation */
@@ -480,7 +507,9 @@ void execute_fft_with_config(void) {
                 for (k = j; k < N; k += le) {
                     ip = k + le2;
                     
+                    /* Validate indices before calculation */
                     if (ip < N && k < N) {
+                        /* Pure C butterfly operation */
                         temp_real = real_data[ip] * ur - imag_data[ip] * ui;
                         temp_imag = real_data[ip] * ui + imag_data[ip] * ur;
                         
@@ -491,16 +520,16 @@ void execute_fft_with_config(void) {
                     }
                 }
                 
-                /* Rotate twiddle by one step */
-                temp_real = ur;
-                ur = temp_real * sr - ui * si;
-                ui = temp_real * si + ui * sr;
+                /* Update twiddle factors with validation */
+                ur_old = ur;
+                ur = ur_old * sr - ui * si;
+                ui = ur_old * si + ui * sr;
                 
-                /* Recompute directly if the recurrence diverges */
+                /* Check for overflow/underflow in twiddle factors */
                 if (ur > 1e10 || ur < -1e10 || ui > 1e10 || ui < -1e10) {
                     printf("Warning: Twiddle factor overflow, resetting\n");
-                    ur = cos(3.14159 * j / le2);
-                    ui = -sin(3.14159 * j / le2);
+                    ur = cos(3.14159265358979 * j / le2);
+                    ui = -sin(3.14159265358979 * j / le2);
                 }
             }
             
@@ -510,7 +539,7 @@ void execute_fft_with_config(void) {
             }
         }
     } else {
-        /* No 287: coarse DFT, at most 64 points */
+        /* Software DFT for systems without math coprocessor */
         printf("Software mode (this may take a while)...\n");
         
         dft_size = N > 64 ? 64 : N;
@@ -521,8 +550,8 @@ void execute_fft_with_config(void) {
             
             for (j = 0; j < dft_size; j++) {
                 angle = -2.0 * 3.14159 * k * j / dft_size;
-                c = 1.0 - angle*angle/2.0;  /* small-angle cos; inaccurate for large angle */
-                s = angle;                   /* small-angle sin */
+                c = 1.0 - angle*angle/2.0;  /* cos approximation */
+                s = angle;                   /* sin approximation */
                 
                 sum_real += real_data[j] * c;
                 sum_imag += real_data[j] * s;
@@ -531,9 +560,10 @@ void execute_fft_with_config(void) {
             magnitude[k] = sqrt(sum_real * sum_real + sum_imag * sum_imag);
             if (magnitude[k] > max_mag) max_mag = magnitude[k];
         }
-        N = dft_size;
+        N = dft_size;  /* Adjust size for software mode */
     }
-
+    
+    /* Calculate spectrum based on output format */
     printf("Calculating %s...\n", format_names[g_fft_config.output_format]);
     
     if (g_has_287) {
@@ -542,8 +572,12 @@ void execute_fft_with_config(void) {
         int b, b0, b1;
         float m;
 
-        /* FINDINGS #6: map the full 0..Nyquist span onto op bins, each taking the peak
-           of its source group so narrow lines survive; x axis scaled to match. */
+        /* When op < half, decimate the spectrum across the FULL 0..Nyquist span
+           instead of truncating to the first op bins (v3.6, FINDINGS #6 - high
+           frequencies were previously dropped silently). Each output bin takes the
+           PEAK of its source-bin group so narrow high-frequency peaks survive, and
+           the frequency axis is scaled to match. When op == half this is a 1:1 map
+           and behaviour is identical to before. */
         out_bin_hz = (op > 0) ? (freq_resolution * (float)half / (float)op) : freq_resolution;
 
         for (i = 0; i < op; i++) {
@@ -555,18 +589,19 @@ void execute_fft_with_config(void) {
             mag_linear = 0.0;
             for (b = b0; b < b1; b++) {
                 m = sqrt(real_data[b] * real_data[b] +
-                         imag_data[b] * imag_data[b]) / half;   /* /(N/2): sine amplitude */
+                         imag_data[b] * imag_data[b]) / half;   /* half == N/2, hoisted (review #15) */
                 if (m > mag_linear) mag_linear = m;  /* peak-preserving */
             }
 
             switch(g_fft_config.output_format) {
                 case 0: /* dB Magnitude */
-                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude bins still display (FINDINGS #2) */
+                    if (mag_linear > 1e-12) {  /* low threshold so low-amplitude/low-freq bins still display (v3.6, FINDINGS #2) */
                         magnitude[i] = 20.0 * log10(mag_linear);
                     } else {
-                        magnitude[i] = -240.0;  /* = 20*log10(1e-12) */
+                        magnitude[i] = -240.0;  /* deep floor (was -160, which clipped low-frequency content) */
                     }
-                    if (i > 0 && magnitude[i] > max_mag) {  /* skip DC for peak finding */
+                    /* For dB, find peak in dB domain for consistent comparison */
+                    if (i > 0 && magnitude[i] > max_mag) {  /* Skip DC for peak finding */
                         max_mag = magnitude[i];
                         peak_index = i;
                     }
@@ -574,7 +609,7 @@ void execute_fft_with_config(void) {
 
                 case 1: /* Linear Magnitude */
                     magnitude[i] = mag_linear;
-                    if (i > 0 && magnitude[i] > max_mag) {
+                    if (i > 0 && magnitude[i] > max_mag) {  /* Skip DC for peak finding */
                         max_mag = magnitude[i];
                         peak_index = i;
                     }
@@ -582,7 +617,7 @@ void execute_fft_with_config(void) {
 
                 case 2: /* Power Spectrum */
                     magnitude[i] = mag_linear * mag_linear;
-                    if (i > 0 && magnitude[i] > max_mag) {
+                    if (i > 0 && magnitude[i] > max_mag) {  /* Skip DC for peak finding */
                         max_mag = magnitude[i];
                         peak_index = i;
                     }
@@ -590,8 +625,12 @@ void execute_fft_with_config(void) {
             }
         }
     } else {
-        /* No 287: the DFT above left unnormalized linear magnitudes in the first N/2
-           bins (N is now dft_size) and the rest unwritten: normalize, format, zero the tail. */
+        /* No 80287: the software DFT above produced LINEAR magnitudes for the first
+           N/2 bins (N was reduced to dft_size) and left the rest of magnitude[]
+           unwritten. Apply the requested output format, zero the unused tail, set a
+           matching axis and find the peak, so non-287 machines get formatted output
+           instead of mislabeled garbage. The software DFT is a coarse approximation -
+           a coprocessor is recommended for accurate FFTs. (review #6) */
         int valid = N / 2;
         float best = -1e30;
         out_bin_hz = (N > 0) ? (sample_rate / N) : freq_resolution;
@@ -622,16 +661,31 @@ void execute_fft_with_config(void) {
     } else {
         printf("\nStoring FFT in slot %d...\n", target_slot);
     }
-    /* is_result marks a computed trace (fresh slot or overwritten source) so
-       continuous monitoring won't re-read it. */
+    /* Mark the target as a computed-result trace whether it is a fresh slot or an
+       overwritten source slot, so continuous monitoring won't re-read it. (review #2) */
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "FFT Result");
     g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
-
-    if (!g_system->modules[target_slot].module_data) {
+    
+    /* Allocate buffer and store results (a reused slot's buffer may be too
+       small for a larger output - it was written past its end before) */
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)g_fft_config.output_points) {
         allocate_module_buffer(target_slot, g_fft_config.output_points);
+    }
+    /* the measurement the spectrum was computed from, for printouts */
+    {
+        long t0 = sample_time_ms(slot, 0);
+        long t1 = sample_time_ms(slot, actual_input_size - 1);
+        if (target_slot != slot && t0 >= 0 && t1 >= t0) {
+            g_system->modules[target_slot].src_seconds = (t1 - t0) / 1000.0f;
+            g_system->modules[target_slot].src_measured = 1;
+        } else {
+            g_system->modules[target_slot].src_seconds = (float)((actual_input_size - 1) / sample_rate);
+            g_system->modules[target_slot].src_measured = 0;
+        }
     }
     
     /* Apply peak centering if enabled */
@@ -662,6 +716,7 @@ void execute_fft_with_config(void) {
     
     /* Set up trace for display */
     if (target_slot >= 0 && target_slot < 10) {
+        /* Set appropriate unit type based on output format */
         switch(g_fft_config.output_format) {
             case 0: /* dB Magnitude */
                 g_traces[target_slot].unit_type = UNIT_DB;
@@ -672,13 +727,14 @@ void execute_fft_with_config(void) {
                 strcpy(g_traces[target_slot].label, "FFT (Linear)");
                 break;
             case 2: /* Power Spectrum */
-                g_traces[target_slot].unit_type = UNIT_POWER;
+                g_traces[target_slot].unit_type = UNIT_POWER;  /* Use power spectrum units */
                 strcpy(g_traces[target_slot].label, "FFT (Power)");
                 break;
         }
         
-        g_traces[target_slot].x_scale = out_bin_hz;
-
+        g_traces[target_slot].x_scale = out_bin_hz;  /* Hz per displayed output bin */
+        
+        /* Set frequency offset based on centering mode */
         if (g_fft_config.peak_centering && peak_index > 0) {
             /* Centered mode: peak frequency becomes the center reference */
             float peak_frequency = peak_index * out_bin_hz;
@@ -689,12 +745,12 @@ void execute_fft_with_config(void) {
             g_traces[target_slot].x_offset = 0.0;
         }
         
-        /* Trace points at the module buffer (no copy) */
+        /* CRITICAL: Connect trace data to module data */
         g_traces[target_slot].data = g_system->modules[target_slot].module_data;
         g_traces[target_slot].data_count = g_system->modules[target_slot].module_data_count;
         g_traces[target_slot].enabled = 1;
     }
-
+    
     printf("\nFFT Complete!\n");
     printf("Configuration: %d->%d->%d points, %s window\n", 
            actual_input_size, N, g_fft_config.output_points, 
@@ -704,6 +760,7 @@ void execute_fft_with_config(void) {
            (g_fft_config.output_format == 1) ? "V" : "V²",
            peak_index * out_bin_hz);
     
+    /* Clean up memory */
     _ffree(real_data);
     _ffree(imag_data);
     _ffree(magnitude);
@@ -719,8 +776,8 @@ void execute_fft_with_config(void) {
 void perform_differentiation(void) {
     int slot, i;
     int target_slot = -1;
-    float far *source_data;
-    float far *result_data;
+    double far *source_data;
+    double far *result_data;
     int count;
     float dt;
     float scale_factor;
@@ -744,7 +801,7 @@ void perform_differentiation(void) {
     source_data = g_system->modules[slot].module_data;
     count = g_system->modules[slot].module_data_count;
     
-    dt = g_control_panel.sample_rate_ms / 1000.0;  /* Convert to seconds */
+    dt = slot_interval_s(slot);   /* Grid-OS: measured interval (incl. averaging) */
     
     printf("\nDifferentiating %d samples...\n", count);
     printf("Time step: %.3f seconds\n", dt);
@@ -763,30 +820,35 @@ void perform_differentiation(void) {
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
     }
+    /* Mark target as a computed-result trace (fresh slot OR overwritten source). (review #2) */
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "Derivative");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)count) {
         allocate_module_buffer(target_slot, count);
     }
     result_data = g_system->modules[target_slot].module_data;
     
     if (g_has_287) {
-        /* Central difference, one-sided at the ends */
+        /* Use central difference method for better accuracy */
         scale_factor = 1.0 / dt;
         
+        /* Forward difference for first point */
         result_data[0] = (source_data[1] - source_data[0]) * scale_factor;
         
+        /* Central difference for interior points */
         for (i = 1; i < count - 1; i++) {
             result_data[i] = (source_data[i+1] - source_data[i-1]) * 0.5 * scale_factor;
         }
         
+        /* Backward difference for last point */
         result_data[count-1] = (source_data[count-1] - source_data[count-2]) * scale_factor;
     } else {
-        /* No 287: forward difference */
+        /* Simple forward difference for software mode */
         for (i = 0; i < count - 1; i++) {
             result_data[i] = (source_data[i+1] - source_data[i]) / dt;
         }
@@ -794,18 +856,21 @@ void perform_differentiation(void) {
     }
     
     g_system->modules[target_slot].module_data_count = count;
+    copy_time_axis(target_slot, slot);   /* Grid-OS: X:TIME and durations */
     
+    /* Set up trace for display with proper derivative units */
     if (target_slot >= 0 && target_slot < 10) {
-        g_traces[target_slot].unit_type = UNIT_DERIVATIVE;  /* V/s */
-        g_traces[target_slot].x_scale = 1.0;  /* x axis in samples */
-        g_traces[target_slot].x_offset = 0.0;
+        g_traces[target_slot].unit_type = UNIT_DERIVATIVE;  /* V/s units */
+        g_traces[target_slot].x_scale = 1.0;  /* Sample per point */
+        g_traces[target_slot].x_offset = 0.0;  /* Start at sample 0 */
         strcpy(g_traces[target_slot].label, "dV/dt");
-
+        
+        /* CRITICAL: Connect trace data to module data */
         g_traces[target_slot].data = g_system->modules[target_slot].module_data;
         g_traces[target_slot].data_count = g_system->modules[target_slot].module_data_count;
         g_traces[target_slot].enabled = 1;
         g_traces[target_slot].slot = target_slot;
-        g_traces[target_slot].color = 0x0E;  /* yellow */
+        g_traces[target_slot].color = 0x0E;  /* Yellow color for derivative */
     }
     
     printf("\nDifferentiation complete!\n");
@@ -819,8 +884,8 @@ void perform_differentiation(void) {
 void perform_integration(void) {
     int slot, i;
     int target_slot = -1;
-    float far *source_data;
-    float far *result_data;
+    double far *source_data;
+    double far *result_data;
     int count;
     float dt;
     float sum;
@@ -845,7 +910,7 @@ void perform_integration(void) {
     source_data = g_system->modules[slot].module_data;
     count = g_system->modules[slot].module_data_count;
     
-    dt = g_control_panel.sample_rate_ms / 1000.0;  /* Convert to seconds */
+    dt = slot_interval_s(slot);   /* Grid-OS: measured interval (incl. averaging) */
     
     printf("\nIntegrating %d samples...\n", count);
     printf("Time step: %.3f seconds\n", dt);
@@ -864,39 +929,44 @@ void perform_integration(void) {
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
     }
+    /* Mark target as a computed-result trace (fresh slot OR overwritten source). (review #2) */
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "Integral");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)count) {
         allocate_module_buffer(target_slot, count);
     }
     result_data = g_system->modules[target_slot].module_data;
     
-    /* Running integral, Kahan-summed; trapezoidal with a 287, rectangle rule without */
-    result_data[0] = 0.0;
-
+    /* Trapezoidal rule integration with Kahan summation for precision */
+    result_data[0] = 0.0;  /* Start integration at zero */
+    
     kahan_init(&acc);
-
-    init_fpu_precision();
-
+    
+    init_fpu_precision();  /* Set optimal FPU state */
+    
     if (g_has_287) {
+        /* High-precision trapezoidal rule with compensated summation */
         for (i = 1; i < count; i++) {
             double trapezoid_area = (double)(source_data[i] + source_data[i-1]) * 0.5 * dt;
             kahan_add(&acc, trapezoid_area);
-            result_data[i] = (float)acc.sum;
+            result_data[i] = acc.sum;
         }
     } else {
+        /* Software mode with Kahan summation */
         for (i = 1; i < count; i++) {
             double rectangle_area = (double)source_data[i] * dt;
             kahan_add(&acc, rectangle_area);
-            result_data[i] = (float)acc.sum;
+            result_data[i] = acc.sum;
         }
     }
     
     g_system->modules[target_slot].module_data_count = count;
+    copy_time_axis(target_slot, slot);   /* Grid-OS: X:TIME and durations */
     
     printf("\nIntegration complete!\n");
     printf("Units changed from V to V*s\n");
@@ -909,8 +979,8 @@ void perform_integration(void) {
 void perform_smoothing(void) {
     int slot, i, j;
     int target_slot = -1;
-    float far *source_data;
-    float far *result_data;
+    double far *source_data;
+    double far *result_data;
     int count;
     int window_size;
     float sum;
@@ -964,37 +1034,42 @@ void perform_smoothing(void) {
     } else {
         printf("\nStoring result in slot %d...\n", target_slot);
     }
+    /* Mark target as a computed-result trace (fresh slot OR overwritten source). (review #2) */
     g_system->modules[target_slot].enabled = 1;
     g_system->modules[target_slot].module_type = MOD_NONE;
     g_system->modules[target_slot].is_result = 1;
     strcpy(g_system->modules[target_slot].description, "Smoothed");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned)count) {
         allocate_module_buffer(target_slot, count);
     }
     result_data = g_system->modules[target_slot].module_data;
     
-    /* Centered moving average, Kahan-summed; the window shrinks at the edges */
-    init_fpu_precision();
+    /* Apply moving average filter with Kahan summation for precision */
+    init_fpu_precision();  /* Set optimal FPU state */
     
     for (i = 0; i < count; i++) {
         kahan_init(&window_acc);
         
+        /* Determine window bounds with edge handling */
         start = i - half_window;
         end = i + half_window;
         
         if (start < 0) start = 0;
         if (end >= count) end = count - 1;
         
+        /* Calculate average within window using compensated summation */
         for (j = start; j <= end; j++) {
             kahan_add(&window_acc, (double)source_data[j]);
         }
         
-        result_data[i] = (float)(window_acc.sum / (end - start + 1));
+        result_data[i] = window_acc.sum / (end - start + 1);
     }
     
     g_system->modules[target_slot].module_data_count = count;
+    copy_time_axis(target_slot, slot);   /* Grid-OS: X:TIME and durations */
     
     printf("\nSmoothing complete!\n");
     printf("Noise reduction applied with %d-point moving average\n", window_size);

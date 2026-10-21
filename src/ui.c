@@ -1,5 +1,14 @@
 /*
- * TM5000 - text-mode menus and the CGA graph display (cursor, zoom, pan).
+ * TM5000 GPIB Control System - User Interface Module
+ * Version 3.5
+ * Complete implementation extracted from TM5000L.c
+ * 
+ * Version History:
+ * 3.0 - Initial extraction from TM5000L.c
+ * 3.1 - Version update
+ * 3.2 - Version update
+ * 3.3 - Version update
+ * 3.5 - Integrated enhanced file operations and math analysis menus
  */
 
 #include "ui.h"
@@ -9,7 +18,9 @@
 #include "modules.h"
 #include "config_profiles.h"
 #include "data.h"
+#include "print.h"
 
+/* Main menu function */
 void main_menu(void) {
     int choice;
     int done = 0;
@@ -70,8 +81,7 @@ void main_menu(void) {
         choice = 0;
         if (g_mouse.present) {
             while (choice == 0) {
-                if (kbhit()) {
-                    hide_mouse();
+                if (kbhit()) {                  /* (hidden once, after the loop) */
                     choice = getch();
                     break;
                 }
@@ -124,6 +134,7 @@ void main_menu(void) {
     }
 }
 
+/* Display error message */
 void display_error(char *msg) {
     strcpy(g_error_msg, msg);
     gotoxy(1, 24);
@@ -133,7 +144,7 @@ void display_error(char *msg) {
     clreol();
 }
 
-/* Returns the key pressed, or -1 on mouse-button release. */
+/* Wait for keyboard or mouse input */
 int wait_for_input(void) {
     int old_left = 0;
     
@@ -160,6 +171,7 @@ int wait_for_input(void) {
     }
 }
 
+/* Measurement operations menu */
 void measurement_menu(void) {
     int choice;
     int done = 0;
@@ -216,15 +228,14 @@ void measurement_menu(void) {
         printf("  ============================================\n\n");
         
         printf("  Enter choice: ");
-        fflush(stdout);  /* flush pending text before show_mouse() */
+        fflush(stdout);  /* Ensure all output is flushed before showing mouse */
         
         show_mouse();
         
         choice = 0;
         if (g_mouse.present) {
             while (choice == 0) {
-                if (kbhit()) {
-                    hide_mouse();
+                if (kbhit()) {                  /* (hidden once, after the loop) */
                     choice = getch();
                     break;
                 }
@@ -287,6 +298,7 @@ void measurement_menu(void) {
     }
 }
 
+/* File operations menu */
 void file_operations_menu(void) {
     int choice;
     int done = 0;
@@ -343,8 +355,7 @@ void file_operations_menu(void) {
         choice = 0;
         if (g_mouse.present) {
             while (choice == 0) {
-                if (kbhit()) {
-                    hide_mouse();
+                if (kbhit()) {                  /* (hidden once, after the loop) */
                     choice = getch();
                     break;
                 }
@@ -410,6 +421,7 @@ void file_operations_menu(void) {
     }
 }
 
+/* Configuration profiles management menu */
 void configuration_profiles_menu(void) {
     int choice;
     int done = 0;
@@ -422,7 +434,8 @@ void configuration_profiles_menu(void) {
     while (!done) {
         clrscr();
         display_header("Configuration Profiles");
-
+        
+        /* List existing profiles */
         profile_count = list_config_profiles(profiles, MAX_CONFIG_PROFILES);
         
         printf("Current Profiles:\n");
@@ -440,7 +453,8 @@ void configuration_profiles_menu(void) {
         }
         
         printf("\n");
-
+        
+        /* Show current profile status */
         if (strlen(g_current_profile_name) > 0) {
             printf("Current Profile: %s", g_current_profile_name);
             if (g_profile_modified) {
@@ -533,6 +547,7 @@ void configuration_profiles_menu(void) {
     }
 }
 
+/* Enhanced data export menu */
 void enhanced_export_menu(void) {
     int choice;
     int done = 0;
@@ -540,7 +555,8 @@ void enhanced_export_menu(void) {
     char filename[80];
     int enabled_count = 0;
     int i;
-
+    
+    /* Initialize export configuration with defaults */
     config.format = EXPORT_FORMAT_CSV;
     config.flags = EXPORT_FLAG_HEADERS | EXPORT_FLAG_METADATA;
     config.delimiter = ',';
@@ -550,8 +566,8 @@ void enhanced_export_menu(void) {
     config.units_override[0] = '\0';
     config.export_start_time = time(NULL);
     strcpy(config.filename_template, "MEASUREMENT_%Y%M%D_%H%N%S.CSV");
-
-    /* Count modules with data to export */
+    
+    /* Count enabled modules */
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled && g_system->modules[i].module_data_count > 0) {
             enabled_count++;
@@ -660,6 +676,7 @@ void enhanced_export_menu(void) {
     }
 }
 
+/* Continuous monitoring setup menu */
 void continuous_monitor_setup(void) {
     int choice;
     int done = 0;
@@ -673,9 +690,14 @@ void continuous_monitor_setup(void) {
         printf("Current Settings:\n");
         printf("  Sample Rate: %d ms (%s)\n", 
                g_control_panel.sample_rate_ms,
-               g_control_panel.use_custom ? "custom" : "preset");
+               g_control_panel.auto_rate ? "AUTO" :
+               (g_control_panel.use_custom ? "custom" : "preset"));
         printf("  Monitoring: %s\n", 
                g_control_panel.monitor_all ? "All modules" : "Selected modules");
+        if (g_buffer_samples)
+            printf("  Buffer: %u samples per module\n", g_buffer_samples);
+        else
+            printf("  Buffer: AUTO - 10 x 1024 samples shared by the modules monitored\n");
         
         if (!g_control_panel.monitor_all) {
             int count = 0;
@@ -695,6 +717,7 @@ void continuous_monitor_setup(void) {
         printf("1. Set Sample Rate\n");
         printf("2. Select Modules to Monitor\n");
         printf("3. Start Monitoring\n");
+        printf("4. Buffer Size per Module (AUTO, 1024, 2048, 4096, 8192)\n");
         printf("0. Return to Menu\n\n");
         printf("Choice: ");
         
@@ -713,6 +736,11 @@ void continuous_monitor_setup(void) {
                 continuous_monitor();
                 break;
                 
+            case '4':  /* Grid-OS: cycle AUTO -> 1024 -> 2048 -> 4096 -> 8192 */
+                g_buffer_samples = (g_buffer_samples == 0) ? 1024 :
+                                   (g_buffer_samples >= 8192) ? 0 : g_buffer_samples * 2;
+                break;
+                
             case '0':
             case 27:  /* ESC */
                 done = 1;
@@ -721,6 +749,7 @@ void continuous_monitor_setup(void) {
     }
 }
 
+/* Sample rate configuration menu */
 void sample_rate_menu(void) {
     int choice;
     int custom_rate;
@@ -735,9 +764,11 @@ void sample_rate_menu(void) {
         printf("%d. %s\n", i + 1, (char far *)sample_rate_labels[i]);
     }
     printf("8. Custom Rate\n");
+    printf("9. AUTO - as fast as the slowest instrument allows\n");
     printf("0. Cancel\n\n");
     
-    printf("Current: %d ms\n\n", g_control_panel.sample_rate_ms);
+    printf("Current: %d ms%s\n\n", g_control_panel.sample_rate_ms,
+           g_control_panel.auto_rate ? " (AUTO - measured at each start)" : "");
     printf("Choice: ");
     
     choice = getch();
@@ -747,6 +778,7 @@ void sample_rate_menu(void) {
         g_control_panel.sample_rate_ms = ((int far *)sample_rate_presets)[i];
         g_control_panel.selected_rate = i;
         g_control_panel.use_custom = 0;
+        g_control_panel.auto_rate = 0;
         printf("\nSample rate set to %s\n", (char far *)sample_rate_labels[i]);
         printf("Press any key...");
         getch();
@@ -756,6 +788,7 @@ void sample_rate_menu(void) {
         if (custom_rate >= 10 && custom_rate <= 60000) {
             g_control_panel.sample_rate_ms = custom_rate;
             g_control_panel.use_custom = 1;
+            g_control_panel.auto_rate = 0;
             sprintf(g_control_panel.custom_rate, "%d", custom_rate);
             printf("Custom rate set to %d ms\n", custom_rate);
         } else {
@@ -763,10 +796,17 @@ void sample_rate_menu(void) {
         }
         printf("Press any key...");
         getch();
+    } else if (choice == '9') {
+        g_control_panel.auto_rate = 1;
+        printf("\nAUTO rate: each time monitoring starts, the first %d samples\n", 3);
+        printf("are taken back-to-back and timed; the rate is then locked to the\n");
+        printf("measured cycle (the slowest instrument sets the pace).\n");
+        printf("Press any key...");
+        getch();
     }
 }
 
-/* Stub: pulse programming not implemented. */
+/* FG5010 Pulse Program Menu (stub) */
 void fg5010_pulse_program_menu(int slot) {
     clrscr();
     printf("FG5010 Pulse Program Menu - Slot %d\n", slot);
@@ -777,6 +817,7 @@ void fg5010_pulse_program_menu(int slot) {
 }
 
 
+/* Math functions menu */
 void math_functions_menu(void) {
     int choice;
     int done = 0;
@@ -881,11 +922,11 @@ void math_functions_menu(void) {
     }
 }
 
-/* Statistics for one slot, shown in the trace's engineering units. */
+/* Calculate enhanced statistics for measurement data */
 void calculate_statistics(void) {
     int slot;
     statistics_result result;
-    float far *data;
+    double far *data;
     int count;
     char *unit_str;
     float scale_factor;
@@ -912,9 +953,12 @@ void calculate_statistics(void) {
     
     printf("\nCalculating enhanced statistics for %d samples...\n", count);
     printf("Module: %s\n\n", g_system->modules[slot].description);
-
+    
+    /* Use enhanced statistics calculation from math_enhanced.c */
     if (calculate_basic_statistics(data, count, &result) == MATH_SUCCESS) {
-        /* Units follow the trace's unit_type, not always volts (FINDINGS #4). */
+        /* Determine appropriate engineering units and scaling.
+           Use the trace's unit type so dB / Hz / ohm / amp / power traces are
+           labelled correctly instead of always as volts (v3.6, FINDINGS #4). */
         float range = result.max_value - result.min_value;
         get_units_for_type(g_traces[slot].unit_type, range, &unit_str, &scale_factor, &decimal_places);
 
@@ -928,19 +972,21 @@ void calculate_statistics(void) {
         printf("Maximum:        %.*f %s\n", decimal_places, result.max_value * scale_factor, unit_str);
         printf("Peak-to-peak:   %.*f %s\n", decimal_places, result.peak_to_peak * scale_factor, unit_str);
         printf("Median:         %.*f %s\n", decimal_places, result.median * scale_factor, unit_str);
-
+        
+        /* Additional analysis */
         printf("\nSignal Analysis:\n");
         printf("----------------\n");
         
         if (g_has_287) {
-            /* SNR = 20*log10(|mean| / std_dev): DC level over noise */
+            /* Calculate signal characteristics */
             float snr_estimate = 0.0;
             if (result.std_dev > 0.0) {
                 snr_estimate = 20.0 * log10(fabs(result.mean) / result.std_dev);
             }
             
             printf("SNR estimate:   %.1f dB\n", snr_estimate);
-
+            
+            /* Signal quality assessment */
             if (result.std_dev / fabs(result.mean) < 0.01) {
                 printf("Signal quality: Excellent (< 1%% noise)\n");
             } else if (result.std_dev / fabs(result.mean) < 0.05) {
@@ -951,11 +997,12 @@ void calculate_statistics(void) {
                 printf("Signal quality: Poor (> 10%% noise)\n");
             }
         } else {
-            /* No 287: show range/DC instead of the log10-based SNR */
+            /* Simple software mode analysis */
             printf("Signal range:   %.*f %s\n", decimal_places, result.peak_to_peak * scale_factor, unit_str);
             printf("DC component:   %.*f %s\n", decimal_places, result.mean * scale_factor, unit_str);
         }
-
+        
+        /* Data quality indicators */
         printf("\nData Quality:\n");
         printf("-------------\n");
         if (count >= 1000) {
@@ -967,9 +1014,10 @@ void calculate_statistics(void) {
         } else {
             printf("Sample size:    Poor (%d samples)\n", count);
         }
-
-        /* DM5120 only: flag readings beyond +/-10 as possibly clipped */
+        
+        /* Check for potential clipping */
         if (g_system->modules[slot].module_type == MOD_DM5120) {
+            /* DM5120 specific range checking */
             if (fabs(result.max_value) > 10.0 || fabs(result.min_value) > 10.0) {
                 printf("Range warning:  Signal may be clipped\n");
             } else {
@@ -985,6 +1033,16 @@ void calculate_statistics(void) {
     getch();
 }
 
+/* Data analysis menu stub */
+
+
+/* Unit conversion menu stub */
+
+
+/* Calculator menu stub */
+
+
+/* Module selection menu for monitoring */
 void module_selection_menu(void) {
     int done = 0;
     int i, key;
@@ -1001,7 +1059,7 @@ void module_selection_menu(void) {
         
         printf("Available Modules:\n");
         for (i = 0; i < 10; i++) {
-            /* Skip ghost slots: enabled but no type, address or description */
+            /* Only show valid modules - not ghost/phantom modules */
             if (g_system->modules[i].enabled &&
                 g_system->modules[i].module_type != MOD_NONE &&
                 g_system->modules[i].gpib_address >= 1 &&
@@ -1020,7 +1078,7 @@ void module_selection_menu(void) {
         
         selected_count = 0;
         for (i = 0; i < 10; i++) {
-            /* Same ghost-slot filter as above */
+            /* Only count valid modules - not ghost/phantom modules */
             if (g_system->modules[i].enabled &&
                 g_system->modules[i].module_type != MOD_NONE &&
                 g_system->modules[i].gpib_address >= 1 &&
@@ -1054,7 +1112,7 @@ void module_selection_menu(void) {
             i = key - '0';
             if (g_system->modules[i].enabled) {
                 g_control_panel.monitor_mask ^= (1 << i);
-                g_control_panel.monitor_all = 0;  /* any toggle means selective mode */
+                g_control_panel.monitor_all = 0;  /* Switch to selective mode */
             }
         } else if (toupper(key) == 'A') {
             g_control_panel.monitor_mask = 0xFF;
@@ -1068,6 +1126,7 @@ void module_selection_menu(void) {
     }
 }
 
+/* Module settings submenu */
 void module_settings_menu(void) {
     int choice;
     int done = 0;
@@ -1254,6 +1313,7 @@ void module_settings_menu(void) {
     }
 }
 
+/* Module functions menu */
 void module_functions_menu(void) {
     int choice;
     int done = 0;
@@ -1360,14 +1420,58 @@ void module_functions_menu(void) {
     }
 }
 
-/* CGA graph view: traces, cursor readout, zoom and pan. */
+/* ---- Grid-OS graph helpers ------------------------------------------ */
+/* CGA 320x200x4: 4 pixels per byte, even rows at B800:0000, odd at +2000h */
+static unsigned char far *vaddr(int x, int y) {
+    return video_mem + ((y & 1) ? 8192 : 0) + (y >> 1) * 80 + (x >> 2);
+}
+
+/* save (restore = 0) or put back (restore = 1) the bytes under a rectangle */
+static void vsave(int x1, int y1, int x2, int y2, unsigned char *buf, int restore) {
+    int y, n = (x2 >> 2) - (x1 >> 2) + 1;
+    for (y = y1; y <= y2; y++, buf += n) {
+        if (restore) _fmemcpy(vaddr(x1, y), buf, n);
+        else         _fmemcpy(buf, vaddr(x1, y), n);
+    }
+}
+
+static char foot_info[80];                            /* scale + status, for printing */
+#define RO_MAXCH 25                                   /* readout characters */
+static unsigned char cur_buf[GRAPH_HEIGHT + 2];       /* under the cursor line */
+static unsigned char ro_buf[10 * ((RO_MAXCH * 6 + 8) / 4 + 2)];  /* under the readout */
+static int cur_on = 0, cur_sx = -1, ro_on = 0;
+static int ro_x1, ro_y1, ro_x2, ro_y2;
+static int ptr_on = 0;                                /* mouse pointer shown */
+
+static void cursor_erase(void) {     /* readout first: it was saved last */
+    if (ro_on)  vsave(ro_x1, ro_y1, ro_x2, ro_y2, ro_buf, 1);
+    if (cur_on) vsave(cur_sx, GRAPH_TOP, cur_sx, GRAPH_BOTTOM, cur_buf, 1);
+    ro_on = cur_on = 0;
+}
+
+/* The driver draws its pointer into video memory: hide it while we draw */
+static void ptr_hide(void) { if (ptr_on) { hide_mouse(); ptr_on = 0; } }
+static void ptr_show(int want) { if (want && g_mouse.present && !ptr_on) { show_mouse(); ptr_on = 1; } }
+
+/* Mouse position in 320x200 pixels (INT 33h reports X as 0-639 in mode 4;
+   get_mouse_status() divides by 8 for text menus, too coarse here) */
+static void mouse_raw(int *x, int *y, int *buttons) {
+    union REGS r;
+    r.x.ax = MOUSE_STATUS;
+    int86(MOUSE_INT, &r, &r);
+    *x = r.x.cx >> 1;
+    *y = r.x.dx;
+    *buttons = r.x.bx;
+}
+
+/* Graph display function - complete implementation from TM5000L.c */
 void graph_display(void) {
     int done = 0;
     int i, j, x, y, old_x = -1, old_y = -1;
     int key;
     char readout[80];
-    float value;
-    int mouse_visible = 0;
+    double value;
+    int mouse_visible = g_mouse.present;   /* Grid-OS: mouse on by default (M toggles) */
     int need_redraw = 1;
     int active_traces = 0;
     int any_data = 0;
@@ -1379,7 +1483,7 @@ void graph_display(void) {
     int sample_num;          
     int current_sample;      
     int slot;                
-    float center, range, shift;  
+    double center, range, shift;  
     float x_scale;           
     int x_pos1, x_pos2, y_pos1, y_pos2;  
     int old_cursor_x = -1;   
@@ -1392,11 +1496,11 @@ void graph_display(void) {
     int last_readout_x = -1;       
     int last_readout_y = -1;
     int last_readout_width = 0;
-    int last_sample_number = -1;  /* readout is cleared only when the sample changes */
-    float mouse_graph_position;        /* 0..1 across the graph width */
+    int last_sample_number = -1;  /* Track sample changes for immediate refresh */
+    float mouse_graph_position;        /* Mouse position normalized to graph area */
     int shift_pressed = 0;   
     int is_fft_trace[10];     
-    int is_derivative_trace[10];
+    int is_derivative_trace[10];  /* Track derivative traces */
     float freq_scale;        
     char *freq_unit_str;     
     float freq_multiplier;   
@@ -1407,10 +1511,11 @@ void graph_display(void) {
     float y_range;
     float max_abs_value;
     float per_div_value;
-    static int zoom_operations_count = 0;  /* zooms since last snap_graph_scale_to_clean_values() */
+    static int zoom_operations_count = 0;  /* Count zoom operations for periodic cleaning */
+    /* Enhanced cursor mode state variables */
     int fine_cursor_mode = 0;    /* 0=coarse, 1=fine */
-    float current_frequency = 0.0;  /* Hz; FFT cursor moves by frequency, not sample */
-    int cursor_mode_changed = 0;
+    float current_frequency = 0.0;  /* For FFT frequency-based navigation */
+    int cursor_mode_changed = 0;    /* Flag to update cursor mode display */
     
     for (i = 0; i < 10; i++) {
         is_fft_trace[i] = 0;
@@ -1419,8 +1524,8 @@ void graph_display(void) {
             is_fft_trace[i] = 1;
         }
     }
-
-    /* Derivative traces, like FFT ones above, are recognised by description */
+    
+    /* Detect derivative traces similar to FFT */
     for (i = 0; i < 10; i++) {
         is_derivative_trace[i] = 0;
         if (g_system->modules[i].enabled && 
@@ -1450,10 +1555,11 @@ void graph_display(void) {
     sync_traces_with_modules();
     
     if (selected_trace == -1) {
-        /* Prefer slot 0, else the first trace with data */
+        /* First try slot 0 if it has data */
         if (g_traces[0].enabled && g_traces[0].data_count > 0) {
             selected_trace = 0;
         } else {
+            /* Otherwise find first active slot with data */
             for (i = 0; i < 10; i++) {
                 if (g_traces[i].enabled && g_traces[i].data_count > 0) {
                     selected_trace = i;
@@ -1481,7 +1587,7 @@ void graph_display(void) {
     } else {
         cursor_x = GRAPH_LEFT + GRAPH_WIDTH / 2;
         current_sample = 0;
-        sample_to_x_scale = 1.0;
+        sample_to_x_scale = 1.0;  /* Default scale */
     }
     
     init_graphics();
@@ -1511,7 +1617,8 @@ void graph_display(void) {
     } else {
         unit_str = display_unit_str;
     }
-
+    
+    /* Initialize cursor to be visible for immediate user feedback */
     cursor_visible = 1;
     readout_needs_update = 1;
     
@@ -1521,8 +1628,12 @@ void graph_display(void) {
         y_scale = (float)GRAPH_HEIGHT / y_range_check;
     }
     
+    if (mouse_visible) mouse_raw(&old_x, &old_y, &i);   /* cursor moves only when the mouse does */
+    cur_on = ro_on = ptr_on = 0;
+    
     while (!done) {
         if (need_redraw) {
+            ptr_hide();
             _fmemset(video_mem, 0, 16384);
             
             if (selected_trace >= 0 && is_fft_trace[selected_trace]) {
@@ -1531,183 +1642,129 @@ void graph_display(void) {
                 draw_grid_dynamic(max_samples);
             }
             
-            for (i = 0; i < 10; i++) {
-                if (g_traces[i].enabled && g_traces[i].data_count > 1) {
-                    int decimation_factor = 1;
-                    int effective_samples;
-                    int start_sample = g_graph_scale.sample_start;
-                    int display_count;
-                    
+            {   /* Grid-OS: one double-precision mapping per redraw and each point
+                   converted once (was: graph_limits() twice per segment, and a
+                   float path on 287 machines that lost detail on big values) */
+                double gmn, gmx, ys, yy;
+                graph_limits(&gmn, &gmx);
+                ys = (gmx > gmn) ? (double)GRAPH_HEIGHT / (gmx - gmn) : 1.0;
+                for (i = 0; i < 10; i++) {
+                    int decimation_factor = 1, effective_samples, start_sample, display_count, cnt;
+                    if (!(g_traces[i].enabled && g_traces[i].data_count > 1)) continue;
+                    cnt = g_traces[i].data_count;
+                    start_sample = g_graph_scale.sample_start;
                     if (g_graph_scale.sample_count == 0) {
                         start_sample = 0;
-                        display_count = g_traces[i].data_count;
+                        display_count = cnt;
                     } else {
                         display_count = g_graph_scale.sample_count;
-                        if (start_sample >= g_traces[i].data_count) {
-                            start_sample = 0;
-                        }
-                        if (start_sample + display_count > g_traces[i].data_count) {
-                            display_count = g_traces[i].data_count - start_sample;
-                        }
+                        if (start_sample >= cnt) start_sample = 0;
+                        if (start_sample + display_count > cnt) display_count = cnt - start_sample;
                     }
-                    
                     effective_samples = display_count;
-                    
-                    if (display_count > GRAPH_WIDTH) {
-                        if (g_has_287) {
-                            decimation_factor = (display_count + GRAPH_WIDTH - 1) / GRAPH_WIDTH;
-                        } else {
-                            decimation_factor = display_count / GRAPH_WIDTH;
-                            if (decimation_factor < 1) decimation_factor = 1;
-                        }
+                    if (display_count > GRAPH_WIDTH) {   /* about one point per pixel column */
+                        decimation_factor = (display_count + GRAPH_WIDTH - 1) / GRAPH_WIDTH;
                         effective_samples = display_count / decimation_factor;
                     }
-                    
-                    if (effective_samples > 1) {
-                        if (g_has_287) {
-                            x_scale = (float)GRAPH_WIDTH / (float)(effective_samples - 1);
-                        } else {
-                            x_scale = (float)GRAPH_WIDTH / (float)(effective_samples - 1);
-                        }
-                    } else {
-                        x_scale = (float)GRAPH_WIDTH;  /* Prevent divide by zero */
-                    }
-                    
-                    for (j = 0; j < effective_samples - 1; j++) {
-                        int sample_idx1 = start_sample + (j * decimation_factor);
-                        int sample_idx2 = start_sample + ((j + 1) * decimation_factor);
-                        
-                        if (sample_idx1 >= g_traces[i].data_count) sample_idx1 = g_traces[i].data_count - 1;
-                        if (sample_idx2 >= g_traces[i].data_count) sample_idx2 = g_traces[i].data_count - 1;
-                        if (g_has_287) {
-                            x_pos1 = GRAPH_LEFT + (int)(j * x_scale);
-                            x_pos2 = GRAPH_LEFT + (int)((j + 1) * x_scale);
-                        } else {
-                            x_pos1 = GRAPH_LEFT + (int)((float)j * x_scale);
-                            x_pos2 = GRAPH_LEFT + (int)((float)(j + 1) * x_scale);
-                        }
-                        
-                        if (x_pos1 < GRAPH_LEFT) x_pos1 = GRAPH_LEFT;
+                    x_scale = (effective_samples > 1) ? (float)GRAPH_WIDTH / (float)(effective_samples - 1)
+                                                      : (float)GRAPH_WIDTH;
+                    for (j = 0; j < effective_samples; j++) {
+                        int idx = start_sample + j * decimation_factor;
+                        if (idx >= cnt) idx = cnt - 1;
+                        x_pos2 = GRAPH_LEFT + (int)(j * x_scale);
                         if (x_pos2 > GRAPH_RIGHT) x_pos2 = GRAPH_RIGHT;
-                        
-                        if (g_has_287) {
-                            normalized_y = (g_traces[i].data[sample_idx1] - g_graph_scale.min_value) * y_scale;
-                            y_pos1 = GRAPH_BOTTOM - (int)normalized_y;
-                            
-                            normalized_y = (g_traces[i].data[sample_idx2] - g_graph_scale.min_value) * y_scale;
-                            y_pos2 = GRAPH_BOTTOM - (int)normalized_y;
-                        } else {
-                            y_pos1 = value_to_y(g_traces[i].data[sample_idx1]);
-                            y_pos2 = value_to_y(g_traces[i].data[sample_idx2]);
-                        }
-                        
-                        if (y_pos1 < GRAPH_TOP) y_pos1 = GRAPH_TOP;
-                        if (y_pos1 > GRAPH_BOTTOM) y_pos1 = GRAPH_BOTTOM;
-                        if (y_pos2 < GRAPH_TOP) y_pos2 = GRAPH_TOP;
-                        if (y_pos2 > GRAPH_BOTTOM) y_pos2 = GRAPH_BOTTOM;
-                        
-                        if (x_pos1 >= GRAPH_LEFT && x_pos2 <= GRAPH_RIGHT) {
-                            if (i == selected_trace) {
-                                draw_line_aa(x_pos1, y_pos1, x_pos2, y_pos2, g_traces[i].color);
-                                if (y_pos1 > GRAPH_TOP && y_pos1 < GRAPH_BOTTOM) {
-                                    draw_line_aa(x_pos1, y_pos1-1, x_pos2, y_pos2-1, g_traces[i].color);
-                                }
-                            } else {
-                                draw_line_aa(x_pos1, y_pos1, x_pos2, y_pos2, g_traces[i].color);
+                        yy = (g_traces[i].data[idx] - gmn) * ys;
+                        if (yy < 0.0) yy = 0.0;
+                        if (yy > GRAPH_HEIGHT) yy = GRAPH_HEIGHT;
+                        y_pos2 = GRAPH_BOTTOM - (int)yy;
+                        if (j > 0) {
+                            draw_line_aa(x_pos1, y_pos1, x_pos2, y_pos2, g_traces[i].color);
+                            if (i == selected_trace && y_pos1 > GRAPH_TOP && y_pos1 < GRAPH_BOTTOM) {
+                                draw_line_aa(x_pos1, y_pos1-1, x_pos2, y_pos2-1, g_traces[i].color);
                             }
                         }
+                        x_pos1 = x_pos2;
+                        y_pos1 = y_pos2;
                     }
                 }
             }
             
             draw_legend_enhanced(is_fft_trace, selected_trace);
             
-            draw_gradient_rect(0, 185, SCREEN_WIDTH-1, 199, 1, 2);
+            /* Grid-OS: plain footer - text on the old two-tone bar was unreadable
+               on the plasma screen (and it was 4,800 single-pixel writes) */
+            _fmemset(video_mem + 93 * 80, 0, 7 * 80);          /* rows 186-199 */
+            _fmemset(video_mem + 8192 + 93 * 80, 0, 7 * 80);
+            draw_line(0, 186, SCREEN_WIDTH - 1, 186, 1);   /* text rows 188-192 and 194-198 */
+            draw_text_small(2, 188, "A:AUTO +/-:ZOOM F:FINE H:HELP T:TRACES X:TIME", 3);
+            draw_text_small(2 + 4 * 46, 188, "P:PRINT", 3);
+            draw_text_small(2, 194, g_mouse.present ? "0-9:SEL ALT+#:SHOW M:MOUSE O:PRINT MENU ESC:EXIT"
+                                              : "0-9:SEL ALT+#:SHOW O:PRINT MENU ESC:EXIT", 3);
             
-            draw_text(2, 186, "A:AUTO +/-:ZOOM F:FINE/COARSE H:HELP", 3);
-            draw_text(2, 193, "0-9:SELECT ALT+#:TOGGLE ESC:EXIT", 3);
-            
-            if (selected_trace >= 0 && is_fft_trace[selected_trace]) {
-                float sample_rate = (g_control_panel.sample_rate_ms > 0) ? (1000.0 / g_control_panel.sample_rate_ms) : 1000.0;
-                float max_freq = sample_rate / 2.0;
-                sprintf(readout, "0-%.1f%s", max_freq / freq_multiplier, freq_unit_str);
-            } else {
-                if (display_decimal_places == 0) {
-                    sprintf(readout, "%.0f-%.0f%s", 
-                            g_graph_scale.min_value * display_scale_factor,
-                            g_graph_scale.max_value * display_scale_factor,
-                            display_unit_str);
+            {   /* Grid-OS footer, right side: line 1 = scale per division,
+                   line 2 = cursor step + flags (no more overlapping fields) */
+                char st[40];
+                if (selected_trace >= 0 && is_fft_trace[selected_trace]) {
+                    float sample_rate = (g_control_panel.sample_rate_ms > 0) ? (1000.0 / g_control_panel.sample_rate_ms) : 1000.0;
+                    float max_freq = sample_rate / 2.0;
+                    sprintf(readout, "0-%.1f%s", max_freq / freq_multiplier, freq_unit_str);
                 } else {
-                    sprintf(readout, "%.*f-%.*f%s", 
-                            display_decimal_places, g_graph_scale.min_value * display_scale_factor,
-                            display_decimal_places, g_graph_scale.max_value * display_scale_factor,
-                            display_unit_str);
+                    double rmn, rmx;
+                    graph_limits(&rmn, &rmx);
+                    sprintf(readout, "%.3G%s/DIV", (rmx - rmn) / 5.0 * display_scale_factor, display_unit_str);
                 }
-            }
-            draw_text(240, 186, readout, 3);
-            
-            if (g_has_287) {
-                draw_text(240, 193, "287", 3);
-            }
-            
-            if (selected_trace >= 0 && g_traces[selected_trace].enabled && 
-                g_traces[selected_trace].data_count >= 1000) {
-                draw_text(255, 193, "1K", 3);
-            }
-            
-            if (g_graph_scale.sample_count > 0) {
-                char range_str[20];
-                sprintf(range_str, "R:%d-%d", 
-                        g_graph_scale.sample_start + 1, 
-                        g_graph_scale.sample_start + g_graph_scale.sample_count);
-                draw_text(270, 193, range_str, 3);
-            }
-            
-            if (selected_trace >= 0 && g_system->modules[selected_trace].module_type == MOD_DM5120) {
-                dm5120_config *cfg = &g_dm5120_config[selected_trace];
-                if (cfg->buffer_enabled && cfg->burst_mode) {
-                    sprintf(readout, "BUF@%.0fHz", cfg->sample_rate);
-                    draw_text(280, 193, readout, 3);
+                draw_text_small(SCREEN_WIDTH - 1 - 4 * (int)strlen(readout), 188, readout, 3);   /* right-aligned */
+                
+                st[0] = '\0';
+                if (selected_trace >= 0 && g_traces[selected_trace].enabled) {
+                    if (is_fft_trace[selected_trace]) strcpy(st, fine_cursor_mode ? "0.01HZ" : "0.1HZ");
+                    else                              strcpy(st, fine_cursor_mode ? "1SMP" : "10SMP");
                 }
-            }
-            
-            /* Cursor step indicator: Hz per step on FFT traces, samples per step otherwise */
-            if (selected_trace >= 0 && g_traces[selected_trace].enabled) {
-                char mode_str[10];
-                if (is_fft_trace[selected_trace]) {
-                    if (fine_cursor_mode) {
-                        strcpy(mode_str, "0.01Hz");
+                if (g_has_287) strcat(st, " 287");
+                if (selected_trace >= 0 && g_system->modules[selected_trace].avg_shift > 0) {
+                    sprintf(st + strlen(st), " AVGX%u", 1u << g_system->modules[selected_trace].avg_shift);
+                }
+                if (g_xaxis_time) {
+                    long sp;
+                    if (time_axis_slot(max_samples, &sp) >= 0) {
+                        strcat(st, " T:");
+                        strcat(st, time_unit_name(sp));
                     } else {
-                        strcpy(mode_str, "0.1Hz");
-                    }
-                } else {
-                    if (fine_cursor_mode) {
-                        strcpy(mode_str, "1smp");
-                    } else {
-                        strcpy(mode_str, "10smp");
+                        strcat(st, " NO TIME");   /* samples have no time stamps */
                     }
                 }
-                draw_text(290, 186, mode_str, fine_cursor_mode ? 3 : 2);  /* Bright when fine, dim when coarse */
+                if (g_graph_scale.sample_count > 0) {
+                    sprintf(st + strlen(st), " R:%d-%d", g_graph_scale.sample_start + 1,
+                            g_graph_scale.sample_start + g_graph_scale.sample_count);
+                } else if (selected_trace >= 0 && g_system->modules[selected_trace].module_type == MOD_DM5120 &&
+                           g_dm5120_config[selected_trace].buffer_enabled && g_dm5120_config[selected_trace].burst_mode) {
+                    sprintf(st + strlen(st), " BUF");
+                }
+                draw_text_small(SCREEN_WIDTH - 1 - 4 * (int)strlen(st), 194, st, 3);
+                sprintf(foot_info, "%.30s   %.40s", readout, st);   /* caption for P */
             }
             
             need_redraw = 0;
-        }
-        
-        if (cursor_x != old_cursor_x && cursor_visible) {
-            need_redraw = 1;  /* Trigger full redraw to clear old cursor */
-            old_cursor_x = cursor_x;
+            cur_on = ro_on = 0;          /* screen redrawn: nothing to restore */
             readout_needs_update = 1;
-            continue;  /* Skip to redraw immediately */
+            ptr_show(mouse_visible);
         }
         
-        if (cursor_visible && cursor_x >= GRAPH_LEFT && cursor_x <= GRAPH_RIGHT && 
-            readout_needs_update) {
-            
-            for (y = GRAPH_TOP; y <= GRAPH_BOTTOM; y += 2) {
-                plot_pixel(cursor_x, y, 3);
+        /* ---- Grid-OS: cursor + readout drawn over a saved copy of what is
+         * under them, so moving the cursor costs a few hundred bytes of
+         * copying instead of a full redraw of grid, traces and legend.  */
+        if (cursor_visible && readout_needs_update) {
+            ptr_hide();
+            cursor_erase();
+            if (cursor_x >= GRAPH_LEFT && cursor_x <= GRAPH_RIGHT) {
+                vsave(cursor_x, GRAPH_TOP, cursor_x, GRAPH_BOTTOM, cur_buf, 0);
+                cur_on = 1;
+                cur_sx = cursor_x;
+                for (y = GRAPH_TOP; y <= GRAPH_BOTTOM; y += 2) {
+                    plot_pixel(cursor_x, y, 3);
+                }
             }
-            
-            if (selected_trace >= 0 && g_traces[selected_trace].enabled) {
+            if (cur_on && selected_trace >= 0 && g_traces[selected_trace].enabled) {
                 if (keyboard_mode && g_has_287) {
                     sample_num = current_sample;
                 } else {
@@ -1731,32 +1788,36 @@ void graph_display(void) {
                 if (sample_num >= g_traces[selected_trace].data_count) {
                     sample_num = g_traces[selected_trace].data_count - 1;
                 }
-
+                
+                /* Bounds check for all data access */
                 if (sample_num >= 0 && sample_num < g_traces[selected_trace].data_count) {
                     value = g_traces[selected_trace].data[sample_num];
                 } else {
-                    value = 0.0;
+                    value = 0.0;  /* Safe fallback */
                 }
-
-                /* Uppercase readouts (font has no lowercase): U=micro, M=milli (mega only in MHZ), O=ohm. */
+                
+                /* Simple readout based on trace type */
                 if (g_traces[selected_trace].unit_type == UNIT_DB) {
-                    /* FFT trace: frequency and dB */
-                    if (g_traces[selected_trace].x_scale != 0.0 &&
+                    /* FFT trace - show dB value and frequency */
+                    if (g_traces[selected_trace].x_scale != 0.0 && 
                         g_traces[selected_trace].x_scale == g_traces[selected_trace].x_scale) { /* NaN check */
+                        /* Calculate frequency using x_scale and x_offset or current_frequency if available */
                         float freq;
                         if (keyboard_mode && current_frequency > 0.0) {
-                            /* arrow keys step in Hz, which can land between bins */
+                            /* Use current_frequency from keyboard navigation for precise readout */
                             freq = current_frequency;
                         } else {
+                            /* Calculate frequency using x_scale and x_offset */
                             freq = sample_num * g_traces[selected_trace].x_scale + g_traces[selected_trace].x_offset;
                         }
-
+                        
+                        /* Enhanced precision based on cursor mode */
                         if (fabs(freq) >= 1e6) {
                             sprintf(readout, "S%d[%.1fMHZ]:%.1fDB", selected_trace, freq / 1e6, value);
                         } else if (fabs(freq) >= 1e3) {
                             sprintf(readout, "S%d[%.1fKHZ]:%.1fDB", selected_trace, freq / 1e3, value);
                         } else {
-                            /* below 1 kHz, decimals follow the cursor step (0.01 / 0.1 Hz) */
+                            /* Fine mode: show 0.01Hz precision, coarse mode: show 0.1Hz */
                             if (fine_cursor_mode) {
                                 sprintf(readout, "S%d[%.2fHZ]:%.1fDB", selected_trace, freq, value);
                             } else {
@@ -1764,20 +1825,20 @@ void graph_display(void) {
                             }
                         }
                     } else {
-                        /* no usable x_scale: fall back to sample number */
+                        /* Invalid x_scale - show sample number instead */
                         sprintf(readout, "S%d[%d]:%.1fDB", selected_trace, sample_num, value);
                     }
                 } else if (g_traces[selected_trace].unit_type == UNIT_FREQUENCY) {
-                    /* counter trace */
+                    /* Counter trace - show frequency value */
                     if (value >= 1e6) {
-                        sprintf(readout, "S%d[%d]:%.3fMHZ", selected_trace, sample_num, value / 1e6);
+                        sprintf(readout, "S%d[%d]:%.7fMHZ", selected_trace, sample_num, value / 1e6);
                     } else if (value >= 1e3) {
-                        sprintf(readout, "S%d[%d]:%.1fKHZ", selected_trace, sample_num, value / 1e3);
+                        sprintf(readout, "S%d[%d]:%.4fKHZ", selected_trace, sample_num, value / 1e3);
                     } else {
-                        sprintf(readout, "S%d[%d]:%.0fHZ", selected_trace, sample_num, value);
+                        sprintf(readout, "S%d[%d]:%.3fHZ", selected_trace, sample_num, value);
                     }
                 } else if (g_traces[selected_trace].unit_type == UNIT_DERIVATIVE) {
-                    /* V/s */
+                    /* Derivative trace - show V/s value with appropriate scaling */
                     if (fabs(value) < 0.001) {
                         sprintf(readout, "S%d[%d]:%.1fUV/S", selected_trace, sample_num, value * 1000000.0);
                     } else if (fabs(value) < 1.0) {
@@ -1786,7 +1847,7 @@ void graph_display(void) {
                         sprintf(readout, "S%d[%d]:%.2fV/S", selected_trace, sample_num, value);
                     }
                 } else if (g_traces[selected_trace].unit_type == UNIT_CURRENT) {
-                    /* A / mA / uA */
+                    /* Current trace - show A/mA/µA value with appropriate scaling */
                     if (fabs(value) < 0.001) {
                         sprintf(readout, "S%d[%d]:%.1fUA", selected_trace, sample_num, value * 1000000.0);
                     } else if (fabs(value) < 1.0) {
@@ -1795,7 +1856,7 @@ void graph_display(void) {
                         sprintf(readout, "S%d[%d]:%.2fA", selected_trace, sample_num, value);
                     }
                 } else if (g_traces[selected_trace].unit_type == UNIT_RESISTANCE) {
-                    /* ohm / milliohm / microohm */
+                    /* Resistance trace - show Ω/mΩ/µΩ value with appropriate scaling */
                     if (fabs(value) < 0.001) {
                         sprintf(readout, "S%d[%d]:%.1fUO", selected_trace, sample_num, value * 1000000.0);
                     } else if (fabs(value) < 1.0) {
@@ -1804,7 +1865,7 @@ void graph_display(void) {
                         sprintf(readout, "S%d[%d]:%.2fO", selected_trace, sample_num, value);
                     }
                 } else {
-                    /* Voltage: scaled to the graph range (uV / mV / V), no unit suffix */
+                    /* Voltage trace - use current graph scale units */
                     float current_range = g_graph_scale.max_value - g_graph_scale.min_value;
                     if (current_range < 0.001) {
                         sprintf(readout, "S%d[%d]:%.0f", selected_trace, sample_num, value * 1000000.0);
@@ -1814,132 +1875,76 @@ void graph_display(void) {
                         sprintf(readout, "S%d[%d]:%.4f", selected_trace, sample_num, value);
                     }
                 }
-                
-                {
-                    int readout_x = cursor_x - 30;
-                    int readout_y = GRAPH_TOP + 20;
-                    int readout_width = strlen(readout) * 6;  /* CGA character width */
-                    
-                    if (readout_x < GRAPH_LEFT) readout_x = GRAPH_LEFT;
-                    if (readout_x > GRAPH_RIGHT - 60) readout_x = GRAPH_RIGHT - 60;
-                    
-                    /* No overlay plane on CGA: erase the old readout with a padded box,
-                       then redraw the trace segments it covered. */
-                    if (last_sample_number >= 0 && last_sample_number != sample_num) {
-
-                        int clear_x1 = last_readout_x - 5;
-                        int clear_x2 = last_readout_x + last_readout_width + 5;
-                        int clear_y1 = last_readout_y - 2;
-                        int clear_y2 = last_readout_y + 10;
-
-                        if (clear_x1 < GRAPH_LEFT) clear_x1 = GRAPH_LEFT;
-                        if (clear_x2 > GRAPH_RIGHT) clear_x2 = GRAPH_RIGHT;
-                        if (clear_y1 < GRAPH_TOP) clear_y1 = GRAPH_TOP;
-                        if (clear_y2 > GRAPH_BOTTOM) clear_y2 = GRAPH_BOTTOM;
-
-                        fill_rectangle(clear_x1, clear_y1, clear_x2, clear_y2, 0);
-
-                        for (i = 0; i < 10; i++) {
-                            if (g_traces[i].enabled && g_traces[i].data_count > 1) {
-                                int trace_x_start = clear_x1 - GRAPH_LEFT;
-                                int trace_x_end = clear_x2 - GRAPH_LEFT;
-                                
-                                if (trace_x_start >= 0 && trace_x_start < GRAPH_WIDTH) {
-                                    float x_norm_start = (float)trace_x_start / (float)GRAPH_WIDTH;
-                                    float x_norm_end = (float)trace_x_end / (float)GRAPH_WIDTH;
-                                    
-                                    int sample_start = (int)(x_norm_start * (g_traces[i].data_count - 1));
-                                    int sample_end = (int)(x_norm_end * (g_traces[i].data_count - 1)) + 1;
-                                    
-                                    if (sample_start < 0) sample_start = 0;
-                                    if (sample_end >= g_traces[i].data_count) sample_end = g_traces[i].data_count - 1;
-
-                                    for (j = sample_start; j < sample_end && j < g_traces[i].data_count - 1; j++) {
-                                        float x_scale_local = (float)GRAPH_WIDTH / (float)(g_traces[i].data_count - 1);
-                                        int x_pos1 = GRAPH_LEFT + (int)(j * x_scale_local);
-                                        int x_pos2 = GRAPH_LEFT + (int)((j + 1) * x_scale_local);
-                                        int y_pos1 = value_to_y(g_traces[i].data[j]);
-                                        int y_pos2 = value_to_y(g_traces[i].data[j + 1]);
-
-                                        /* endpoint-in-box test: may miss a segment that only crosses it */
-                                        if ((x_pos1 >= clear_x1 && x_pos1 <= clear_x2) ||
-                                            (x_pos2 >= clear_x1 && x_pos2 <= clear_x2)) {
-                                            if ((y_pos1 >= clear_y1 && y_pos1 <= clear_y2) ||
-                                                (y_pos2 >= clear_y1 && y_pos2 <= clear_y2)) {
-                                                draw_line_aa(x_pos1, y_pos1, x_pos2, y_pos2, g_traces[i].color);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                /* Grid-OS: time axis -> "S0[12.3S]:..." instead of "S0[31]:..." */
+                if (g_xaxis_time && !is_fft_trace[selected_trace]) {
+                    long t = sample_time_ms(selected_trace, sample_num);
+                    long sp = sample_time_ms(selected_trace, g_traces[selected_trace].data_count - 1);
+                    char *a = strchr(readout, '['), *b = strchr(readout, ']');
+                    if (t >= 0 && sp >= 0 && a && b && b > a) {
+                        char tb[16], tmp[80];
+                        fmt_time_label(tb, t, sp);
+                        *a = '\0';
+                        sprintf(tmp, "%s[%s%s]%s", readout, tb, sp < 100000L ? "S" : "", b + 1);
+                        strcpy(readout, tmp);
                     }
-
-                    draw_text(readout_x, readout_y, readout, 3);
-
-                    last_readout_x = readout_x;
-                    last_readout_y = readout_y;
-                    last_readout_width = readout_width;
-                    last_sample_number = sample_num;
+                }
+                {
+                    int rw, rx, ry = GRAPH_TOP + 2;
+                    readout[RO_MAXCH] = '\0';
+                    rw = strlen(readout) * 6;
+                    rx = cursor_x + 4;                       /* right of the cursor ... */
+                    if (rx + rw > GRAPH_RIGHT - 1) rx = cursor_x - 4 - rw;   /* ... or left */
+                    if (rx < GRAPH_LEFT + 1) rx = GRAPH_LEFT + 1;
+                    ro_x1 = rx - 1;  ro_x2 = rx + rw;
+                    ro_y1 = ry - 1;  ro_y2 = ry + 7;
+                    if (ro_x2 > GRAPH_RIGHT - 1) ro_x2 = GRAPH_RIGHT - 1;
+                    vsave(ro_x1, ro_y1, ro_x2, ro_y2, ro_buf, 0);
+                    ro_on = 1;
+                    fill_rectangle(ro_x1, ro_y1, ro_x2, ro_y2, 0);  /* readable over the trace */
+                    draw_text(rx, ry, readout, 3);
                 }
             }
-            
             readout_needs_update = 0;
+            ptr_show(mouse_visible);
         }
+
         
         if (g_mouse.present && mouse_visible) {
-            get_mouse_status();
-            
-            /* mouse reports 80x25 text cells; scale to 320x200 pixels */
-            x = g_mouse.x * 320 / 80;
-            y = g_mouse.y * 200 / 25;
-
-            if ((x != old_x || y != old_y) && 
+            int mb;
+            mouse_raw(&x, &y, &mb);              /* 320x200 pixel position */
+            /* Cursor follows the mouse inside the graph (any movement) */
+            if ((x != old_x || y != old_y) &&
                 x >= GRAPH_LEFT && x <= GRAPH_RIGHT &&
                 y >= GRAPH_TOP && y <= GRAPH_BOTTOM) {
-                
                 keyboard_mode = 0;
-
-                /* Snap to the nearest sample, then place cursor_x the same way the arrow keys do */
                 if (selected_trace >= 0 && g_traces[selected_trace].enabled &&
                     g_traces[selected_trace].data_count > 1) {
-
                     sample_to_x_scale = (float)GRAPH_WIDTH / (float)(g_traces[selected_trace].data_count - 1);
-
-                    mouse_graph_position = (float)(x - GRAPH_LEFT) / (float)GRAPH_WIDTH;
-                    if (mouse_graph_position < 0.0) mouse_graph_position = 0.0;
-                    if (mouse_graph_position > 1.0) mouse_graph_position = 1.0;
-                    
-                    current_sample = (int)(mouse_graph_position * (g_traces[selected_trace].data_count - 1) + 0.5);
-
+                    current_sample = (int)((long)(x - GRAPH_LEFT) * (g_traces[selected_trace].data_count - 1) / GRAPH_WIDTH);
                     if (current_sample < 0) current_sample = 0;
                     if (current_sample >= g_traces[selected_trace].data_count) {
                         current_sample = g_traces[selected_trace].data_count - 1;
                     }
-
                     cursor_x = GRAPH_LEFT + (int)(current_sample * sample_to_x_scale);
                 } else {
-                    /* no selected trace: follow the mouse pixel */
                     cursor_x = x;
-                    if (cursor_x < GRAPH_LEFT) cursor_x = GRAPH_LEFT;
-                    if (cursor_x > GRAPH_RIGHT) cursor_x = GRAPH_RIGHT;
                 }
-                
-                cursor_visible = 1;
-                readout_needs_update = 1;
-                
-                old_x = x;
-                old_y = y;
+                if (cursor_x != cur_sx || !cur_on) {
+                    cursor_visible = 1;
+                    readout_needs_update = 1;
+                }
             }
+            old_x = x;
+            old_y = y;
         }
         
         if (kbhit()) {
             key = getch();
-
-            /* Raw codes 128-137 toggle slots 0-9. Real ALT+digit arrives as an
-               extended key (0 then 120-129) and is handled under case 0 below. */
-            if (key >= 128 && key <= 137) {
-                slot = key - 128;
+            
+            /* Extended key handling moved to main switch statement case 0 */
+            
+            if (key >= 128 && key <= 137) {  /* ALT+0 through ALT+9 - alternative handling */
+                slot = key - 128;  /* Convert to slot number 0-9 */
                 
                 if (slot < 10) {
                     if (g_system->modules[slot].enabled && 
@@ -1976,7 +1981,7 @@ void graph_display(void) {
                     cursor_visible = 1;
                     keyboard_mode = 1;
                     
-                    /* center the cursor on the newly selected trace */
+                    /* Initialize cursor position to center of selected trace */
                     if (g_traces[slot].data_count > 0) {
                         current_sample = g_traces[slot].data_count / 2;
                         sample_to_x_scale = (float)GRAPH_WIDTH / (float)(g_traces[slot].data_count - 1);
@@ -2017,7 +2022,8 @@ void graph_display(void) {
                             sample_to_x_scale = (float)GRAPH_WIDTH / (float)(g_traces[selected_trace].data_count - 1);
                             cursor_x = GRAPH_LEFT + (int)((float)current_sample * sample_to_x_scale);
                         }
-
+                        
+                        /* Initialize current_frequency for FFT traces */
                         if (is_fft_trace[selected_trace]) {
                             current_frequency = g_traces[selected_trace].x_offset + 
                                               (current_sample * g_traces[selected_trace].x_scale);
@@ -2072,77 +2078,73 @@ void graph_display(void) {
                     break;
                     
                 case '+':  /* Zoom in */
-                    if (g_has_287) {
-                        center = (g_graph_scale.max_value + g_graph_scale.min_value) * 0.5;
-                        range = (g_graph_scale.max_value - g_graph_scale.min_value) * 0.4;
-                    } else {
-                        center = (g_graph_scale.max_value + g_graph_scale.min_value) / 2;
-                        range = (g_graph_scale.max_value - g_graph_scale.min_value) / 2;
-                        range *= 0.8;
+                    {   /* Grid-OS: zoom on the double-precision limits */
+                        double mn, mx;
+                        graph_limits(&mn, &mx);
+                        center = (mx + mn) * 0.5;
+                        range = (mx - mn) * 0.4;
                     }
-
-                    /* range is the half-span (center +/- range); snap small ones to clean uV/mV steps */
-                    if (range < 0.000005) {
-                        float range_uv = range * 1000000.0;
-                        range_uv = ((int)(range_uv + 0.5));  /* round to 1uV */
-                        if (range_uv < 5.0) range_uv = 5.0;  /* 5uV floor: 10uV span, 2uV/div over 5 divs */
-                        range = range_uv / 1000000.0;
+                    
+                    if (range < 0.000005) {  /* Less than 5µV total range */
+                        float range_uv = range * 1000000.0;  /* Convert to µV */
+                        range_uv = ((int)(range_uv + 0.5));  /* Round to 1µV */
+                        if (range_uv < 5.0) range_uv = 5.0;  /* Minimum 5µV range (1µV per div) */
+                        range = range_uv / 1000000.0;  /* Convert back to V */
                     }
-                    else if (range < 0.000010) {
-                        range = 0.000005;  /* same 5uV floor */
+                    else if (range < 0.000010) {  /* Less than 10µV total range */
+                        range = 0.000005;  /* Set to exactly 5µV total (1µV per div) */
                     }
-                    else if (range < 0.000050) {
-                        float range_uv = range * 1000000.0;
-                        range_uv = ((int)((range_uv + 2.5) / 5.0)) * 5.0;  /* round to 5uV */
-                        if (range_uv < 5.0) range_uv = 5.0;
-                        range = range_uv / 1000000.0;
+                    else if (range < 0.000050) {  /* Less than 50µV total range */
+                        float range_uv = range * 1000000.0;  /* Convert to µV */
+                        range_uv = ((int)((range_uv + 2.5) / 5.0)) * 5.0;  /* Round to 5µV */
+                        if (range_uv < 5.0) range_uv = 5.0;  /* Minimum 5µV range */
+                        range = range_uv / 1000000.0;  /* Convert back to V */
                     }
-                    else if (range < 0.005) {
-                        float range_mv = range * 1000.0;
-                        range_mv = ((int)(range_mv * 10.0 + 0.5)) / 10.0;  /* round to 0.1mV */
-                        if (range_mv < 0.1) range_mv = 0.1;
-                        range = range_mv / 1000.0;
+                    else if (range < 0.005) {  /* Less than 5mV total range */
+                        float range_mv = range * 1000.0;  /* Convert to mV */
+                        range_mv = ((int)(range_mv * 10.0 + 0.5)) / 10.0;  /* Round to 0.1mV */
+                        if (range_mv < 0.1) range_mv = 0.1;  /* Minimum 0.1mV range */
+                        range = range_mv / 1000.0;  /* Convert back to V */
                     }
-                    else if (range < 0.050) {
-                        float range_mv = range * 1000.0;
-                        range_mv = ((int)(range_mv + 0.5));  /* round to 1mV */
-                        if (range_mv < 1.0) range_mv = 1.0;
-                        range = range_mv / 1000.0;
+                    else if (range < 0.050) {  /* Less than 50mV total range */
+                        float range_mv = range * 1000.0;  /* Convert to mV */
+                        range_mv = ((int)(range_mv + 0.5));  /* Round to 1mV */
+                        if (range_mv < 1.0) range_mv = 1.0;  /* Minimum 1mV range */
+                        range = range_mv / 1000.0;  /* Convert back to V */
                     }
-
-                    g_graph_scale.min_value = center - range;
-                    g_graph_scale.max_value = center + range;
+                    
+                    set_limits(center - range, center + range);
                     g_graph_scale.auto_scale = 0;
-
-                    /* Snap to clean values now and then so repeated zooms don't accumulate float drift */
+                    
+                    /* 287-optimized precision drift detection */
                     {
                         double current_range_d = (double)g_graph_scale.max_value - (double)g_graph_scale.min_value;
-                        double per_div_d = current_range_d * 0.2;  /* 5 divisions; 0.2 is inexact in binary */
+                        double per_div_d = current_range_d * 0.2;  /* 1/5 exactly representable */
                         double expected_range_d = per_div_d * 5.0;
                         double range_error_d = fabs(current_range_d - expected_range_d);
                         double relative_error = range_error_d / current_range_d;
-
-                        /* 2^-23 (FLT_EPSILON) with a 287, 2^-24 without */
+                        
+                        /* 287-specific machine epsilon for float precision */
                         double float_epsilon = g_has_287 ? 1.19209290e-07 : 5.96046448e-08;
-                        double drift_threshold = float_epsilon * 16.0;
-
+                        double drift_threshold = float_epsilon * 16.0;  /* Conservative threshold */
+                        
                         zoom_operations_count++;
-
-                        /* Smaller spans snap sooner */
+                        
+                        /* Enhanced drift detection using 287 precision characteristics */
                         if (current_range_d < 1.0e-3) {
-                            /* sub-mV span */
+                            /* Ultra-precision ranges (µV): more sensitive to 287 rounding */
                             if (relative_error > drift_threshold && zoom_operations_count >= 1) {
                                 snap_graph_scale_to_clean_values();
                                 zoom_operations_count = 0;
                             }
                         } else if (current_range_d < 1.0) {
-                            /* mV span */
+                            /* mV ranges: moderate sensitivity */
                             if (relative_error > (drift_threshold * 2.0) && zoom_operations_count >= 2) {
                                 snap_graph_scale_to_clean_values();
                                 zoom_operations_count = 0;
                             }
                         } else {
-                            /* V span: also force a snap every 6th zoom */
+                            /* V ranges: less frequent correction but force periodic cleanup */
                             if ((relative_error > (drift_threshold * 4.0) && zoom_operations_count >= 3) ||
                                 zoom_operations_count >= 6) {
                                 snap_graph_scale_to_clean_values();
@@ -2162,77 +2164,73 @@ void graph_display(void) {
                     break;
                     
                 case '-':  /* Zoom out */
-                    if (g_has_287) {
-                        center = (g_graph_scale.max_value + g_graph_scale.min_value) * 0.5;
-                        range = (g_graph_scale.max_value - g_graph_scale.min_value) * 0.625;
-                    } else {
-                        center = (g_graph_scale.max_value + g_graph_scale.min_value) / 2;
-                        range = (g_graph_scale.max_value - g_graph_scale.min_value) / 2;
-                        range *= 1.25;
+                    {
+                        double mn, mx;
+                        graph_limits(&mn, &mx);
+                        center = (mx + mn) * 0.5;
+                        range = (mx - mn) * 0.625;
                     }
-
-                    /* range is the half-span (center +/- range); snap small ones to clean uV/mV steps */
-                    if (range < 0.000005) {
-                        float range_uv = range * 1000000.0;
-                        range_uv = ((int)(range_uv + 0.5));  /* round to 1uV */
-                        if (range_uv < 5.0) range_uv = 5.0;  /* 5uV floor: 10uV span, 2uV/div over 5 divs */
-                        range = range_uv / 1000000.0;
+                    
+                    if (range < 0.000005) {  /* Less than 5µV total range */
+                        float range_uv = range * 1000000.0;  /* Convert to µV */
+                        range_uv = ((int)(range_uv + 0.5));  /* Round to 1µV */
+                        if (range_uv < 5.0) range_uv = 5.0;  /* Minimum 5µV range (1µV per div) */
+                        range = range_uv / 1000000.0;  /* Convert back to V */
                     }
-                    else if (range < 0.000010) {
-                        range = 0.000005;  /* same 5uV floor */
+                    else if (range < 0.000010) {  /* Less than 10µV total range */
+                        range = 0.000005;  /* Set to exactly 5µV total (1µV per div) */
                     }
-                    else if (range < 0.000050) {
-                        float range_uv = range * 1000000.0;
-                        range_uv = ((int)((range_uv + 2.5) / 5.0)) * 5.0;  /* round to 5uV */
-                        if (range_uv < 5.0) range_uv = 5.0;
-                        range = range_uv / 1000000.0;
+                    else if (range < 0.000050) {  /* Less than 50µV total range */
+                        float range_uv = range * 1000000.0;  /* Convert to µV */
+                        range_uv = ((int)((range_uv + 2.5) / 5.0)) * 5.0;  /* Round to 5µV */
+                        if (range_uv < 5.0) range_uv = 5.0;  /* Minimum 5µV range */
+                        range = range_uv / 1000000.0;  /* Convert back to V */
                     }
-                    else if (range < 0.005) {
-                        float range_mv = range * 1000.0;
-                        range_mv = ((int)(range_mv * 10.0 + 0.5)) / 10.0;  /* round to 0.1mV */
-                        if (range_mv < 0.1) range_mv = 0.1;
-                        range = range_mv / 1000.0;
+                    else if (range < 0.005) {  /* Less than 5mV total range */
+                        float range_mv = range * 1000.0;  /* Convert to mV */
+                        range_mv = ((int)(range_mv * 10.0 + 0.5)) / 10.0;  /* Round to 0.1mV */
+                        if (range_mv < 0.1) range_mv = 0.1;  /* Minimum 0.1mV range */
+                        range = range_mv / 1000.0;  /* Convert back to V */
                     }
-                    else if (range < 0.050) {
-                        float range_mv = range * 1000.0;
-                        range_mv = ((int)(range_mv + 0.5));  /* round to 1mV */
-                        if (range_mv < 1.0) range_mv = 1.0;
-                        range = range_mv / 1000.0;
+                    else if (range < 0.050) {  /* Less than 50mV total range */
+                        float range_mv = range * 1000.0;  /* Convert to mV */
+                        range_mv = ((int)(range_mv + 0.5));  /* Round to 1mV */
+                        if (range_mv < 1.0) range_mv = 1.0;  /* Minimum 1mV range */
+                        range = range_mv / 1000.0;  /* Convert back to V */
                     }
-
-                    g_graph_scale.min_value = center - range;
-                    g_graph_scale.max_value = center + range;
+                    
+                    set_limits(center - range, center + range);
                     g_graph_scale.auto_scale = 0;
-
-                    /* Snap to clean values now and then so repeated zooms don't accumulate float drift */
+                    
+                    /* 287-optimized precision drift detection */
                     {
                         double current_range_d = (double)g_graph_scale.max_value - (double)g_graph_scale.min_value;
-                        double per_div_d = current_range_d * 0.2;  /* 5 divisions; 0.2 is inexact in binary */
+                        double per_div_d = current_range_d * 0.2;  /* 1/5 exactly representable */
                         double expected_range_d = per_div_d * 5.0;
                         double range_error_d = fabs(current_range_d - expected_range_d);
                         double relative_error = range_error_d / current_range_d;
-
-                        /* 2^-23 (FLT_EPSILON) with a 287, 2^-24 without */
+                        
+                        /* 287-specific machine epsilon for float precision */
                         double float_epsilon = g_has_287 ? 1.19209290e-07 : 5.96046448e-08;
-                        double drift_threshold = float_epsilon * 16.0;
-
+                        double drift_threshold = float_epsilon * 16.0;  /* Conservative threshold */
+                        
                         zoom_operations_count++;
-
-                        /* Smaller spans snap sooner */
+                        
+                        /* Enhanced drift detection using 287 precision characteristics */
                         if (current_range_d < 1.0e-3) {
-                            /* sub-mV span */
+                            /* Ultra-precision ranges (µV): more sensitive to 287 rounding */
                             if (relative_error > drift_threshold && zoom_operations_count >= 1) {
                                 snap_graph_scale_to_clean_values();
                                 zoom_operations_count = 0;
                             }
                         } else if (current_range_d < 1.0) {
-                            /* mV span */
+                            /* mV ranges: moderate sensitivity */
                             if (relative_error > (drift_threshold * 2.0) && zoom_operations_count >= 2) {
                                 snap_graph_scale_to_clean_values();
                                 zoom_operations_count = 0;
                             }
                         } else {
-                            /* V span: also force a snap every 6th zoom */
+                            /* V ranges: less frequent correction but force periodic cleanup */
                             if ((relative_error > (drift_threshold * 4.0) && zoom_operations_count >= 3) ||
                                 zoom_operations_count >= 6) {
                                 snap_graph_scale_to_clean_values();
@@ -2255,9 +2253,12 @@ void graph_display(void) {
                     key = getch();
                     switch(key) {
                         case 72:  /* Up arrow - pan up */
-                            shift = (g_graph_scale.max_value - g_graph_scale.min_value) * 0.1;
-                            g_graph_scale.min_value += shift;
-                            g_graph_scale.max_value += shift;
+                            {
+                                double mn, mx;
+                                graph_limits(&mn, &mx);
+                                shift = (mx - mn) * 0.1;
+                                set_limits(mn + shift, mx + shift);
+                            }
                             g_graph_scale.auto_scale = 0;
                             if (g_has_287) {
                                 y_scale = (float)GRAPH_HEIGHT / (g_graph_scale.max_value - g_graph_scale.min_value);
@@ -2266,9 +2267,12 @@ void graph_display(void) {
                             break;
                             
                         case 80:  /* Down arrow - pan down */
-                            shift = (g_graph_scale.max_value - g_graph_scale.min_value) * 0.1;
-                            g_graph_scale.min_value -= shift;
-                            g_graph_scale.max_value -= shift;
+                            {
+                                double mn, mx;
+                                graph_limits(&mn, &mx);
+                                shift = (mx - mn) * 0.1;
+                                set_limits(mn - shift, mx - shift);
+                            }
                             g_graph_scale.auto_scale = 0;
                             if (g_has_287) {
                                 y_scale = (float)GRAPH_HEIGHT / (g_graph_scale.max_value - g_graph_scale.min_value);
@@ -2276,11 +2280,13 @@ void graph_display(void) {
                             need_redraw = 1;
                             break;
                             
-                        case 75:  /* Left arrow: step cursor (by Hz on FFT traces) */
+                        case 75:  /* Left arrow - context-aware cursor movement */
                             if (selected_trace >= 0 && g_traces[selected_trace].enabled) {
                                 keyboard_mode = 1;
-
+                                
+                                /* Check if this is an FFT trace */
                                 if (is_fft_trace[selected_trace]) {
+                                    /* FFT frequency-based navigation */
                                     float freq_step;
                                     float sample_pos;
                                     
@@ -2289,24 +2295,28 @@ void graph_display(void) {
                                     } else {
                                         freq_step = 0.1;   /* Coarse: 0.1Hz */
                                     }
-
+                                    
+                                    /* Calculate new frequency */
                                     current_frequency -= freq_step;
                                     if (current_frequency < g_traces[selected_trace].x_offset) {
                                         current_frequency = g_traces[selected_trace].x_offset;
                                     }
-
+                                    
+                                    /* Convert frequency back to sample position */
                                     sample_pos = (current_frequency - g_traces[selected_trace].x_offset) / g_traces[selected_trace].x_scale;
                                     current_sample = (int)(sample_pos + 0.5);
                                     if (current_sample < 0) current_sample = 0;
-
+                                    
+                                    /* Update cursor position */
                                     if (g_has_287) {
                                         cursor_x = GRAPH_LEFT + (int)(sample_pos * GRAPH_WIDTH / g_traces[selected_trace].data_count);
                                     } else {
                                         cursor_x = GRAPH_LEFT + (int)((float)sample_pos * GRAPH_WIDTH / g_traces[selected_trace].data_count);
                                     }
                                 } else {
-                                    int step_size = fine_cursor_mode ? 1 : 10;  /* samples */
-
+                                    /* Voltage trace sample-based navigation (preserve existing behavior) */
+                                    int step_size = fine_cursor_mode ? 1 : 10;  /* Fine: 1 sample, Coarse: 10 samples */
+                                    
                                     if (current_sample >= step_size) {
                                         current_sample -= step_size;
                                         if (g_has_287) {
@@ -2321,11 +2331,13 @@ void graph_display(void) {
                             }
                             break;
                             
-                        case 77:  /* Right arrow: step cursor (by Hz on FFT traces) */
+                        case 77:  /* Right arrow - context-aware cursor movement */
                             if (selected_trace >= 0 && g_traces[selected_trace].enabled) {
                                 keyboard_mode = 1;
-
+                                
+                                /* Check if this is an FFT trace */
                                 if (is_fft_trace[selected_trace]) {
+                                    /* FFT frequency-based navigation */
                                     float freq_step;
                                     float max_freq;
                                     float sample_pos;
@@ -2335,29 +2347,34 @@ void graph_display(void) {
                                     } else {
                                         freq_step = 0.1;   /* Coarse: 0.1Hz */
                                     }
-
-                                    max_freq = g_traces[selected_trace].x_offset +
+                                    
+                                    /* Calculate maximum frequency */
+                                    max_freq = g_traces[selected_trace].x_offset + 
                                              (g_traces[selected_trace].data_count * g_traces[selected_trace].x_scale);
-
+                                    
+                                    /* Calculate new frequency */
                                     current_frequency += freq_step;
                                     if (current_frequency > max_freq) {
                                         current_frequency = max_freq;
                                     }
-
+                                    
+                                    /* Convert frequency back to sample position */
                                     sample_pos = (current_frequency - g_traces[selected_trace].x_offset) / g_traces[selected_trace].x_scale;
                                     current_sample = (int)(sample_pos + 0.5);
                                     if (current_sample >= g_traces[selected_trace].data_count) {
                                         current_sample = g_traces[selected_trace].data_count - 1;
                                     }
-
+                                    
+                                    /* Update cursor position */
                                     if (g_has_287) {
                                         cursor_x = GRAPH_LEFT + (int)(sample_pos * GRAPH_WIDTH / g_traces[selected_trace].data_count);
                                     } else {
                                         cursor_x = GRAPH_LEFT + (int)((float)sample_pos * GRAPH_WIDTH / g_traces[selected_trace].data_count);
                                     }
                                 } else {
-                                    int step_size = fine_cursor_mode ? 1 : 10;  /* samples */
-
+                                    /* Voltage trace sample-based navigation (preserve existing behavior) */
+                                    int step_size = fine_cursor_mode ? 1 : 10;  /* Fine: 1 sample, Coarse: 10 samples */
+                                    
                                     if (current_sample + step_size < g_traces[selected_trace].data_count) {
                                         current_sample += step_size;
                                         if (g_has_287) {
@@ -2414,9 +2431,18 @@ void graph_display(void) {
                     if (g_mouse.present) {
                         mouse_visible = !mouse_visible;
                         if (!mouse_visible) {
+                            ptr_hide();
                             keyboard_mode = 1;
+                        } else {
+                            mouse_raw(&old_x, &old_y, &i);  /* don't jump the cursor */
+                            ptr_show(1);
                         }
                     }
+                    break;
+                    
+                case 'X':  /* Grid-OS: x axis = sample number / measurement time */
+                    g_xaxis_time = !g_xaxis_time;
+                    need_redraw = 1;
                     break;
                     
                 case 'C':  /* Clear data */
@@ -2424,13 +2450,39 @@ void graph_display(void) {
                         clear_module_data(i);
                     }
                     g_system->data_count = 0;
+                    ptr_hide();
                     text_mode();
                     printf("\nAll data cleared. Press any key...");
                     getch();
                     done = 1;
                     break;
                 
-                case 'P':  /* Print graph */
+                case 'P':  /* Grid-OS: print with the print menu's setting */
+                    ptr_hide();
+                    if (g_print_mode != PRINT_MODE_SCREEN) {
+                        text_mode();
+                        print_graph_selected();
+                        need_redraw = 1;
+                        init_graphics();
+                    } else {
+                        int err;
+                        _fmemset(video_mem + 97 * 80 + 52, 0, 28);   /* footer, right */
+                        _fmemset(video_mem + 8192 + 97 * 80 + 52, 0, 28);
+                        draw_text_small(SCREEN_WIDTH - 1 - 4 * 11, 194, "PRINTING...", 3);
+                        err = print_screen_ps(foot_info);   /* rows 0-185 only */
+                        need_redraw = 1;                /* footer back to normal */
+                        if (err) {
+                            text_mode();
+                            printf("\nPrinter not ready (LPT1) - nothing more was sent.\n");
+                            printf("Press any key...");
+                            getch();
+                            init_graphics();
+                        }
+                    }
+                    break;
+                    
+                case 'O':  /* Print options: text graph, PostScript plot, header, P key */
+                    ptr_hide();
                     text_mode();
                     print_graph_menu();
                     need_redraw = 1;
@@ -2451,6 +2503,7 @@ void graph_display(void) {
                     
                 case 'H':  /* Help/Config menu */
                 case 'h':
+                    ptr_hide();
                     text_mode();
                     graph_config_menu();
                     need_redraw = 1;
@@ -2459,6 +2512,7 @@ void graph_display(void) {
                     
                 case 'T':  /* Trace selection menu */
                 case 't':
+                    ptr_hide();
                     text_mode();
                     display_trace_selection_menu();
                     need_redraw = 1;
@@ -2470,10 +2524,11 @@ void graph_display(void) {
         delay(10);
     }
     
-    text_mode();
+    ptr_hide();
+                    text_mode();
 }
 
-/* Shared menu helpers */
+/* UI utility functions for enhanced menus */
 void display_header(char *title) {
     int i, len, padding;
     
@@ -2481,7 +2536,7 @@ void display_header(char *title) {
     printf("TM5000 v%s - ", TM5000_VERSION);
     printf("%s\n", title);
     
-    len = strlen(title) + 14;  /* "TM5000 v" + 3-char version + " - " */
+    len = strlen(title) + 14;  /* Account for version string */
     for (i = 0; i < len; i++) {
         printf("=");
     }
@@ -2512,7 +2567,7 @@ void display_success(char *msg) {
     printf("\n*** %s ***\n", msg);
 }
 
-/* Returns nonzero if a non-empty line was read. */
+/* Enhanced input functions */
 int get_string_input(char *prompt, char *buffer, int max_length) {
     if (prompt && strlen(prompt) > 0) {
         printf("%s", prompt);
@@ -2521,7 +2576,8 @@ int get_string_input(char *prompt, char *buffer, int max_length) {
     if (fgets(buffer, max_length, stdin) == NULL) {
         return 0;
     }
-
+    
+    /* Remove newline */
     buffer[strcspn(buffer, "\n")] = '\0';
     
     return strlen(buffer) > 0;

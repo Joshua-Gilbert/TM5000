@@ -1,16 +1,24 @@
 /*
- * TM5000 module drivers and menus: DC5009/DC5010, FG5010, DM5120, DM5010,
- * PS5004, PS5010, plus slot setup and the live measurement loop.
+ * TM5000 GPIB Control System - Module Support
+ * Version 3.3
+ * Full implementation with DC5009 and DC5010 support
+ * 
+ * Version History:
+ * 3.0 - Initial implementation with DC5009 and DC5010 support
+ * 3.1 - Version update
  */
 
 #include "modules.h"
+#include "data.h"
 #include "gpib.h"
 #include "graphics.h"
+#include <stdarg.h>
 
-/* Shared GPIB scratch buffers; far to stay out of DGROUP */
+/* Shared GPIB buffer pool to reduce memory usage */
 static char __far gpib_cmd_buffer[80];
 static char __far gpib_response_buffer[80];
 
+/* Initialize DC5009 configuration to defaults */
 void init_dc5009_config(int slot) {
     dc5009_config *cfg = &g_dc5009_config[slot];
     
@@ -39,6 +47,7 @@ void init_dc5009_config(int slot) {
     cfg->lf_termination = 0;  /* Default to CRLF */
 }
 
+/* Initialize DC5010 configuration to defaults */
 void init_dc5010_config(int slot) {
     dc5010_config *cfg = &g_dc5010_config[slot];
     
@@ -95,87 +104,87 @@ void dc5009_set_function(int address, char *function, char *channel) {
     }
     
     gpib_write(address, gpib_cmd_buffer);
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5009_set_coupling(int address, char channel, char *coupling) {
     
     sprintf(gpib_cmd_buffer, "COU CHA %c %s", channel, coupling);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_impedance(int address, char channel, char *impedance) {
     
     sprintf(gpib_cmd_buffer, "TER CHA %c %s", channel, impedance);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_attenuation(int address, char channel, char *attenuation) {
     
     sprintf(gpib_cmd_buffer, "ATT CHA %c %s", channel, attenuation);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_slope(int address, char channel, char *slope) {
     
     sprintf(gpib_cmd_buffer, "SLO CHA %c %s", channel, slope);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_level(int address, char channel, float level) {
     
     sprintf(gpib_cmd_buffer, "LEV CHA %c %.3f", channel, level);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_filter(int address, int enabled) {
     gpib_write(address, enabled ? "FIL ON" : "FIL OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_gate_time(int address, float gate_time) {
     
     sprintf(gpib_cmd_buffer, "GATE %.3f", gate_time);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_averaging(int address, int count) {
     
     sprintf(gpib_cmd_buffer, "AVG %d", count);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_auto_trigger(int address) {
     gpib_write(address, "AUTO");
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5009_start_measurement(int address) {
     gpib_write(address, "START");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_stop_measurement(int address) {
     gpib_write(address, "STOP");
-    delay(50);
+    GPIB_PACE(50);
 }
 
-float dc5009_read_measurement(int address) {
+double dc5009_read_measurement(int address) {
     
-    float value = 0.0;
+    double value = 0.0;
     
     gpib_write(address, "SEND");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%f", &value) == 1 || sscanf(gpib_response_buffer, "%e", &value) == 1) {
+        if (sscanf(gpib_response_buffer, "%lf", &value) == 1 || sscanf(gpib_response_buffer, "%le", &value) == 1) {
             return value;
         }
     }
@@ -186,7 +195,7 @@ int dc5009_check_overflow(int address) {
     
     
     gpib_write(address, "OVER?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         return (strcmp(gpib_response_buffer, "ON") == 0);
@@ -196,44 +205,44 @@ int dc5009_check_overflow(int address) {
 
 void dc5009_clear_overflow(int address) {
     gpib_write(address, "OVER OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 /* DC5009 Query Commands */
 void dc5009_query_function(int address, char *buffer) {
     gpib_write(address, "FUNC?");
-    delay(50);
+    GPIB_PACE(50);
     gpib_read(address, gpib_response_buffer, 80);
 }
 
 void dc5009_query_id(int address, char *buffer) {
     gpib_write(address, "ID?");
-    delay(50);
+    GPIB_PACE(50);
     gpib_read(address, gpib_response_buffer, 80);
 }
 
 int dc5009_query_error(int address) {
     
     gpib_write(address, "ERR?");
-    delay(50);
+    GPIB_PACE(50);
     gpib_read(address, gpib_response_buffer, 80);
     return atoi(gpib_response_buffer);
 }
 
-/* DC5009 preset, manual timing, SRQ, status */
+/* DC5009 Advanced Functions */
 void dc5009_set_preset(int address, int enabled) {
     gpib_write(address, enabled ? "PRE ON" : "PRE OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_manual_timing(int address) {
     gpib_write(address, "TMAN");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5009_set_srq(int address, int enabled) {
     gpib_write(address, enabled ? "RQS ON" : "RQS OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 unsigned char dc5009_get_status_byte(int address) {
@@ -251,28 +260,32 @@ double dc5009_read_extended_range(int address) {
     double total_result;
     const double OVERFLOW_MULTIPLIER = 10995.1162778;
     
+    /* Read display value */
     gpib_write(address, "SEND");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         sscanf(gpib_response_buffer, "%f", &display_value);
     }
     
+    /* Check for overflow condition */
     ieee_spoll(address, &status);
     if (status & 0x02) {  /* Overflow bit in status byte */
-        /* Counts at most one overflow; a true count needs tracking across reads */
-        overflow_count = 1;
+        /* Count overflow events - simplified approach */
+        /* In a real implementation, this would track overflow events over time */
+        overflow_count = 1;  /* This would need to be maintained globally */
     }
     
-    /* Per programming guide: display + overflows * 2^40/1e8 */
+    /* Calculate extended range result per programming guide */
     total_result = (double)display_value + (overflow_count * OVERFLOW_MULTIPLIER);
     
     return total_result;
 }
 
-/* DC5010: DC5009 command set plus RISE/FALL, TOT A+B/A-B, burst */
+/* DC5010 GPIB Functions (similar to DC5009 but with additional capabilities) */
 void dc5010_set_function(int address, char *function, char *channel) {
     
     
+    /* Handle special command formats including DC5010-specific modes */
     if (strcmp(function, "TIME") == 0 && channel && strlen(channel) == 2) {
         /* TIME AB or TIME BA format */
         sprintf(gpib_cmd_buffer, "TIME %s", channel);
@@ -307,7 +320,7 @@ void dc5010_set_function(int address, char *function, char *channel) {
     }
     
     gpib_write(address, gpib_cmd_buffer);
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5010_set_coupling(int address, char channel, char *coupling) {
@@ -354,7 +367,7 @@ void dc5010_stop_measurement(int address) {
     dc5009_stop_measurement(address);
 }
 
-float dc5010_read_measurement(int address) {
+double dc5010_read_measurement(int address) {
     return dc5009_read_measurement(address);
 }
 
@@ -368,20 +381,21 @@ void dc5010_clear_overflow(int address) {
 
 /* DC5010 specific functions */
 void dc5010_set_burst_mode(int address, int enabled) {
+    /* DC5010 specific burst mode implementation */
     
     sprintf(gpib_cmd_buffer, "BURST %s", enabled ? "ON" : "OFF");
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void dc5010_measure_rise_time(int address) {
     gpib_write(address, "RISE A");
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5010_measure_fall_time(int address) {
     gpib_write(address, "FALL A");
-    delay(100);
+    GPIB_PACE(100);
 }
 
 /* DC5010 Query Commands */
@@ -397,7 +411,7 @@ int dc5010_query_error(int address) {
     return dc5009_query_error(address);
 }
 
-/* DC5010 preset, timing, totalize modes, SRQ, status */
+/* DC5010 Advanced Functions */
 void dc5010_set_preset(int address, int enabled) {
     dc5009_set_preset(address, enabled);
 }
@@ -408,17 +422,17 @@ void dc5010_manual_timing(int address) {
 
 void dc5010_totalize_sum(int address) {
     gpib_write(address, "TOT A+B");
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5010_totalize_diff(int address) {
     gpib_write(address, "TOT A-B");
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5010_propagation_delay(int address) {
     gpib_write(address, "PROB A&B");
-    delay(100);
+    GPIB_PACE(100);
 }
 
 void dc5010_set_srq(int address, int enabled) {
@@ -434,6 +448,7 @@ double dc5010_read_extended_range(int address) {
     return dc5009_read_extended_range(address);
 }
 
+/* DC5009 Communication Test */
 void test_dc5009_comm(int address) {
     
     float value;
@@ -445,7 +460,7 @@ void test_dc5009_comm(int address) {
     
     printf("1. Testing identification...\n");
     gpib_write(address, "ID?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -456,16 +471,16 @@ void test_dc5009_comm(int address) {
     
     printf("2. Testing initialization...\n");
     gpib_write(address, "INIT");
-    delay(500);
+    GPIB_PACE(500);
     printf("   Initialization command sent\n");
     success_count++;
     test_count++;
     
     printf("3. Testing function setup...\n");
     gpib_write(address, "FREQ A");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "FUNC?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -476,16 +491,16 @@ void test_dc5009_comm(int address) {
     
     printf("4. Testing auto trigger...\n");
     gpib_write(address, "AUTO");
-    delay(100);
+    GPIB_PACE(100);
     printf("   Auto trigger enabled\n");
     success_count++;
     test_count++;
     
     printf("5. Testing measurement...\n");
     gpib_write(address, "START");
-    delay(200);
+    GPIB_PACE(200);
     gpib_write(address, "SEND");
-    delay(200);
+    GPIB_PACE(200);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%e", &value) == 1 || sscanf(gpib_response_buffer, "%f", &value) == 1) {
             printf("   Measurement: %.6e Hz\n", value);
@@ -514,6 +529,7 @@ void test_dc5009_comm(int address) {
     getch();
 }
 
+/* DC5010 Communication Test */
 void test_dc5010_comm(int address) {
     
     float value;
@@ -525,7 +541,7 @@ void test_dc5010_comm(int address) {
     
     printf("1. Testing identification...\n");
     gpib_write(address, "ID?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -536,16 +552,16 @@ void test_dc5010_comm(int address) {
     
     printf("2. Testing initialization...\n");
     gpib_write(address, "INIT");
-    delay(500);
+    GPIB_PACE(500);
     printf("   Initialization command sent\n");
     success_count++;
     test_count++;
     
     printf("3. Testing function setup...\n");
     gpib_write(address, "FREQ A");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "FUNC?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -556,25 +572,25 @@ void test_dc5010_comm(int address) {
     
     printf("4. Testing high frequency capability...\n");
     gpib_write(address, "GATE 0.1");  /* Shorter gate for high freq */
-    delay(50);
+    GPIB_PACE(50);
     printf("   High frequency mode configured\n");
     success_count++;
     test_count++;
     
     printf("5. Testing rise time measurement (DC5010 specific)...\n");
     gpib_write(address, "RISE A");
-    delay(100);
+    GPIB_PACE(100);
     printf("   Rise time function configured\n");
     success_count++;
     test_count++;
     
     printf("6. Testing measurement...\n");
     gpib_write(address, "FREQ A");  /* Back to frequency */
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "START");
-    delay(200);
+    GPIB_PACE(200);
     gpib_write(address, "SEND");
-    delay(200);
+    GPIB_PACE(200);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%e", &value) == 1 || sscanf(gpib_response_buffer, "%f", &value) == 1) {
             printf("   Measurement: %.6e Hz\n", value);
@@ -603,7 +619,7 @@ void test_dc5010_comm(int address) {
     getch();
 }
 
-/* Counter configuration menus */
+/* Advanced Configuration Menus */
 void configure_dc5009_advanced(int slot) {
     int choice, done = 0;
     int address = g_system->modules[slot].gpib_address;
@@ -732,7 +748,7 @@ void configure_dc5009_advanced(int slot) {
             case 'A':
                 printf("\n\nApplying settings to DC5009...\n");
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 dc5009_set_function(address, cfg->function, cfg->channel);
                 dc5009_set_gate_time(address, cfg->gate_time);
@@ -983,7 +999,7 @@ void configure_dc5010_advanced(int slot) {
             case 'C':
                 printf("\n\nApplying settings to DC5010...\n");
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 dc5010_set_function(address, cfg->function, cfg->channel);
                 dc5010_set_gate_time(address, cfg->gate_time);
@@ -1115,14 +1131,16 @@ void configure_dc5010_advanced(int slot) {
 }
 
 /* ========================================================================== */
-/* FG5010 Function Generator                                                  */
+/* FG5010 Function Generator Implementation                                   */
 /* ========================================================================== */
 
+/* Initialize FG5010 configuration with default values */
 void init_fg5010_config(int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     
     if (slot < 0 || slot >= 10) return;
     
+    /* Set default configuration values */
     cfg->frequency = 1000.0;           /* 1 kHz default frequency */
     cfg->amplitude = 5.0;              /* 5 Vpp default amplitude */
     cfg->offset = 0.0;                 /* No DC offset */
@@ -1164,6 +1182,7 @@ void init_fg5010_config(int slot) {
     cfg->lf_termination = 0;           /* CRLF termination */
 }
 
+/* Basic configuration menu for FG5010 */
 void configure_fg5010(int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     char input[50];
@@ -1284,6 +1303,7 @@ void configure_fg5010(int slot) {
     }
 }
 
+/* Advanced configuration menu for FG5010 */
 void configure_fg5010_advanced(int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     char input[50];
@@ -1481,40 +1501,40 @@ void fg5010_set_frequency(int address, float freq) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "FREQ %.3f", freq);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_amplitude(int address, float amp) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "AMPL %.3f", amp);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_offset(int address, float offset) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "OFFS %.3f", offset);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_waveform(int address, char *waveform) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "FUNC %s", waveform);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_duty_cycle(int address, float duty) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "DCYC %.1f", duty);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_enable_output(int address, int enable) {
     gpib_write(address, enable ? "OUTP ON" : "OUTP OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq, float time) {
@@ -1526,31 +1546,31 @@ void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq
         strcpy(gpib_cmd_buffer, "SWE:STAT OFF");
     }
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_trigger(int address, char *source, char *slope, float level) {
     char cmd[100];
     sprintf(gpib_cmd_buffer, "TRIG:SOUR %s;TRIG:SLOP %s;TRIG:LEV %.2f", source, slope, level);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_sync(int address, int enable) {
     gpib_write(address, enable ? "SYNC ON" : "SYNC OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_invert(int address, int enable) {
     gpib_write(address, enable ? "INV ON" : "INV OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_phase(int address, float phase) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "PHAS %.1f", phase);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth) {
@@ -1562,7 +1582,7 @@ void fg5010_set_modulation(int address, int enable, char *type, float freq, floa
         strcpy(gpib_cmd_buffer, "MOD:STAT OFF");
     }
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void fg5010_set_burst(int address, int enable, int count, float period) {
@@ -1573,9 +1593,10 @@ void fg5010_set_burst(int address, int enable, int count, float period) {
         strcpy(gpib_cmd_buffer, "BURS:STAT OFF");
     }
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 
+/* Test FG5010 communication */
 int test_fg5010_comm(int address) {
     
     int test_passed = 1;
@@ -1585,9 +1606,10 @@ int test_fg5010_comm(int address) {
     printf("==========================================\n\n");
     printf("Testing FG5010 at GPIB address %d...\n\n", address);
     
+    /* Test 1: Identification */
     printf("Test 1: Device Identification... ");
     gpib_write(address, "*IDN?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
@@ -1596,11 +1618,12 @@ int test_fg5010_comm(int address) {
         test_passed = 0;
     }
     
+    /* Test 2: Set frequency */
     printf("\nTest 2: Set Frequency (1 kHz)... ");
     gpib_write(address, "FREQ 1000");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "FREQ?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
@@ -1609,11 +1632,12 @@ int test_fg5010_comm(int address) {
         test_passed = 0;
     }
     
+    /* Test 3: Set amplitude */
     printf("\nTest 3: Set Amplitude (2 Vpp)... ");
     gpib_write(address, "AMPL 2.0");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "AMPL?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
@@ -1622,11 +1646,12 @@ int test_fg5010_comm(int address) {
         test_passed = 0;
     }
     
+    /* Test 4: Waveform selection */
     printf("\nTest 4: Set Waveform (SINE)... ");
     gpib_write(address, "FUNC SINE");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "FUNC?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
@@ -1635,26 +1660,28 @@ int test_fg5010_comm(int address) {
         test_passed = 0;
     }
     
+    /* Test 5: Output control */
     printf("\nTest 5: Output Control... ");
     gpib_write(address, "OUTP ON");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write(address, "OUTP?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
         
         /* Turn output back off for safety */
         gpib_write(address, "OUTP OFF");
-        delay(50);
+        GPIB_PACE(50);
     } else {
         printf("FAILED\n");
         test_passed = 0;
     }
     
+    /* Test 6: Error status */
     printf("\nTest 6: Error Status Check... ");
     gpib_write(address, "SYST:ERR?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("PASSED\n");
         printf("   %s\n", gpib_response_buffer);
@@ -1677,28 +1704,32 @@ int test_fg5010_comm(int address) {
     return test_passed ? 0 : -1;
 }
 
+/* Read current frequency from FG5010 */
 float fg5010_read_frequency(int address) {
     char buffer[50];
     gpib_write(address, "FREQ?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         return atof(gpib_response_buffer);
     }
     return 0.0;
 }
 
+/* Read output status from FG5010 */
 int fg5010_read_output_status(int address) {
     char buffer[20];
     gpib_write(address, "OUTP?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         return (strstr(gpib_response_buffer, "ON") != NULL || strstr(gpib_response_buffer, "1") != NULL) ? 1 : 0;
     }
     return 0;
 }
 
-/* True if slot holds a computed (FFT/math) trace: flagged, or MOD_NONE with data.
-   The derived case survives a .tm5/.cfg reload, which drops is_result. (review #1/#2/#10) */
+/* True if slot holds a computed-result trace (FFT/math): either explicitly flagged,
+   or derived from state (enabled, no instrument type, but holds data). The derived
+   case lets such traces survive a .tm5/.cfg reload, which does not persist the
+   is_result bit. (review #1/#2/#10) */
 int module_is_result(int slot) {
     return g_system->modules[slot].is_result ||
            (g_system->modules[slot].module_type == MOD_NONE &&
@@ -1706,17 +1737,20 @@ int module_is_result(int slot) {
             g_system->modules[slot].module_data_count > 0);
 }
 
-/* Disable "phantom" slots: enabled but no type, bad address, or no description */
+/* Validate and cleanup phantom enabled modules */
 void validate_enabled_modules(void) {
     int i;
     for (i = 0; i < 10; i++) {
-        /* Computed traces are legitimately enabled with no GPIB address */
+        /* Computed-result traces (FFT/math) are legitimately enabled with no GPIB
+           address; never treat them as phantoms. */
         if (g_system->modules[i].enabled && !module_is_result(i)) {
+            /* Check for valid configuration */
             if (g_system->modules[i].module_type == MOD_NONE ||
                 g_system->modules[i].gpib_address < 1 ||
                 g_system->modules[i].gpib_address > 30 ||
                 strlen(g_system->modules[i].description) == 0) {
 
+                /* Disable phantom module and free resources */
                 g_system->modules[i].enabled = 0;
                 g_system->modules[i].module_type = MOD_NONE;
                 g_system->modules[i].is_result = 0;
@@ -1728,7 +1762,135 @@ void validate_enabled_modules(void) {
     }
 }
 
-/* Slot setup menu: module type, GPIB address, description */
+/* Stub implementations for other module functions - to be filled in from TM5000L.c */
+/* ---- Grid-OS: auto-detect modules ----------------------------------- */
+static const char *auto_models[] = { "", "DC5009", "DM5010", "DM5120", "PS5004",
+                                     "PS5010", "DC5010", "FG5010" };
+
+/* MOD_xxx for an instrument ID such as "ID TEK/DC5009,V79.1,F1.2" */
+static int model_to_type(const char *id) {
+    int t;
+    for (t = MOD_DC5009; t <= MOD_FG5010; t++)
+        if (strstr(id, auto_models[t])) return t;
+    return MOD_NONE;
+}
+
+/* set up one slot (same steps as the manual configuration, no prompts) */
+static void setup_module(int slot, int module_type, int address, const char *desc) {
+    tm5000_module *m = &g_system->modules[slot];
+    m->enabled = 1;
+    m->module_type = module_type;
+    m->is_result = 0;
+    m->slot_number = slot;
+    m->gpib_address = address;
+    m->last_reading = 0.0;
+    strncpy(m->description, desc, sizeof(m->description) - 1);
+    m->description[sizeof(m->description) - 1] = '\0';
+    switch (module_type) {
+        case MOD_DC5009: init_dc5009_config(slot); break;
+        case MOD_DM5010: init_dm5010_config(slot); break;
+        case MOD_DM5120: init_dm5120_config(slot); init_dm5120_config_enhanced(slot); break;
+        case MOD_PS5004: init_ps5004_config(slot); break;
+        case MOD_PS5010: init_ps5010_config(slot); break;
+        case MOD_DC5010: init_dc5010_config(slot); break;
+        case MOD_FG5010: init_fg5010_config(slot); break;
+    }
+    gpib_remote(address);
+    GPIB_PACE(200);
+    allocate_module_buffer(slot, MAX_SAMPLES_PER_MODULE);
+}
+
+/* Scan GPIB addresses 1-30, identify the instruments and add the TM5000
+ * modules that are not configured yet to free slots.  Existing slots are
+ * never changed - a mismatch is only reported. */
+void auto_detect_modules(void) {
+    static struct { unsigned char addr, type, slot, action; char id[36]; } f[30];
+    char id[80];
+    int addr, i, k, n = 0, n_new = 0, used[10];
+    char *p;
+    
+    clrscr();
+    printf("Auto-detect modules\n");
+    printf("===================\n\n");
+    printf("Scanning GPIB addresses 1-30 (controller = 21)  ESC cancels\n");
+    for (addr = 1; addr <= 30; addr++) {
+        if (addr == 21) continue;
+        printf("\r  address %2d ", addr);
+        fflush(stdout);
+        if (kbhit() && getch() == 27) {
+            printf("\nCancelled.  Press any key...");
+            getch();
+            return;
+        }
+        if (!gpib_probe(addr, id, sizeof(id))) continue;
+        for (p = id; *p; p++) if (*p == '\r' || *p == '\n') { *p = '\0'; break; }
+        f[n].addr = (unsigned char)addr;
+        f[n].type = (unsigned char)model_to_type(id);
+        strncpy(f[n].id, id, sizeof(f[n].id) - 1);
+        f[n].id[sizeof(f[n].id) - 1] = '\0';
+        n++;
+    }
+    printf("\r                \n");
+    if (n == 0) {
+        printf("No instruments answered.  Is the GPIB driver loaded and the bus\n");
+        printf("cable connected?\n\nPress any key...");
+        getch();
+        return;
+    }
+    
+    /* action: 0 = not a TM5000 module / no free slot, 1 = already set up,
+       2 = that address's slot is set up as another type (left alone),
+       3 = add to a free slot */
+    for (i = 0; i < 10; i++)
+        used[i] = g_system->modules[i].enabled || g_system->modules[i].is_result;
+    for (k = 0; k < n; k++) {
+        f[k].action = 0;
+        f[k].slot = 0;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].enabled && g_system->modules[i].gpib_address == f[k].addr) {
+                f[k].slot = (unsigned char)i;
+                f[k].action = (g_system->modules[i].module_type == f[k].type) ? 1 : 2;
+                break;
+            }
+        }
+        if (i == 10 && f[k].type != MOD_NONE) {
+            for (i = 0; i < 10 && used[i]; i++) ;
+            if (i < 10) { used[i] = 1; f[k].slot = (unsigned char)i; f[k].action = 3; n_new++; }
+        }
+    }
+    
+    printf("Addr  Instrument                            TM5000\n");
+    printf("----  ------------------------------------  ----------------------\n");
+    for (k = 0; k < n; k++) {
+        printf(" %2d   %-36s  ", f[k].addr, f[k].id[0] ? f[k].id : "(answers, no ID reply)");
+        switch (f[k].action) {
+            case 1:  printf("slot %d, already set up\n", f[k].slot); break;
+            case 2:  printf("slot %d set up as other\n", f[k].slot); break;
+            case 3:  printf("-> slot %d (new)\n", f[k].slot); break;
+            default: printf(f[k].type != MOD_NONE ? "no free slot\n" : "not a TM5000 module\n");
+        }
+    }
+    if (n_new == 0) {
+        printf("\nNothing new to add.  Press any key...");
+        getch();
+        return;
+    }
+    printf("\nAdd %d module(s) as shown? (Y/N): ", n_new);
+    if (toupper(getch()) != 'Y') {
+        printf("N\nNothing changed.  Press any key...");
+        getch();
+        return;
+    }
+    printf("Y\n");
+    for (k = 0; k < n; k++) {
+        if (f[k].action != 3) continue;
+        printf("  slot %d: %s at GPIB %d\n", f[k].slot, auto_models[f[k].type], f[k].addr);
+        setup_module(f[k].slot, f[k].type, f[k].addr, auto_models[f[k].type]);
+    }
+    printf("\nDone - use 0-9 to change a slot's settings.  Press any key...");
+    getch();
+}
+
 void configure_modules(void) {
     int choice, slot, address, module_type;
     int done = 0;
@@ -1754,6 +1916,7 @@ void configure_modules(void) {
         
         printf("\nOptions:\n");
         printf("0-9: Configure slot\n");
+        printf("A:   Auto-detect modules on the bus\n");
         printf("ESC: Exit\n\n");
         printf("Choice: ");
         
@@ -1761,6 +1924,8 @@ void configure_modules(void) {
         
         if (choice == 27) {  /* ESC */
             done = 1;
+        } else if (choice == 'A' || choice == 'a') {
+            auto_detect_modules();
         } else if (choice >= '0' && choice <= '9') {
             slot = choice - '0';
             
@@ -1808,6 +1973,7 @@ void configure_modules(void) {
                         printf("Enter description: ");
                         scanf("%s", description);
                         
+                        /* Configure module */
                         g_system->modules[slot].enabled = 1;
                         g_system->modules[slot].module_type = module_type;
                         g_system->modules[slot].is_result = 0;
@@ -1816,6 +1982,7 @@ void configure_modules(void) {
                         g_system->modules[slot].last_reading = 0.0;
                         strcpy(g_system->modules[slot].description, description);
                         
+                        /* Initialize module-specific configuration */
                         switch (module_type) {
                             case MOD_DC5009:
                                 init_dc5009_config(slot);
@@ -1841,13 +2008,14 @@ void configure_modules(void) {
                                 break;
                         }
                         
+                        /* Initialize device and handle LF termination like v2.9 */
                         printf("Initializing device at GPIB address %d...\n", 
                                g_system->modules[slot].gpib_address);
                         
                         gpib_remote(g_system->modules[slot].gpib_address);
-                        delay(200);
+                        GPIB_PACE(200);
                         
-                        /* LF-termination prompt is DM5120-only, as in v2.9 */
+                        /* LF termination prompt only for DM5120 - v2.9 behavior */
                         if (module_type == MOD_DM5120) {
                             delay(300);
                             
@@ -1866,14 +2034,16 @@ void configure_modules(void) {
                             }
                         }
                         
+                        /* Allocate data buffer */
                         allocate_module_buffer(slot, MAX_SAMPLES_PER_MODULE);
                         
+                        /* Test communication */
                         printf("\nTest communication? (y/n): ");
                         if (toupper(getch()) == 'Y') {
                             printf("\nTesting communication...\n");
                             
                             gpib_remote(address);
-                            delay(200);
+                            GPIB_PACE(200);
                             
                             switch (module_type) {
                                 case MOD_DC5009:
@@ -2017,8 +2187,8 @@ void display_trace_selection_menu(void) {
 
 void sync_traces_with_modules(void) {
     int i;
-    int user_enabled[10];  /* user's trace visibility, restored after rebinding */
-    int first_sync = 1;   /* no trace bound yet: show every trace with data */
+    int user_enabled[10];  /* Save user trace visibility preferences */
+    int first_sync = 1;   /* Check if this is the first sync */
     
     
     for (i = 0; i < 10; i++) {
@@ -2053,9 +2223,15 @@ void sync_traces_with_modules(void) {
                 g_traces[i].data = g_system->modules[i].module_data;
                 g_traces[i].data_count = g_system->modules[i].module_data_count;
                 
+                /* Set unit type based on module type.
+                   Preserve the unit_type/x_scale/x_offset of ALL computed traces
+                   (FFT/derivative/integral/smoothed/math) instead of only "FFT
+                   Result", and key off the computed-trace test rather than a
+                   description string. (review #3) */
                 if (module_is_result(i)) {
-                    /* Computed trace: keep the unit_type/x_scale/x_offset set at creation. (review #3) */
+                    /* Computed trace - keep the units/scale set at creation. */
                 } else {
+                    /* Regular module data - set unit type based on module type */
                     switch (g_system->modules[i].module_type) {
                         case MOD_DC5009:
                         case MOD_DC5010:
@@ -2087,20 +2263,20 @@ void sync_traces_with_modules(void) {
     }
 }
 
-/* DM5120 multimeter */
+/* DM5120 Functions - Complete implementations from TM5000L.c */
 void init_dm5120_config(int slot) {
     strcpy(g_dm5120_config[slot].function, "DCV");
     g_dm5120_config[slot].range_mode = 0;  /* AUTO */
     g_dm5120_config[slot].filter_enabled = 0;
     g_dm5120_config[slot].filter_value = 10;
-    g_dm5120_config[slot].trigger_source = 0;  /* TALK, the manual's recommended default */
+    g_dm5120_config[slot].trigger_source = 0;  /* TALK - default per manual recommendations */
     g_dm5120_config[slot].trigger_mode = 0;  /* CONT */
     g_dm5120_config[slot].digits = 5;
     g_dm5120_config[slot].nullval = 0.0;
     g_dm5120_config[slot].null_enabled = 0;
     g_dm5120_config[slot].data_format = 1;  /* Scientific notation */
     g_dm5120_config[slot].buffer_enabled = 0;
-    g_dm5120_config[slot].buffer_size = DM5120_DEFAULT_BUFFER_SIZE;  /* half the 500-reading hardware limit */
+    g_dm5120_config[slot].buffer_size = DM5120_DEFAULT_BUFFER_SIZE;  /* Use DM5120 hardware limit */
     g_dm5120_config[slot].min_max_enabled = 0;
     g_dm5120_config[slot].min_value = 1e30;
     g_dm5120_config[slot].max_value = -1e30;
@@ -2112,7 +2288,7 @@ void init_dm5120_config(int slot) {
 void init_dm5120_config_enhanced(int slot) {
     init_dm5120_config(slot);
     g_dm5120_config[slot].buffer_enabled = 1;
-    g_dm5120_config[slot].buffer_size = DM5120_MAX_BUFFER_SIZE;  /* hardware limit */
+    g_dm5120_config[slot].buffer_size = DM5120_MAX_BUFFER_SIZE;  /* Use DM5120 hardware limit */
     g_dm5120_config[slot].min_max_enabled = 1;
     g_dm5120_config[slot].burst_mode = 1;
     g_dm5120_config[slot].sample_rate = 10.0;  /* 10 readings/sec */
@@ -2308,7 +2484,7 @@ void configure_dm5120_advanced(int slot) {
             case 'B':
                 printf("\n\nApplying settings to DM5120...\n");
                 gpib_remote_dm5120(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 dm5120_set_function(address, cfg->function);
                 dm5120_set_range(address, cfg->range_mode);
@@ -2353,7 +2529,7 @@ void dm5120_set_function(int address, char *function) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "FUNCT %s", function);
     gpib_write_dm5120(address, gpib_cmd_buffer);
-    delay(100);
+    GPIB_PACE(100);
 }
 void dm5120_set_range(int address, int range) {
     char cmd[50];
@@ -2370,11 +2546,11 @@ void dm5120_set_filter(int address, int enabled, int value) {
     
     if (enabled) {
         gpib_write_dm5120(address, "FILTER ON");
-        delay(50);
+        GPIB_PACE(50);
         if (value > 0 && value <= 99) {
-            sprintf(gpib_cmd_buffer, "FILTER %d", value);
+            sprintf(gpib_cmd_buffer, "FILTER %d", value);  /* Correct DM5120 syntax */
             gpib_write_dm5120(address, gpib_cmd_buffer);
-            delay(50);
+            GPIB_PACE(50);
         }
     } else {
         gpib_write_dm5120(address, "FILTER OFF");
@@ -2383,6 +2559,7 @@ void dm5120_set_filter(int address, int enabled, int value) {
 void dm5120_set_trigger(int address, char *source, char *mode) {
     char cmd[50];
     
+    /* Validate parameters */
     if (!source || !mode) {
         printf("ERROR: dm5120_set_trigger requires both source and mode\n");
         return;
@@ -2400,16 +2577,16 @@ void dm5120_set_trigger(int address, char *source, char *mode) {
         return;
     }
     
-    sprintf(gpib_cmd_buffer, "TRIGGER %s,%s", source, mode);  /* manual syntax: TRIGGER <source>,<mode> */
+    sprintf(gpib_cmd_buffer, "TRIGGER %s,%s", source, mode);  /* DM5120 manual syntax: TRIGGER <source>,<mode> */
     gpib_write_dm5120(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 void dm5120_set_digits(int address, int digits) {
     char cmd[50];
     if (digits >= 3 && digits <= 6) {
-        sprintf(gpib_cmd_buffer, "DIGITS %d", digits);
+        sprintf(gpib_cmd_buffer, "DIGITS %d", digits);  /* Correct DM5120 syntax */
         gpib_write_dm5120(address, gpib_cmd_buffer);
-        delay(50);
+        GPIB_PACE(50);
     }
 }
 void dm5120_set_null(int address, int enabled, float value) {
@@ -2417,7 +2594,7 @@ void dm5120_set_null(int address, int enabled, float value) {
     if (enabled) {
         sprintf(gpib_cmd_buffer, "NULL %.6e", value);
         gpib_write_dm5120(address, gpib_cmd_buffer);
-        delay(50);
+        GPIB_PACE(50);
         gpib_write_dm5120(address, "NULL ON");
     } else {
         gpib_write_dm5120(address, "NULL OFF");
@@ -2426,9 +2603,9 @@ void dm5120_set_null(int address, int enabled, float value) {
 }
 void dm5120_set_data_format(int address, int on) {
     gpib_write_dm5120(address, on ? "DATFOR ON" : "DATFOR OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
-/* DM5120 reading rates (readings/s) from the manual: [3.5..6.5 digits][AutoCal off, on] */
+/* DM5120 Measurement Rate Tables (readings/second) based on manual specifications */
 
 /* DCV, DCA, ACV, ACA rates - Continuous Into Internal Buffer */
 static const float __far dm5120_voltage_current_rates[4][2] = {
@@ -2463,7 +2640,7 @@ static const float __far dm5120_bus_ohms_rates[4][2] = {
     {0.0, 0.3}         /* 6.5 digit */
 };
 
-/* Readings/s for the slot's DM5120 config; trigger_mode 2 forces bus-triggered rates */
+/* Get measurement rate in readings/second for current DM5120 configuration */
 float dm5120_get_measurement_rate(int slot, int trigger_mode) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     int digit_index, autocal_index;
@@ -2471,6 +2648,7 @@ float dm5120_get_measurement_rate(int slot, int trigger_mode) {
     int is_ohms_function;
     int use_bus_rates;
     
+    /* Convert digits to array index */
     switch (cfg->digits) {
         case 3: digit_index = 0; break;
         case 4: digit_index = 1; break;
@@ -2479,12 +2657,14 @@ float dm5120_get_measurement_rate(int slot, int trigger_mode) {
         default: digit_index = 1; break; /* Default to 4.5 digit */
     }
     
-    /* AutoCal state isn't queried; assume ON at 5+ digits */
-    autocal_index = (cfg->digits >= 5) ? 1 : 0;
+    /* AutoCal assumption - can be enhanced to query instrument */
+    autocal_index = (cfg->digits >= 5) ? 1 : 0; /* Assume AutoCal ON for high precision */
     
+    /* Check if this is an OHMS function */
     is_ohms_function = (strstr(cfg->function, "OHMS") != NULL);
     
-    /* Bus-triggered vs continuous rates, per DM5120 manual:
+    /* Determine if we should use bus-triggered rates
+     * Per DM5120 manual:
      * - EXT,CONT with buffer enabled requires external trigger (bus rates)
      * - EXT,ONE always requires external trigger (bus rates)  
      * - TALK mode always uses bus rates (triggered by GPIB addressing)
@@ -2494,6 +2674,7 @@ float dm5120_get_measurement_rate(int slot, int trigger_mode) {
                     (cfg->trigger_source == 1 && (cfg->trigger_mode == 1 || cfg->buffer_enabled)) || /* EXT,ONE or EXT,CONT with buffer */
                     (cfg->trigger_source == 0); /* TALK mode always uses bus rates */
     
+    /* Select appropriate rate table */
     if (use_bus_rates) { /* IEEE-488 bus triggered */
         if (is_ohms_function) {
             rate = dm5120_bus_ohms_rates[digit_index][autocal_index];
@@ -2508,38 +2689,44 @@ float dm5120_get_measurement_rate(int slot, int trigger_mode) {
         }
     }
     
+    /* Apply additional factors for special cases */
     if (strstr(cfg->function, "OHMSCOMP") != NULL) {
         rate *= 0.5; /* Offset compensated ohms is 0.5x normal rate */
     }
     
-    /* Floor: tables hold 0.0 for unsupported combos and callers divide by rate */
+    /* Minimum rate safety check */
     if (rate < 0.1) rate = 0.1;
     
     return rate;
 }
 
-/* Delay in ms for a DM5120 operation, derived from the reading rate */
+/* Calculate precise timing delay based on DM5120 measurement rates */
 int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_count) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     float measurement_rate;
     int base_time_ms;
     int trigger_mode = cfg->trigger_mode;
     
+    /* Get actual measurement rate for current configuration */
     measurement_rate = dm5120_get_measurement_rate(slot, trigger_mode);
     
+    /* Calculate base time per measurement in milliseconds */
     base_time_ms = (int)(1000.0 / measurement_rate);
     
-    base_time_ms = (base_time_ms * 150) / 100;  /* +50% for GPIB overhead and system lag */
+    /* Add generous safety margin for GPIB overhead and system lag */
+    base_time_ms = (base_time_ms * 150) / 100;  /* 50% safety margin */
     
+    /* Operation-specific timing */
     switch (operation_type) {
         case 0: /* Single measurement */
             return base_time_ms;
             
         case 1: /* Buffer setup (BUFSZ command) */
-            return base_time_ms + 200; /* setup overhead */
+            return base_time_ms + 200; /* Setup overhead with extra margin */
             
         case 2: /* Buffer data retrieval (READ ALLSTORE) */
-            return (base_time_ms * sample_count) + 500;  /* fill time + GPIB/setup lag */
+            /* Time for buffer fill + generous retrieval overhead for continuous monitoring */
+            return (base_time_ms * sample_count) + 500;  /* Extra overhead for GPIB/setup lag */
             
         case 3: /* STOINT setup */
             return 50; /* Quick command response */
@@ -2552,7 +2739,7 @@ int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_c
     }
 }
 
-/* Alias of dm5120_calculate_measurement_time */
+/* Legacy function wrapper for backward compatibility */
 int dm5120_calculate_delay(int slot, int operation_type, int sample_count) {
     return dm5120_calculate_measurement_time(slot, operation_type, sample_count);
 }
@@ -2560,47 +2747,55 @@ int dm5120_calculate_delay(int slot, int operation_type, int sample_count) {
 void dm5120_enable_buffering(int address, int slot, int buffer_size) {
     char cmd[50];
     
-    /* DM5120 internal buffer holds 500 readings */
+    /* Enforce 500 sample limit for DM5120 internal buffer */
     if (buffer_size > 500) {
         buffer_size = 500;
     }
     
     if (buffer_size == 0) {
-        /* 0 selects circular mode */
+        /* Use circular buffer mode */
         gpib_write_dm5120(address, "BUFSZ CIRCULAR");
     } else {
         sprintf(gpib_cmd_buffer, "BUFSZ %d", buffer_size);
         gpib_write_dm5120(address, gpib_cmd_buffer);
     }
     
+    /* Use digit-aware timing for buffer setup */
     delay(dm5120_calculate_delay(slot, 1, buffer_size));
 }
 
-/* Check a STOINT interval against the manual's listed conflicts; 0 = OK, <0 = conflict code */
+/* Validate STOINT settings against current DM5120 configuration */
 int dm5120_validate_stoint_settings(int slot, int interval_ms) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     
-    /* STOINT 1-14 ms conflicts with: */
+    /* Check for timing conflicts as per DM5120 manual */
     if (interval_ms >= 1 && interval_ms <= 14) {
+        /* STOINT 1-14ms conflicts with: */
+        
+        /* 1. OHMS functions */
         if (strstr(cfg->function, "OHMS") != NULL || 
             strstr(cfg->function, "ACVDB") != NULL ||
             strstr(cfg->function, "ACADB") != NULL) {
-            return -1; /* OHMS or dB function */
+            return -1; /* Conflict with OHMS functions */
         }
         
+        /* 2. AUTO range (assuming range_mode 0 = AUTO) */
         if (cfg->range_mode == 0) {
-            return -2; /* AUTO range */
+            return -2; /* Conflict with AUTO range */
         }
         
-        if (cfg->buffer_size == 0) {
-            return -3; /* CIRCULAR buffer */
+        /* 3. CIRCULAR buffer */
+        if (cfg->buffer_size == 0) { /* 0 indicates circular buffer */
+            return -3; /* Conflict with CIRCULAR buffer */
         }
         
+        /* 4. 5 or 6 digit resolution */
         if (cfg->digits >= 5) {
-            return -4; /* 5 or 6 digit resolution */
+            return -4; /* Conflict with high resolution */
         }
     }
     
+    /* Additional check for very fast intervals */
     if ((interval_ms == 1 || interval_ms == 2) && cfg->digits >= 4) {
         return -5; /* STOINT 1-2ms conflicts with 4+ digit resolution */
     }
@@ -2608,11 +2803,12 @@ int dm5120_validate_stoint_settings(int slot, int interval_ms) {
     return 0; /* No conflicts */
 }
 
-/* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict */
+/* Set storage interval with proper validation and timing */
 void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
     char cmd[50];
     int validation_result;
     
+    /* Validate settings first */
     validation_result = dm5120_validate_stoint_settings(slot, interval_ms);
     if (validation_result != 0) {
         printf("WARNING: STOINT %d conflicts with current settings (code %d)\n", 
@@ -2624,10 +2820,12 @@ void dm5120_set_storage_interval(int address, int slot, int interval_ms) {
         /* One shot mode - store one reading per trigger */
         gpib_write_dm5120(address, "STOINT ONE");
     } else {
+        /* Continuous mode with interval timing */
         sprintf(gpib_cmd_buffer, "STOINT %d", interval_ms);
         gpib_write_dm5120(address, gpib_cmd_buffer);
     }
     
+    /* Use appropriate delay based on operation type */
     delay(dm5120_calculate_measurement_time(slot, 3, 1));
 }
 
@@ -2636,7 +2834,7 @@ int dm5120_query_storage_interval(int address) {
     int interval = 0;
     
     gpib_write_dm5120(address, "STOINT?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (strstr(gpib_response_buffer, "ONE")) {
@@ -2650,33 +2848,38 @@ int dm5120_query_storage_interval(int address) {
     return -1; /* Error */
 }
 
-/* DM5120 SRQ events for buffer status */
+/* SRQ Event Handling for DM5120 Buffer Status */
 
-/* Set FULL/HALF/RDY/OPC event masks, then enable RQS */
+/* Enable/disable specific SRQ events */
 void dm5120_configure_srq_events(int address, int enable_full, int enable_half, int enable_rdy, int enable_opc) {
     char cmd[50];
     
+    /* Configure FULL buffer event */
     sprintf(gpib_cmd_buffer, "FULL %s", enable_full ? "ON" : "OFF");
     gpib_write_dm5120(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Configure HALF buffer event */
     sprintf(gpib_cmd_buffer, "HALF %s", enable_half ? "ON" : "OFF");
     gpib_write_dm5120(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Configure RDY (ready) event */
     sprintf(gpib_cmd_buffer, "RDY %s", enable_rdy ? "ON" : "OFF");
     gpib_write_dm5120(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Configure OPC (operation complete) event */
     sprintf(gpib_cmd_buffer, "OPC %s", enable_opc ? "ON" : "OFF");
     gpib_write_dm5120(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Enable RQS (Service Request) */
     gpib_write_dm5120(address, "RQS ON");
-    delay(50);
+    GPIB_PACE(50);
 }
 
-/* Pick SRQ events to suit buffer type, size, and expected fill time */
+/* Intelligent SRQ event configuration based on buffer characteristics */
 void dm5120_configure_srq_events_smart(int address, int buffer_size, int is_circular, int expected_time_ms) {
     int enable_full, enable_half;
     
@@ -2699,6 +2902,7 @@ void dm5120_configure_srq_events_smart(int address, int buffer_size, int is_circ
         }
     }
     
+    /* Configure events with intelligent strategy */
     dm5120_configure_srq_events(address, enable_full, enable_half, 1, 1);
 }
 
@@ -2707,8 +2911,9 @@ int dm5120_check_buffer_status(int address) {
     
     int status = 0;
     
+    /* Check for any pending events */
     gpib_write_dm5120(address, "EVENT?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         int event_code;
@@ -2728,8 +2933,7 @@ int dm5120_check_buffer_status(int address) {
     return status;
 }
 
-/* Fill the DM5120 buffer (CONT+STOINT if <=1 s/reading, else one SEND per reading)
-   and read it back; returns samples read */
+/* Enhanced buffer data retrieval with timeout and SRQ monitoring */
 int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, int max_samples) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     char cmd[50];
@@ -2745,16 +2949,19 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
     int use_cont_mode;
     int i;
     
+    /* Calculate proper timeout based on measurement rate and buffer size */
     timeout_ms = dm5120_calculate_measurement_time(slot, 2, max_samples);
     
+    /* Determine buffer characteristics */
     is_circular = (cfg->buffer_size == 0);
     measurement_rate = dm5120_get_measurement_rate(slot, cfg->trigger_mode);
     measurement_interval_ms = (int)(1000.0 / measurement_rate);
     use_cont_mode = (measurement_interval_ms <= 1000);
     
+    /* Intelligent SRQ event configuration */
     dm5120_configure_srq_events_smart(address, max_samples, is_circular, timeout_ms);
     
-    /* BUFSZ also clears any stored readings */
+    /* Configure buffer size (this clears any existing buffer data) */
     if (is_circular) {
         gpib_write_dm5120(address, "BUFSZ CIRCULAR");
     } else {
@@ -2764,28 +2971,29 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
     delay(100);
     
     if (use_cont_mode) {
-        /* <=1 s per reading: CONT mode, STOINT fills the buffer */
+        /* Fast measurements (<=1 second): Use CONT mode with STOINT auto-fill */
         dm5120_set_trigger(address, "TALK", "CONT");
         dm5120_set_storage_interval(address, slot, measurement_interval_ms);
         printf("Buffer Strategy: CONT mode, %d ms intervals, %.1f r/s\n", 
                measurement_interval_ms, measurement_rate);
     } else {
-        /* >1 s per reading: trigger each one with SEND */
+        /* Slow measurements (>1 second): Use SEND commands for manual control */
         dm5120_set_trigger(address, "TALK", "ONE");
         printf("Buffer Strategy: SEND mode, %d ms per measurement, %.1f r/s\n", 
                measurement_interval_ms, measurement_rate);
     }
     
-    start_time = *((unsigned long far *)0x0040006CL);  /* BIOS tick count, ~55 ms/tick */
+    start_time = *((unsigned long far *)0x0040006CL);
     
     if (use_cont_mode) {
-        /* Buffer fills on its own; watch SRQ events */
+        /* CONT mode: Buffer fills automatically, monitor SRQ events */
         printf("Monitoring automatic buffer fill...\n");
         
         while (count < max_samples && elapsed_ms < timeout_ms) {
             current_time = *((unsigned long far *)0x0040006CL);
             elapsed_ms = (int)((current_time - start_time) * 55);
             
+            /* Check SRQ events */
             status = dm5120_check_buffer_status(address);
             
             if (status & 0x01) { /* FULL buffer event */
@@ -2801,16 +3009,18 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
         }
         
     } else {
+        /* SEND mode: Manual trigger for each measurement */
         printf("Manual triggering for %d samples...\n", max_samples);
         
         for (i = 0; i < max_samples && elapsed_ms < timeout_ms; i++) {
             gpib_write_dm5120(address, "SEND");
             delay(measurement_interval_ms);
             
+            /* Update elapsed time */
             current_time = *((unsigned long far *)0x0040006CL);
             elapsed_ms = (int)((current_time - start_time) * 55);
             
-            /* Progress every 10 readings */
+            /* Progress feedback every 10 measurements */
             if ((i + 1) % 10 == 0 || i == max_samples - 1) {
                 printf("Progress: %d/%d samples (%.1f%%)\n", 
                        i + 1, max_samples, ((float)(i + 1) / max_samples) * 100.0);
@@ -2820,9 +3030,10 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
         printf("Manual triggering complete\n");
     }
     
+    /* Verify buffer has data before reading */
     printf("Checking buffer status before read...\n");
     gpib_write_dm5120(address, "BUFCNT?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
         int buffer_count;
@@ -2835,14 +3046,15 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
         }
     }
     
+    /* Read all stored data with extended timeout and error handling */
     printf("Reading buffer data...\n");
     gpib_write_dm5120(address, "READ ALLSTORE");
-    delay(dm5120_calculate_measurement_time(slot, 4, 1) * 2); /* 2x the status-query delay */
+    delay(dm5120_calculate_measurement_time(slot, 4, 1) * 2); /* Double the timeout */
     
-    /* Query adapter status; on ERROR/FAULT, abort to clear it before reading */
+    /* Check for GPIB errors before attempting read */
     printf("Checking GPIB status before read...\n");
     ieee_write("status\r\n");
-    delay(50);
+    GPIB_PACE(50);
     
     if (ieee_read(response, sizeof(response)) > 0) {
         printf("GPIB Status: %s\n", response);
@@ -2850,15 +3062,16 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
             printf("ERROR: GPIB error detected: %s\n", response);
             printf("Attempting to clear error...\n");
             ieee_write("abort\r\n");
-            delay(200);
+            GPIB_PACE(200);
             ieee_write("status\r\n");
-            delay(50);
+            GPIB_PACE(50);
             if (ieee_read(response, sizeof(response)) > 0) {
                 printf("Status after abort: %s\n", response);
             }
         }
     }
     
+    /* Parse response and fill buffer with improved error handling */
     printf("Attempting to read buffer data...\n");
     if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
         char *token = strtok(response, ",;");
@@ -2876,10 +3089,10 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
         printf("ERROR: Failed to read buffer data - READFAULT detected\n");
         printf("Attempting alternate read method...\n");
         
-        /* Fallback: READ ONESTORE one sample at a time */
+        /* Try reading one sample at a time as fallback */
         for (i = 0; i < max_samples && count < max_samples; i++) {
             gpib_write_dm5120(address, "READ ONESTORE");
-            delay(200);
+            GPIB_PACE(200);
             
             if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
                 if (sscanf(response, "%f", &value) == 1) {
@@ -2900,6 +3113,7 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
         }
     }
     
+    /* Report completion status */
     if (count == max_samples) {
         printf("SUCCESS: All %d samples collected\n", count);
     } else if (count > 0) {
@@ -2911,9 +3125,9 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
     return count;
 }
 
-/* DM5120 timing diagnostics */
+/* Timing Validation and Diagnostic Functions */
 
-/* Print rate, fill-time, and STOINT checks for the slot; returns warning count */
+/* Validate all DM5120 timing settings for optimal performance */
 int dm5120_validate_configuration(int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     float measurement_rate;
@@ -2923,23 +3137,28 @@ int dm5120_validate_configuration(int slot) {
     printf("DM5120 Configuration Analysis for Slot %d:\n", slot);
     printf("==========================================\n");
     
+    /* Check measurement rate */
     measurement_rate = dm5120_get_measurement_rate(slot, cfg->trigger_mode);
     printf("Measurement Rate: %.1f readings/sec\n", measurement_rate);
     
+    /* Check optimal timing */
     optimal_delay = dm5120_calculate_measurement_time(slot, 0, 1);
     printf("Optimal Sample Interval: %d ms\n", optimal_delay);
     
+    /* Check buffer configuration */
     if (cfg->buffer_enabled && cfg->buffer_size > 0) {
         buffer_fill_time = dm5120_calculate_measurement_time(slot, 2, cfg->buffer_size);
         printf("Buffer Fill Time (%d samples): %d ms\n", cfg->buffer_size, buffer_fill_time);
         
-        if (buffer_fill_time > 30000) { /* 30 s */
+        /* Check for buffer timeout issues */
+        if (buffer_fill_time > 30000) { /* 30 second timeout */
             printf("WARNING: Buffer fill time exceeds 30 seconds!\n");
             printf("Consider reducing buffer size or using faster settings.\n");
             warnings++;
         }
     }
     
+    /* Check STOINT conflicts */
     if (cfg->buffer_enabled) {
         int stoint_result = dm5120_validate_stoint_settings(slot, 100); /* Test with 100ms */
         if (stoint_result != 0) {
@@ -2955,6 +3174,7 @@ int dm5120_validate_configuration(int slot) {
         }
     }
     
+    /* Performance recommendations */
     printf("\nRecommendations:\n");
     if (measurement_rate < 10.0) {
         printf("- Consider using lower resolution for faster measurements\n");
@@ -2975,6 +3195,7 @@ int dm5120_validate_configuration(int slot) {
     return warnings;
 }
 
+/* Display comprehensive timing diagnostics */
 void dm5120_timing_diagnostics(int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     float rate_continuous, rate_bus;
@@ -2991,6 +3212,7 @@ void dm5120_timing_diagnostics(int slot) {
     printf("Buffer Size: %d samples\n", cfg->buffer_size);
     printf("\n");
     
+    /* Show measurement rates for different modes */
     printf("Measurement Rates:\n");
     rate_continuous = dm5120_get_measurement_rate(slot, 0); /* Continuous */
     rate_bus = dm5120_get_measurement_rate(slot, 2);        /* IEEE-488 bus */
@@ -2999,6 +3221,7 @@ void dm5120_timing_diagnostics(int slot) {
     printf("IEEE-488 Bus Mode: %.1f readings/sec\n", rate_bus);
     printf("\n");
     
+    /* Show timing for different operations */
     printf("Operation Timings:\n");
     printf("Single Reading: %d ms\n", dm5120_calculate_measurement_time(slot, 0, 1));
     printf("Buffer Setup: %d ms\n", dm5120_calculate_measurement_time(slot, 1, 1));
@@ -3006,6 +3229,7 @@ void dm5120_timing_diagnostics(int slot) {
     printf("Status Query: %d ms\n", dm5120_calculate_measurement_time(slot, 4, 1));
     printf("\n");
     
+    /* Show buffer fill times for different sizes */
     printf("Buffer Fill Times:\n");
     for (i = 10; i <= 500; i += 100) {
         int fill_time = dm5120_calculate_measurement_time(slot, 2, i);
@@ -3013,6 +3237,7 @@ void dm5120_timing_diagnostics(int slot) {
     }
     printf("\n");
     
+    /* Performance vs. accuracy tradeoffs */
     printf("Resolution vs. Speed Trade-offs:\n");
     printf("3.5 digits: Very fast, ~1000 r/s (voltage)\n");
     printf("4.5 digits: Fast, ~333 r/s (voltage)\n");
@@ -3034,6 +3259,7 @@ int dm5120_get_buffer_data(int address, int slot, float far *buffer, int max_sam
     
     gpib_write_dm5120(address, "READ ALLSTORE");
     
+    /* Use digit-aware timing scaled by sample count */
     delay(dm5120_calculate_delay(slot, 2, max_samples));
     
     if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
@@ -3048,7 +3274,7 @@ int dm5120_get_buffer_data(int address, int slot, float far *buffer, int max_sam
     
     return count;
 }
-/* Blocking fill: configure, wait the estimated fill time, then READ ALLSTORE */
+/* Complete buffer fill and retrieve multiple samples */
 int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int buffer_size) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     int samples_collected = 0;
@@ -3058,30 +3284,40 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
         return 0;
     }
     
+    /* Step 0: CRITICAL - Set trigger for buffer auto-fill */
     if (cfg->buffer_enabled) {
-        /* Configured source, default TALK,CONT, so the meter self-fills; EXT,CONT stalls
-           the fill until an external trigger arrives. (FINDINGS #3) */
+        /* Self-filling buffer: use the configured trigger source. Default TALK,CONT
+           lets the meter fill without external trigger hardware (matching the single-
+           measurement path below); EXT is opt-in via the DM5120 advanced config.
+           v3.5 hardcoded EXT,CONT, which stalled the buffer until an external trigger
+           arrived -> fill timeouts / manual front-panel intervention. (v3.6, FINDINGS #3) */
         dm5120_set_trigger(address, cfg->trigger_source ? "EXT" : "TALK", "CONT");
         
+        /* Enable SRQ events for buffer monitoring */
         gpib_write_dm5120(address, "HALF ON");
-        delay(50);
+        GPIB_PACE(50);
         gpib_write_dm5120(address, "FULL ON");
-        delay(50);
+        GPIB_PACE(50);
         gpib_write_dm5120(address, "RQS ON");
-        delay(50);
+        GPIB_PACE(50);
     } else {
+        /* For single measurements use TALK,CONT */
         dm5120_set_trigger(address, "TALK", "CONT");
     }
     
+    /* Step 1: Configure buffer size */
     dm5120_enable_buffering(address, slot, buffer_size);
     
+    /* Step 2: Set storage interval for continuous sampling */
     dm5120_set_storage_interval(address, slot, cfg->sample_rate > 0 ? (int)(cfg->sample_rate * 1000) : 100);
     
+    /* Step 3: Wait for buffer to fill completely */
     total_wait_time = dm5120_calculate_delay(slot, 2, buffer_size);
     printf("Collecting %d samples at %d digits - estimated time: %dms\n", 
            buffer_size, cfg->digits, total_wait_time);
     delay(total_wait_time);
     
+    /* Step 4: Retrieve all buffered data */
     samples_collected = dm5120_get_buffer_data(address, slot, buffer, buffer_size);
     
     printf("Buffer operation complete: %d/%d samples collected\n", 
@@ -3090,40 +3326,46 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
     return samples_collected;
 }
 
-/* DM5120 non-blocking buffer fill, polled from the measurement loop.
-   buffer_state: 0 idle, 1 filling, 2 half, 3 full */
+/* DM5120 Asynchronous Buffer Functions for Non-Blocking Operation */
 void dm5120_start_buffer_async(int address, int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     
+    /* Only start if buffer is idle */
     if (cfg->buffer_state != 0) {
         return;  /* Already running */
     }
     
-    /* TALK,CONT unless the user chose EXT; EXT,CONT without a trigger source
-       leaves the buffer empty until the 30 s timeout. (FINDINGS #3) */
+    /* Configure for async buffer fill: default TALK,CONT (no external trigger
+       hardware required); EXT only when the user opted in. v3.5 hardcoded EXT,CONT,
+       which left the buffer empty until the 30s timeout fired. (v3.6, FINDINGS #3) */
     dm5120_set_trigger(address, cfg->trigger_source ? "EXT" : "TALK", "CONT");
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Set storage interval for automatic triggering */
     dm5120_set_storage_interval(address, slot, 100); /* 100ms intervals */
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Enable SRQ events for buffer monitoring */
     gpib_write_dm5120(address, "HALF ON");
-    delay(50);
+    GPIB_PACE(50);
     gpib_write_dm5120(address, "FULL ON");
-    delay(50);
+    GPIB_PACE(50);
     gpib_write_dm5120(address, "RQS ON");
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Clear buffer and prepare for new data */
     gpib_write_dm5120(address, "BUFCLR");
-    delay(50);
+    GPIB_PACE(50);
     
+    /* Configure buffer size if needed */
     if (cfg->buffer_size > 0 && cfg->buffer_size <= DM5120_MAX_BUFFER_SIZE) {
         dm5120_set_buffer_size(address, cfg->buffer_size);
-        delay(50);
+        GPIB_PACE(50);
     }
     
+    /* Mark state as filling */
     cfg->buffer_state = 1; /* filling */
-    cfg->buffer_start_time = *((unsigned long far *)0x0040006CL); /* BIOS tick count, 18.2 Hz */
+    cfg->buffer_start_time = *((unsigned long far *)0x0040006CL); /* Get tick count */
     cfg->samples_ready = 0;
 }
 
@@ -3132,19 +3374,23 @@ int dm5120_check_buffer_async(int address, int slot) {
     char response[128];
     int event_found = 0;
     
+    /* Only check if buffer is filling */
     if (cfg->buffer_state == 0) {
         return 0;  /* Not active */
     }
     
+    /* Check for SRQ events */
     gpib_write_dm5120(address, "EVENT?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
+        /* Check for HALF event */
         if (strstr(response, "HALF")) {
             cfg->buffer_state = 2; /* half full */
             cfg->samples_ready = cfg->buffer_size / 2;
             event_found = 1;
         }
+        /* Check for FULL event */
         else if (strstr(response, "FULL")) {
             cfg->buffer_state = 3; /* full */
             cfg->samples_ready = cfg->buffer_size;
@@ -3152,12 +3398,13 @@ int dm5120_check_buffer_async(int address, int slot) {
         }
     }
     
-    /* No event: fall back to polling BUFCNT? */
+    /* If no event, check buffer count directly */
     if (!event_found && cfg->buffer_state == 1) {
         int count = dm5120_get_buffer_count(address);
         if (count > 0) {
             cfg->samples_ready = count;
             
+            /* Check if we've reached milestones */
             if (count >= cfg->buffer_size) {
                 cfg->buffer_state = 3; /* full */
             } else if (count >= cfg->buffer_size / 2) {
@@ -3166,6 +3413,7 @@ int dm5120_check_buffer_async(int address, int slot) {
         }
     }
     
+    /* Check for timeout (30 seconds) */
     if (cfg->buffer_state == 1) {
         unsigned long current_ticks = *((unsigned long far *)0x0040006CL);
         unsigned long elapsed_ticks = current_ticks - cfg->buffer_start_time;
@@ -3181,6 +3429,7 @@ int dm5120_check_buffer_async(int address, int slot) {
 void dm5120_reset_buffer_async(int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     
+    /* Reset buffer state */
     cfg->buffer_state = 0;      /* idle */
     cfg->buffer_start_time = 0;
     cfg->samples_ready = 0;
@@ -3192,7 +3441,7 @@ float dm5120_get_buffer_average(int address) {
     float value = 0.0;
     
     gpib_write_dm5120(address, "BUFAVE?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
@@ -3211,7 +3460,7 @@ int dm5120_get_buffer_count(int address) {
     int count = 0;
     
     gpib_write_dm5120(address, "BUFCNT?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%d", &count) == 1) {
@@ -3227,7 +3476,7 @@ float dm5120_get_buffer_min(int address) {
     float value = 0.0;
     
     gpib_write_dm5120(address, "BUFMIN?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
@@ -3246,7 +3495,7 @@ float dm5120_get_buffer_max(int address) {
     float value = 0.0;
     
     gpib_write_dm5120(address, "BUFMAX?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
@@ -3277,7 +3526,7 @@ int dm5120_query_buffer_size(int address) {
     int size = 0;
     
     gpib_write_dm5120(address, "BUFSZ?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (strstr(gpib_response_buffer, "CIRCULAR")) {
@@ -3291,13 +3540,13 @@ int dm5120_query_buffer_size(int address) {
     return 0;
 }
 
-/* DM5120 stored-reading reads (READ ONESTORE / READ ALLSTORE) */
+/* DM5120 Buffer Reading Functions using proper TM5000 syntax */
 float dm5120_read_one_stored(int address) {
     
     float value = 0.0;
     
     gpib_write_dm5120(address, "READ ONESTORE");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
@@ -3320,6 +3569,7 @@ int dm5120_read_all_stored(int address, float far *buffer, int max_samples) {
     delay(200);  /* Allow time for all data to be formatted */
     
     if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
+        /* Parse comma-separated values */
         token = strtok(response, ",");
         while (token && count < max_samples) {
             if (sscanf(token, "%e", &buffer[count]) == 1) {
@@ -3348,6 +3598,7 @@ float read_dm5120_buffered(int address, int slot) {
     }
     
     if (cfg->buffer_enabled) {
+        /* Allocate or resize buffer if needed */
         if (!buffer_data || buffer_allocated_size < cfg->buffer_size) {
             if (buffer_data) {
                 free(buffer_data);
@@ -3362,6 +3613,7 @@ float read_dm5120_buffered(int address, int slot) {
             buffer_valid_count = 0;  /* Force buffer refill */
             buffer_index = 0;
         }
+        /* If buffer is empty or exhausted, refill it */
         if (buffer_index >= buffer_valid_count) {
             buffer_valid_count = dm5120_fill_buffer_complete(address, slot, 
                                                             buffer_data, cfg->buffer_size);
@@ -3373,6 +3625,7 @@ float read_dm5120_buffered(int address, int slot) {
             }
         }
         
+        /* Return next sample from buffer */
         if (buffer_index < buffer_valid_count) {
             return buffer_data[buffer_index++];
         }
@@ -3381,22 +3634,28 @@ float read_dm5120_buffered(int address, int slot) {
     return read_dm5120_enhanced(address, slot);
 }
 
+/* Convenience function to get multiple samples directly */
 int dm5120_get_multiple_samples(int address, int slot, float far *buffer, int num_samples) {
     dm5120_config *cfg = &g_dm5120_config[slot];
     
     if (!cfg->buffer_enabled) {
+        /* If buffering disabled, take individual measurements */
         int i;
         for (i = 0; i < num_samples; i++) {
             buffer[i] = read_dm5120_enhanced(address, slot);
             if (i < num_samples - 1) {
+                /* Small delay between individual measurements */
                 delay(dm5120_calculate_delay(slot, 0, 1));
             }
         }
         return num_samples;
     } else {
+        /* Use buffering for efficiency */
         return dm5120_fill_buffer_complete(address, slot, buffer, num_samples);
     }
 }
+
+/* Example usage of corrected DM5120 buffering */
 
 float read_dm5120_enhanced(int address, int slot) {
     float value = 0.0;
@@ -3412,6 +3671,7 @@ float read_dm5120_enhanced(int address, int slot) {
     
     gpib_write_dm5120(address, "READ ADC");
     
+    /* Use digit-aware timing for voltage measurement */
     delay(dm5120_calculate_delay(slot, 0, 1));
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
@@ -3435,9 +3695,11 @@ float read_dm5120_enhanced(int address, int slot) {
     
     if (cfg->trigger_mode == 0) {  /* CONT mode */
         gpib_write_dm5120(address, "X");
+        /* Use digit-aware timing for X command */
         delay(dm5120_calculate_delay(slot, 0, 1));
     } else {
         gpib_write_dm5120(address, "SEND");
+        /* Use digit-aware timing for SEND command with slight overhead */
         delay(dm5120_calculate_delay(slot, 0, 1) + 50);
     }
     
@@ -3454,7 +3716,7 @@ float read_dm5120_enhanced(int address, int slot) {
         
         
         gpib_write_dm5120(address, "X");
-        delay(300);
+        GPIB_PACE(300);
         
         if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
             if (sscanf(gpib_response_buffer, "NDCV%e", &value) == 1) {
@@ -3494,10 +3756,10 @@ float read_dm5120_voltage(int address) {
     float value = 0.0;
     
     gpib_check_srq(address);
-    delay(50);
+    GPIB_PACE(50);
     
     gpib_write_dm5120(address, "READ ADC");
-    delay(300);
+    GPIB_PACE(300);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
@@ -3524,13 +3786,13 @@ void test_dm5120_comm(int address) {
     printf("\nTesting DM5120 at address %d...\n", address);
     
     ieee_write("status\r\n");
-    delay(50);
+    GPIB_PACE(50);
     ieee_read(status, sizeof(status));
     printf("Driver status: %s\n", status);
     
     printf("Setting REMOTE mode...\n");
     gpib_remote_dm5120(address);
-    delay(200);
+    GPIB_PACE(200);
     
     printf("Checking SRQ status...\n");
     srq_status = gpib_check_srq(address);
@@ -3538,29 +3800,29 @@ void test_dm5120_comm(int address) {
     
     printf("Sending ABORT command...\n");
     ieee_write("abort\r\n");
-    delay(200);
+    GPIB_PACE(200);
     
     printf("\nSending INIT command...\n");
     gpib_write_dm5120(address, "INIT");
-    delay(300);
+    GPIB_PACE(300);
     
     printf("Setting DCV function...\n");
     gpib_write_dm5120(address, "FUNCT DCV");
-    delay(100);
+    GPIB_PACE(100);
     
     printf("Setting AUTO range...\n");
     gpib_write_dm5120(address, "RANGE AUTO");
-    delay(100);
+    GPIB_PACE(100);
     
     printf("Setting data format ON (scientific)...\n");
     gpib_write_dm5120(address, "DATFOR ON");
-    delay(100);
+    GPIB_PACE(100);
     
     printf("\nAttempting measurement reads:\n");
     
     printf("\n1. Using voltage? command:\n");
     gpib_write_dm5120(address, "READ ADC");
-    delay(300);
+    GPIB_PACE(300);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
@@ -3573,7 +3835,7 @@ void test_dm5120_comm(int address) {
     
     printf("\n2. Simple execute (X command):\n");
     gpib_write_dm5120(address, "X");
-    delay(300);
+    GPIB_PACE(300);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
@@ -3586,7 +3848,7 @@ void test_dm5120_comm(int address) {
     
     printf("\n3. READ? query:\n");
     gpib_write_dm5120(address, "READ?");
-    delay(300);
+    GPIB_PACE(300);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
@@ -3597,13 +3859,13 @@ void test_dm5120_comm(int address) {
     printf("\nQuerying current settings:\n");
     
     gpib_write_dm5120(address, "FUNCT?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
     
     gpib_write_dm5120(address, "RANGE?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
@@ -3612,36 +3874,36 @@ void test_dm5120_comm(int address) {
     
     printf("4. BUFSZ? (Buffer Size Query):\n");
     gpib_write_dm5120(address, "BUFSZ?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
     
     printf("5. BUFCNT? (Buffer Count Query):\n");
     gpib_write_dm5120(address, "BUFCNT?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
     
     printf("6. Testing BUFSZ 50 (Set Buffer Size):\n");
     gpib_write_dm5120(address, "BUFSZ 50");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write_dm5120(address, "BUFSZ?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
     
     printf("7. STOINT? (Storage Interval Query):\n");
     gpib_write_dm5120(address, "STOINT?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
     
     gpib_write_dm5120(address, "ERROR?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
@@ -3664,25 +3926,25 @@ void test_dm5120_comm_debug(int address) {
     sprintf(gpib_cmd_buffer, "output %2d; INIT\r\n", address);
     printf("   %s\n", gpib_cmd_buffer);
     ieee_write(gpib_cmd_buffer);
-    delay(500);
+    GPIB_PACE(500);
     
     printf("\n2. Sending function setup:\n");
     sprintf(gpib_cmd_buffer, "output %2d; FUNCT DCV\r\n", address);
     printf("   %s\n", gpib_response_buffer);
     ieee_write(gpib_cmd_buffer);
-    delay(200);
+    GPIB_PACE(200);
     
     printf("\n3. Requesting reading:\n");
     sprintf(gpib_cmd_buffer, "output %2d; READ ADC\r\n", address);
     printf("   %s\n", gpib_response_buffer);
     ieee_write(gpib_cmd_buffer);
-    delay(200);
+    GPIB_PACE(200);
     
     printf("\n4. Reading response:\n");
     sprintf(gpib_cmd_buffer, "enter %2d\r\n", address);
     printf("   %s\n", gpib_response_buffer);
     ieee_write(gpib_cmd_buffer);
-    delay(200);
+    GPIB_PACE(200);
     
     bytes_read = ieee_read(gpib_response_buffer, sizeof(gpib_response_buffer));
     if (bytes_read > 0) {
@@ -3707,7 +3969,7 @@ void test_dm5120_comm_debug(int address) {
     getch();
 }
 
-/* DM5010 multimeter */
+/* DM5010 Functions - Complete implementations from TM5000L.c */
 void init_dm5010_config(int slot) {
     strcpy(g_dm5010_config[slot].function, "DCV");
     g_dm5010_config[slot].range_mode = 0;  /* AUTO */
@@ -3913,7 +4175,7 @@ void configure_dm5010_advanced(int slot) {
             case 'C':
                 printf("\n\nApplying settings to DM5010...\n");
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 dm5010_set_function(address, cfg->function);
                 dm5010_set_filter(address, cfg->filter_enabled, cfg->filter_count);
@@ -4043,13 +4305,13 @@ float read_dm5010_enhanced(int address, int slot) {
     int success = 0;
     
     gpib_check_srq(address);
-    delay(50);
+    GPIB_PACE(50);
     
     while (attempts < 3 && !success) {
         attempts++;
         
         gpib_write_dm5010(address, "VAL?");
-        delay(100);
+        GPIB_PACE(100);
         
         if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
             if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
@@ -4060,7 +4322,7 @@ float read_dm5010_enhanced(int address, int slot) {
         
         if (!success) {
             gpib_write_dm5010(address, "READ?");
-            delay(150);
+            GPIB_PACE(150);
             
             if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
                 if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
@@ -4101,7 +4363,7 @@ void test_dm5010_comm(int address) {
     
     printf("1. Testing identification...\n");
     gpib_write_dm5010(address, "*IDN?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -4112,18 +4374,18 @@ void test_dm5010_comm(int address) {
     
     printf("2. Testing reset...\n");
     gpib_write_dm5010(address, "*RST");
-    delay(500);
+    GPIB_PACE(500);
     gpib_write_dm5010(address, "CONF:VOLT:DC");
-    delay(100);
+    GPIB_PACE(100);
     printf("   Reset and configured for DC voltage\n");
     success_count++;
     test_count++;
     
     printf("3. Testing function configuration...\n");
     gpib_write_dm5010(address, "CONF:VOLT:DC AUTO,MAX");
-    delay(100);
+    GPIB_PACE(100);
     gpib_write_dm5010(address, "FUNC?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -4134,7 +4396,7 @@ void test_dm5010_comm(int address) {
     
     printf("4. Testing measurement...\n");
     gpib_write_dm5010(address, "READ?");
-    delay(200);
+    GPIB_PACE(200);
     if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
             printf("   Measurement: %.6e V\n", value);
@@ -4149,7 +4411,7 @@ void test_dm5010_comm(int address) {
     
     printf("5. Testing status...\n");
     gpib_write_dm5010(address, "*STB?");
-    delay(100);
+    GPIB_PACE(100);
     if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
         success_count++;
@@ -4174,7 +4436,7 @@ void test_dm5010_comm(int address) {
     getch();
 }
 
-/* PS5004 power supply */
+/* PS5004 Functions - Complete implementations from TM5000L.c */
 void init_ps5004_config(int slot) {
     g_ps5004_config[slot].voltage = 0.0;
     g_ps5004_config[slot].current_limit = 0.1;  /* 100mA default */
@@ -4321,7 +4583,7 @@ void configure_ps5004_advanced(int slot) {
             case 'B':
                 printf("\n\nApplying settings to PS5004...\n");
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 ps5004_init(address);
                 ps5004_set_voltage(address, cfg->voltage);
@@ -4336,17 +4598,17 @@ void configure_ps5004_advanced(int slot) {
                 
                 /* Configure interrupts */
                 gpib_write(address, cfg->vri_enabled ? "VRI ON" : "VRI OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->cri_enabled ? "CRI ON" : "CRI OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->uri_enabled ? "URI ON" : "URI OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->dt_enabled ? "DT ON" : "DT OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->user_enabled ? "USER ON" : "USER OFF");
-                delay(50);
+                GPIB_PACE(50);
                 gpib_write(address, cfg->rqs_enabled ? "RQS ON" : "RQS OFF");
-                delay(50);
+                GPIB_PACE(50);
                 
                 printf("Settings applied!\n");
                 printf("Press any key to continue...");
@@ -4373,7 +4635,7 @@ void configure_ps5004_advanced(int slot) {
 #endif
 void ps5004_init(int address) {
     gpib_write(address, "INIT");
-    delay(100);
+    GPIB_PACE(100);
 }
 void ps5004_set_voltage(int address, float voltage) {
     char cmd[50];
@@ -4381,7 +4643,7 @@ void ps5004_set_voltage(int address, float voltage) {
     if (voltage > 20.0) voltage = 20.0;
     sprintf(gpib_cmd_buffer, "VOLTAGE %.4f", voltage);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 void ps5004_set_current(int address, float current) {
     char cmd[50];
@@ -4389,7 +4651,7 @@ void ps5004_set_current(int address, float current) {
     if (current > 0.305) current = 0.305;  /* 305mA maximum */
     sprintf(gpib_cmd_buffer, "CURRENT %.3f", current);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 void ps5004_set_output(int address, int on) {
     if (on) {
@@ -4403,14 +4665,14 @@ void ps5004_set_display(int address, char *mode) {
     char cmd[50];
     sprintf(gpib_cmd_buffer, "DISPLAY %s", mode);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 int ps5004_get_regulation_status(int address) {
     
     int status = 0;
     
     gpib_write(address, "REGULATION?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (strstr(gpib_response_buffer, "REGULATION 1")) status = 1;
@@ -4426,7 +4688,7 @@ float ps5004_read_value(int address) {
     float value = 0.0;
     
     gpib_write(address, "SEND");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
@@ -4447,11 +4709,11 @@ void test_ps5004_comm(int address) {
     
     printf("Setting REMOTE mode...\n");
     gpib_remote(address);
-    delay(200);
+    GPIB_PACE(200);
     
     printf("\nGetting ID...\n");
     gpib_write(address, "ID?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
@@ -4464,7 +4726,7 @@ void test_ps5004_comm(int address) {
     
     printf("\nQuerying all settings...\n");
     gpib_write(address, "SET?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
@@ -4474,7 +4736,7 @@ void test_ps5004_comm(int address) {
     ps5004_set_voltage(address, 5.0);
     
     gpib_write(address, "VOLTAGE?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
@@ -4483,18 +4745,18 @@ void test_ps5004_comm(int address) {
     ps5004_set_current(address, 0.1);
     
     gpib_write(address, "CURRENT?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
     
     printf("\nTesting display modes...\n");
     ps5004_set_display(address, "VOLTAGE");
-    delay(100);
+    GPIB_PACE(100);
     ps5004_set_display(address, "CURRENT");
-    delay(100);
+    GPIB_PACE(100);
     ps5004_set_display(address, "CLIMIT");
-    delay(100);
+    GPIB_PACE(100);
     ps5004_set_display(address, "VOLTAGE");
     
     printf("\nReading voltage (output is OFF)...\n");
@@ -4505,7 +4767,7 @@ void test_ps5004_comm(int address) {
     getch();
 }
 
-/* PS5010 triple power supply */
+/* PS5010 Functions - Complete implementations from TM5000L.c */
 void init_ps5010_config(int slot) {
     ps5010_config *cfg = &g_ps5010_config[slot];
     
@@ -4721,7 +4983,7 @@ void configure_ps5010_advanced(int slot) {
             case 'D':
                 printf("\n\nApplying settings to PS5010...\n");
                 gpib_remote(address);
-                delay(200);
+                GPIB_PACE(200);
                 
                 ps5010_init(address);
                 ps5010_set_voltage(address, 1, cfg->voltage1);
@@ -4791,7 +5053,7 @@ void ps5010_set_voltage(int address, int channel, float voltage) {
     }
     
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 void ps5010_set_current(int address, int channel, float current) {
     char cmd[50];
@@ -4817,7 +5079,7 @@ void ps5010_set_current(int address, int channel, float current) {
     }
     
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 void ps5010_set_output(int address, int channel, int on) {
     char cmd[50];
@@ -4837,7 +5099,7 @@ void ps5010_set_output(int address, int channel, int on) {
     }
     
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 void ps5010_set_tracking_voltage(int address, float voltage) {
     char cmd[50];
@@ -4847,13 +5109,13 @@ void ps5010_set_tracking_voltage(int address, float voltage) {
     
     sprintf(gpib_cmd_buffer, "VTRA %.1f", voltage);
     gpib_write(address, gpib_cmd_buffer);
-    delay(50);
+    GPIB_PACE(50);
 }
 int ps5010_read_regulation(int address, int *neg_stat, int *pos_stat, int *log_stat) {
     
     
     gpib_write(address, "REG?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         /* REG returns <neg>,<pos>,<logic> where:
@@ -4869,7 +5131,7 @@ int ps5010_read_regulation(int address, int *neg_stat, int *pos_stat, int *log_s
 }
 int ps5010_get_settings(int address, char *buffer, int maxlen) {
     gpib_write(address, "SET?");
-    delay(100);
+    GPIB_PACE(100);
     return gpib_read(address, gpib_response_buffer, maxlen);
 }
 int ps5010_get_error(int address) {
@@ -4877,7 +5139,7 @@ int ps5010_get_error(int address) {
     int error_code = 0;
     
     gpib_write(address, "ERR?");
-    delay(50);
+    GPIB_PACE(50);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         sscanf(gpib_response_buffer, "%d", &error_code);
@@ -4887,15 +5149,15 @@ int ps5010_get_error(int address) {
 }
 void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on) {
     gpib_write(address, pri_on ? "PRI ON" : "PRI OFF");
-    delay(50);
+    GPIB_PACE(50);
     gpib_write(address, nri_on ? "NRI ON" : "NRI OFF");
-    delay(50);
+    GPIB_PACE(50);
     gpib_write(address, lri_on ? "LRI ON" : "LRI OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 void ps5010_set_srq(int address, int on) {
     gpib_write(address, on ? "RQS ON" : "RQS OFF");
-    delay(50);
+    GPIB_PACE(50);
 }
 
 void test_ps5010_comm(int address) {
@@ -4906,14 +5168,14 @@ void test_ps5010_comm(int address) {
     
     printf("Setting REMOTE mode...\n");
     gpib_remote(address);
-    delay(200);
+    GPIB_PACE(200);
     
     printf("\nResetting PS5010...\n");
     ps5010_init(address);
     
     printf("\nGetting ID...\n");
     gpib_write(address, "ID?");
-    delay(100);
+    GPIB_PACE(100);
     
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
@@ -4949,12 +5211,12 @@ void test_ps5010_comm(int address) {
     
     printf("\nTesting VTRA (tracking voltage) command...\n");
     ps5010_set_tracking_voltage(address, 10.0);
-    delay(200);
+    GPIB_PACE(200);
     printf("Set both POS and NEG to 10V using VTRA\n");
     
     printf("\nChecking error status...\n");
     gpib_write(address, "ERR?");
-    delay(50);
+    GPIB_PACE(50);
     if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         int error_code = atoi(gpib_response_buffer);
         if (error_code == 0) {
@@ -4989,10 +5251,10 @@ void test_ps5010_comm(int address) {
     getch();
 }
 
-/* Single-shot and continuous measurement across all configured slots */
+/* Core Measurement Functions - Complete implementations from TM5000L.c */
 void single_measurement(void) {
     int i;
-    float value;
+    double value;
     
     int active_modules[10];
     int active_count = 0;
@@ -5001,6 +5263,7 @@ void single_measurement(void) {
     printf("Single Measurement - Multi-Module Coordination\n");
     printf("==============================================\n\n");
     
+    /* Step 1: Identify enabled modules */
     for (i = 0; i < 10; i++) {
         if (g_system->modules[i].enabled) {
             active_modules[active_count] = i;
@@ -5017,7 +5280,7 @@ void single_measurement(void) {
     
     printf("Synchronizing %d modules for simultaneous measurement...\n\n", active_count);
     
-    /* INIT counters and meters one by one before reading */
+    /* Step 2: Initialize all modules simultaneously */
     for (i = 0; i < active_count; i++) {
         int slot = active_modules[i];
         int addr = g_system->modules[slot].gpib_address;
@@ -5040,15 +5303,17 @@ void single_measurement(void) {
         }
     }
     
+    /* Step 3: Wait for all operations to complete */
     if (active_count > 0) {
         ieee_write("*OPC?\r\n");
         delay(100); /* Allow time for all modules to complete */
-        drain_input_buffer();
+        drain_input_buffer(); /* Clear any response */
     }
     
     printf("Collecting results:\n");
     printf("-------------------\n");
     
+    /* Step 4: Display results from all modules */
     for (i = 0; i < active_count; i++) {
         int slot = active_modules[i];
         printf("Slot %d (%s at GPIB %d): ", slot, g_system->modules[slot].description, g_system->modules[slot].gpib_address);
@@ -5056,6 +5321,7 @@ void single_measurement(void) {
         switch (g_system->modules[slot].module_type) {
             case MOD_DC5009:
             case MOD_DC5010:
+                /* Frequency counter reading */
                 value = dc5009_read_measurement(g_system->modules[slot].gpib_address);
                 if (value > 1e6) {
                     printf("%.3f MHz\n", value / 1e6);
@@ -5068,15 +5334,17 @@ void single_measurement(void) {
                 break;
                 
             case MOD_DM5010:
+                /* Enhanced multimeter reading */
                 value = read_dm5010_enhanced(g_system->modules[slot].gpib_address, slot);
                 printf("%.6g V\n", value);
                 g_system->modules[slot].last_reading = value;
                 break;
                 
             case MOD_DM5120:
+                /* Enhanced multimeter with fallback */
                 value = read_dm5120_enhanced(g_system->modules[slot].gpib_address, slot);
                 if (value == 0.0) {
-                    /* 0.0 on a failed read: retry with the plain voltage read */
+                    /* Fallback method */
                     value = read_dm5120_voltage(g_system->modules[slot].gpib_address);
                 }
                 printf("%.6g V\n", value);
@@ -5136,9 +5404,36 @@ void single_measurement(void) {
     printf("\nPress any key to continue...");
     getch();
 }
+/* ---- flicker-free monitor display: build each screen line in a buffer and
+ * write it straight into text-mode video memory (vputs, graphics.c) instead
+ * of printf through DOS + BIOS teletype, which is slow on the 286 and paints
+ * character by character.  Non-sampling passes redraw the exact text of the
+ * last sample, so values no longer alternate between two formats.        */
+static char mon_buf[200];
+static int  mon_len, mon_row;
+static char mon_last[10][60];     /* text after the module prefix, last sample */
+static int  mon_pfx;              /* length of the "S0 DC5009[29]:" prefix    */
+
+static void lp(const char *fmt, ...)
+{
+    va_list ap;
+    if (mon_len > 150) return;
+    va_start(ap, fmt);
+    mon_len += vsprintf(mon_buf + mon_len, fmt, ap);
+    va_end(ap);
+}
+
+static void lp_nl(void)
+{
+    mon_buf[mon_len] = '\0';
+    vputs(mon_row++, 1, mon_buf, 79);
+    mon_len = 0;
+    mon_buf[0] = '\0';
+}
+
 void continuous_monitor(void) {
     int i, done = 0;
-    float value;
+    double value;
     time_t start_time = time(NULL);
     time_t current_time;
     unsigned long last_tick_count = 0;
@@ -5154,9 +5449,67 @@ void continuous_monitor(void) {
     int active_modules = 0;
     int should_monitor;
     int display_update_counter = 0;
+    /* AUTO rate: time the first AUTO_CAL_PASSES samples taken back-to-back */
+#define AUTO_CAL_PASSES 3
+    int auto_cal = 0;
+    unsigned long auto_sum = 0;
+    unsigned long mod_ticks[10];
+    unsigned long t_mod;
+    /* "Time" = measurement time: BIOS ticks accumulated only while RUNNING */
+    unsigned long run_ticks = 0, run_mark, run_now, run_ms;
+    unsigned long passes = 0;                    /* readings per slot this run */
+    unsigned int pool_size = MAX_SAMPLES_PER_MODULE;
+    int avg_shown = -1;
+    int mon_rows_used = 0;                       /* rows drawn on the last pass */
+    unsigned long mclock_base = g_mclock + 1;   /* measurement clock keeps rising */
     
+    for (i = 0; i < 10; i++) { mod_ticks[i] = 0; mon_last[i][0] = '\0'; }
+    
+    /* Validate and cleanup phantom enabled modules first */
     validate_enabled_modules();
     
+    /* Grid-OS buffer pooling ("stringing" slots): the modules this run
+       reads share the memory of ten 1024-sample slots - 1 module: 8000
+       samples, 2: 5120 each, 3: 3413 ... 10: 1024.  Buffers are cleared at
+       the start of a run anyway, so they can be resized here.  If memory
+       runs short the size is halved until everything fits. */
+    {
+        int nmon = 0;
+        for (i = 0; i < 10; i++)
+            if (g_system->modules[i].enabled && !module_is_result(i) &&
+                (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))))
+                nmon++;
+        if (nmon > 0) {
+            unsigned long want = g_buffer_samples ? (unsigned long)g_buffer_samples
+                                                  : POOL_SAMPLES / nmon;
+            unsigned int size;
+            int ok;
+            if (want > POOLED_MAX) want = POOLED_MAX;
+            if (want < MAX_SAMPLES_PER_MODULE) want = MAX_SAMPLES_PER_MODULE;
+            size = (unsigned int)want;
+            do {
+                ok = 1;
+                for (i = 0; i < 10; i++) {
+                    if (g_system->modules[i].enabled && !module_is_result(i) &&
+                        (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))) &&
+                        g_system->modules[i].module_data_size != size) {
+                        free_module_buffer(i);       /* free first: less fragmentation */
+                    }
+                }
+                for (i = 0; i < 10 && ok; i++) {
+                    if (g_system->modules[i].enabled && !module_is_result(i) &&
+                        (g_control_panel.monitor_all || (g_control_panel.monitor_mask & (1 << i))) &&
+                        !g_system->modules[i].module_data) {
+                        if (!allocate_module_buffer(i, size) || !g_system->modules[i].sample_t) ok = 0;
+                    }
+                }
+                if (!ok) size /= 2;
+            } while (!ok && size >= 256);
+            pool_size = size;
+        }
+    }
+    
+    /* Initialize active modules and allocate buffers */
     for (i = 0; i < 10; i++) {
         /* Skip computed-result traces (FFT/math): they have no GPIB instrument to
            read, and clearing them here would erase the computed result. */
@@ -5172,56 +5525,84 @@ void continuous_monitor(void) {
     }
     
     g_system->data_count = 0;
+    g_store_suppress = 1;      /* Grid-OS: one sample per slot per pass, stored below */
     
-    /* BIOS ticks run at 18.2 Hz: ticks = ms * 182 / 10000 */
+    /* Calculate timing - KEY TIMING LOGIC */
     ticks_per_sample = (g_control_panel.sample_rate_ms * 182L) / 10000L;
     if (ticks_per_sample < 1) ticks_per_sample = 1;
     
     clrscr();
     printf("Continuous Monitor - Press SPACE to start/stop, ESC to exit\n");
-    printf("Sample rate: %d ms (%lu ticks), %d active modules\n", 
-           g_control_panel.sample_rate_ms, ticks_per_sample, active_modules);
-    printf("Commands: C=Clear data\n");
+    if (g_control_panel.auto_rate)
+        printf("Sample rate: AUTO (measured when started), %d active modules          \n",
+               active_modules);
+    else
+        printf("Sample rate: %d ms (%lu ticks), %d active modules\n", 
+               g_control_panel.sample_rate_ms, ticks_per_sample, active_modules);
+    printf("Commands: C=Clear data      Buffer: %u samples per module%s\n", pool_size,
+           g_buffer_samples ? (pool_size < g_buffer_samples ? " (less memory free)" : "")
+                            : (pool_size > MAX_SAMPLES_PER_MODULE ? " (pooled)" : ""));
     printf("============================================================\n\n");
     
     last_tick_count = *((unsigned long far *)0x0040006CL);
+    run_mark = last_tick_count;
     
+    /* MAIN MEASUREMENT LOOP */
     while (!done) {
         current_time = time(NULL);
-        gotoxy(1, 5);
-        printf("Time: %ld sec  Samples: %u  Status: %-8s  ", 
-               current_time - start_time, 
-               g_system->data_count + (need_sample && samples_taken > 0 ? 1 : 0),
+        mon_row = 5; mon_len = 0;
+        run_now = *((unsigned long far *)0x0040006CL);
+        run_ms = run_ticks + (g_control_panel.running ? run_now - run_mark : 0);
+        run_ms = (run_ms / 182L) * 10000L + ((run_ms % 182L) * 10000L) / 182L; /* no overflow */
+        lp("Time: %5lu.%lu s  Readings: %lu  Status: %-8s  ", 
+               run_ms / 1000L, (run_ms / 100L) % 10L, passes,
                g_control_panel.running ? "RUNNING" : "STOPPED");
         
-        /* Every 10th pass, show last measurement overhead in ms */
-        if (++display_update_counter >= 10) {
-            display_update_counter = 0;
-            if (measurement_ticks > 0 && g_control_panel.running) {
-                printf("OH:%lu ", (measurement_ticks * 10000L) / 182L);
+        /* Display update optimization */
+        /* (lines are rewritten whole every pass now, so show OH every pass) */
+        if (measurement_ticks > 0 && g_control_panel.running) {
+            lp("OH:%lu ", (measurement_ticks * 10000L) / 182L);
+        }
+        lp_nl(); mon_row++;           /* row 6 belongs to the AVG light */
+        {   /* Grid-OS: AVG light - buffer full, samples now averaged */
+            int sh = 0;
+            for (i = 0; i < 10; i++)
+                if (g_system->modules[i].enabled && g_system->modules[i].avg_shift > sh)
+                    sh = g_system->modules[i].avg_shift;
+            if (sh != avg_shown) {
+                char lt[80];
+                if (sh > 0)
+                    sprintf(lt, " AVG x%-5u  buffer full - each sample is the mean of %u readings",
+                            1u << sh, 1u << sh);
+                else
+                    lt[0] = '\0';
+                vputs(6, 1, lt, 79);
+                vattr(6, 1, 12, sh > 0 ? 0x70 : 0x07);   /* reverse video = lit */
+                avg_shown = sh;
             }
         }
-        printf("\n\n");
         
         current_tick_count = *((unsigned long far *)0x0040006CL);
         
-        /* Subtract the last pass's measurement time so the sample period holds */
+        /* CRITICAL TIMING LOGIC FOR SAMPLING */
         if (g_control_panel.running) {
             unsigned long adjusted_ticks = ticks_per_sample;
             if (measurement_ticks > 0 && measurement_ticks < ticks_per_sample) {
                 adjusted_ticks = ticks_per_sample - measurement_ticks;
             }
             
-            if ((current_tick_count - last_tick_count) >= adjusted_ticks) {
+            if ((g_control_panel.auto_rate && auto_cal < AUTO_CAL_PASSES) ||
+                (current_tick_count - last_tick_count) >= adjusted_ticks) {
                 need_sample = 1;
                 last_tick_count = current_tick_count;
                 tick_start = current_tick_count;
             }
         }
         
+        /* MODULE MEASUREMENT LOOP */
         samples_taken = 0;
         for (i = 0; i < 10; i++) {
-            /* Skip phantoms and computed traces: need type, address 1-30, description */
+            /* Skip ghost/phantom modules - must have valid type, address, and description */
             if (g_system->modules[i].enabled &&
                 g_system->modules[i].module_type != MOD_NONE &&
                 g_system->modules[i].gpib_address >= 1 &&
@@ -5232,9 +5613,10 @@ void continuous_monitor(void) {
                                 (g_control_panel.monitor_mask & (1 << i));
                 
                 if (!should_monitor && g_control_panel.running) {
-                    continue;
+                    continue;  /* Skip to next module */
                 }
                 
+                /* Module type display */
                 switch(g_system->modules[i].module_type) {
                     case MOD_DC5009: strcpy(type_str, "DC5009"); break;
                     case MOD_DM5010: strcpy(type_str, "DM5010"); break;
@@ -5255,22 +5637,28 @@ void continuous_monitor(void) {
                     strcat(type_str, "-");  /* - indicates not monitored */
                 }
                 
-                printf("S%d %-6s[%2d]:", i, type_str, g_system->modules[i].gpib_address);
+                lp("S%d %-6s[%2d]:", i, type_str, g_system->modules[i].gpib_address);
+                mon_pfx = mon_len;
                 
+                /* ACTUAL MEASUREMENT COLLECTION */
+                t_mod = *((unsigned long far *)0x0040006CL);
                 if (g_control_panel.running && need_sample && should_monitor) {
                     switch(g_system->modules[i].module_type) {
                         case MOD_DC5009:
                         case MOD_DC5010:
                             value = dc5009_read_measurement(g_system->modules[i].gpib_address);
-                            printf("%12.6f MHz   ", value / 1e6);
+                            if (fabs(value) >= 1e6)      lp("%13.7f MHz  ", value / 1e6);
+                            else if (fabs(value) >= 1e3) lp("%13.6f kHz  ", value / 1e3);
+                            else                         lp("%13.4f Hz   ", value);
                             break;
                             
                         case MOD_DM5010:
                             value = read_dm5010_enhanced(g_system->modules[i].gpib_address, i);
-                            printf("%12.4f V     ", value);
+                            lp("%12.4f V     ", value);
                             break;
                             
                         case MOD_DM5120:
+                            /* Enhanced DM5120 measurement with async buffer support */
                             {
                                 dm5120_config *cfg = &g_dm5120_config[i];
                                 int address = g_system->modules[i].gpib_address;
@@ -5278,72 +5666,80 @@ void continuous_monitor(void) {
                                 int optimal_delay;
                                 
                                 if (cfg->buffer_enabled && cfg->buffer_size > 1) {
-                                    /* Non-blocking fill; report the buffer average once full */
+                                    /* Async buffer operation */
                                     int state = cfg->buffer_state;
                                     
+                                    /* Start buffer if idle and we need a sample */
                                     if (state == 0 && need_sample) {
                                         dm5120_start_buffer_async(address, i);
-                                        printf("[Starting buffer]     ");
+                                        lp("[Starting buffer]     ");
                                         value = g_system->modules[i].last_reading; /* Show last value */
                                         break;
                                     }
                                     
+                                    /* Check for events if filling */
                                     if (state == 1 || state == 2) {
                                         dm5120_check_buffer_async(address, i);
                                         state = cfg->buffer_state;
                                     }
                                     
+                                    /* Display status based on buffer state */
                                     switch(state) {
                                         case 1: /* Filling */
-                                            printf("[Filling %3d samples] ", cfg->samples_ready);
+                                            lp("[Filling %3d samples] ", cfg->samples_ready);
                                             value = g_system->modules[i].last_reading;
                                             break;
                                             
                                         case 2: /* Half full */
-                                            printf("[50%% Full - %3d smp] ", cfg->samples_ready);
+                                            lp("[50%% Full - %3d smp] ", cfg->samples_ready);
                                             value = g_system->modules[i].last_reading;
                                             break;
                                             
                                         case 3: /* Full */
+                                            /* Read buffer average and reset */
                                             value = dm5120_get_buffer_average(address);
                                             if (value == 0.0) {
-                                                /* BUFAVE? gave nothing: read one stored reading */
+                                                /* Fallback to reading buffer count and single value */
                                                 int count = dm5120_get_buffer_count(address);
                                                 if (count > 0) {
                                                     value = dm5120_read_one_stored(address);
                                                 }
                                             }
-                                            printf("%12.6f V [Avg%3d]", value, cfg->buffer_size);
+                                            lp("%12.6f V [Avg%3d]", value, cfg->buffer_size);
                                             
+                                            /* Update statistics */
                                             if (cfg->min_max_enabled && value != 0.0) {
                                                 if (value < cfg->min_value) cfg->min_value = value;
                                                 if (value > cfg->max_value) cfg->max_value = value;
                                                 cfg->sample_count++;
                                             }
                                             
+                                            /* Reset for next cycle */
                                             dm5120_reset_buffer_async(i);
                                             break;
                                             
                                         default:
-                                            printf("[Buffer idle]         ");
+                                            lp("[Buffer idle]         ");
                                             value = g_system->modules[i].last_reading;
                                             break;
                                     }
                                     
                                 } else {
+                                    /* Single measurement mode (non-buffered) */
                                     value = read_dm5120_enhanced(address, i);
                                     if (value == 0.0) {
                                         value = read_dm5120_voltage(address);
                                     }
                                     
-                                    printf("%12.6f V (%4.1f r/s)", value, measurement_rate);
+                                    lp("%12.6f V (%4.1f r/s)", value, measurement_rate);
                                     
-                                    /* [FAST]: sample period shorter than the meter can deliver */
+                                    /* Check for timing conflicts */
                                     optimal_delay = dm5120_calculate_measurement_time(i, 0, 1);
                                     if (g_control_panel.sample_rate_ms < optimal_delay) {
-                                        printf(" [FAST]");
+                                        lp(" [FAST]");
                                     }
                                     
+                                    /* Update statistics */
                                     if (cfg->min_max_enabled && value != 0.0) {
                                         if (value < cfg->min_value) cfg->min_value = value;
                                         if (value > cfg->max_value) cfg->max_value = value;
@@ -5357,14 +5753,14 @@ void continuous_monitor(void) {
                             ps_cfg = &g_ps5004_config[i];
                             if (ps_cfg->display_mode == 1) {
                                 ps5004_set_display(g_system->modules[i].gpib_address, "CURRENT");
-                                delay(50);
+                                GPIB_PACE(50);
                                 value = ps5004_read_value(g_system->modules[i].gpib_address);
-                                printf("%12.1f mA    ", value * 1000);
+                                lp("%12.1f mA    ", value * 1000);
                             } else {
                                 ps5004_set_display(g_system->modules[i].gpib_address, "VOLTAGE");
-                                delay(50);
+                                GPIB_PACE(50);
                                 value = ps5004_read_value(g_system->modules[i].gpib_address);
-                                printf("%12.4f V     ", value);
+                                lp("%12.4f V     ", value);
                             }
                             break;
                             
@@ -5375,13 +5771,13 @@ void continuous_monitor(void) {
                                 
                                 if (ps5010_read_regulation(g_system->modules[i].gpib_address,
                                                           &neg_stat, &pos_stat, &log_stat)) {
-                                    printf("P:%s N:%s L:%s     ",
+                                    lp("P:%s N:%s L:%s     ",
                                            pos_stat == 1 ? "CV" : (pos_stat == 2 ? "CC" : "UR"),
                                            neg_stat == 1 ? "CV" : (neg_stat == 2 ? "CC" : "UR"),
                                            log_stat == 1 ? "CV" : (log_stat == 2 ? "CC" : "UR"));
                                     value = 0.0;
                                 } else {
-                                    printf("No status         ");
+                                    lp("No status         ");
                                     value = 0.0;
                                 }
                             }
@@ -5389,46 +5785,74 @@ void continuous_monitor(void) {
                             
                         default:
                             value = 0.0;
-                            printf("Not implemented       ");
+                            lp("Not implemented       ");
                     } 
                     
+                    /* AUTO rate: time each instrument during calibration */
+                    if (g_control_panel.auto_rate && auto_cal < AUTO_CAL_PASSES)
+                        mod_ticks[i] += *((unsigned long far *)0x0040006CL) - t_mod;
+                    
+                    /* STORE THE MEASUREMENT */
                     g_system->modules[i].last_reading = value;
+                    /* Grid-OS: stamp with the measurement clock (run time) */
+                    g_mclock = mclock_base + run_ticks + *((unsigned long far *)0x0040006CL) - run_mark;
+                    g_store_suppress = 0;
+                    g_mclock_valid = 1;
                     store_module_data(i, value);
+                    g_mclock_valid = 0;
+                    g_store_suppress = 1;
                     
                     if (samples_taken == 0 && g_system->data_count < g_system->buffer_size) {
                         g_system->data_buffer[g_system->data_count] = value;
                     }
                     
                     samples_taken++;
+                    /* remember this sample's text for the in-between redraws */
+                    mon_buf[mon_len] = '\0';
+                    strncpy(mon_last[i], mon_buf + mon_pfx, sizeof(mon_last[i]) - 1);
+                    mon_last[i][sizeof(mon_last[i]) - 1] = '\0';
                 } else {
-                    /* Not sampling this pass: show the last reading */
+                    /* Display previous readings when not sampling */
                     if (g_control_panel.running) {
                         if (should_monitor) {
+                            /* Special handling for DM5120 in buffer mode */
                             if (g_system->modules[i].module_type == MOD_DM5120 && 
                                 g_dm5120_config[i].buffer_enabled && g_dm5120_config[i].buffer_state != 0) {
-                                /* Keep polling an in-progress DM5120 buffer between samples */
+                                /* Show buffer status even when not actively sampling */
                                 dm5120_check_buffer_async(g_system->modules[i].gpib_address, i);
                                 switch(g_dm5120_config[i].buffer_state) {
-                                    case 1: printf("[Filling %3d]       ", g_dm5120_config[i].samples_ready); break;
-                                    case 2: printf("[50%% Full]         "); break;
-                                    case 3: printf("[Ready to read]    "); break;
-                                    default: printf("%12.6f       ", g_system->modules[i].last_reading); break;
+                                    case 1: lp("[Filling %3d]       ", g_dm5120_config[i].samples_ready); break;
+                                    case 2: lp("[50%% Full]         "); break;
+                                    case 3: lp("[Ready to read]    "); break;
+                                    default: lp("%12.6f       ", g_system->modules[i].last_reading); break;
                                 }
+                            } else if (mon_last[i][0]) {
+                                lp("%s", mon_last[i]);      /* same text as the last sample */
                             } else {
-                                printf("%12.6f       ", g_system->modules[i].last_reading);
+                                lp("%12.6f       ", g_system->modules[i].last_reading);
                             }
                         } else {
-                            printf(" [Not Selected]    ");
+                            lp(" [Not Selected]    ");
                         }
                     } else {
-                        printf(" [Press SPACE]        ");
+                        lp(" [Press SPACE]        ");
                     }
                 }
                 
-                printf("\n");
+                lp_nl();
             } 
         } 
         
+        /* Grid-OS: blank rows left over from a longer previous pass (a
+           module line that is no longer drawn would otherwise stay on the
+           screen and look like a duplicated or overwritten slot) */
+        {
+            int r;
+            for (r = mon_row; r < mon_rows_used; r++) vputs(r, 1, "", 79);
+            mon_rows_used = mon_row;
+        }
+        
+        /* POST-MEASUREMENT PROCESSING */
         if (need_sample && g_control_panel.running && samples_taken > 0) {
             if (g_system->data_count < g_system->buffer_size) {
                 g_system->data_count++;
@@ -5436,10 +5860,39 @@ void continuous_monitor(void) {
             
             tick_end = *((unsigned long far *)0x0040006CL);
             measurement_ticks = tick_end - tick_start;
+            passes++;
             
             need_sample = 0;
+            
+            /* AUTO rate: after the calibration passes, lock the rate to the
+               measured cycle, rounded up to whole 55 ms timer ticks */
+            if (g_control_panel.auto_rate && auto_cal < AUTO_CAL_PASSES) {
+                auto_sum += measurement_ticks;
+                if (++auto_cal == AUTO_CAL_PASSES) {
+                    int slow = -1;
+                    ticks_per_sample = (auto_sum + AUTO_CAL_PASSES - 1) / AUTO_CAL_PASSES;
+                    if (ticks_per_sample < 1) ticks_per_sample = 1;
+                    g_control_panel.sample_rate_ms =
+                        (int)((ticks_per_sample * 10000L + 181L) / 182L);
+                    for (i = 0; i < 10; i++)
+                        if (mod_ticks[i] && (slow < 0 || mod_ticks[i] > mod_ticks[slow]))
+                            slow = i;
+                    {
+                        char msg[100];
+                        if (slow >= 0)
+                            sprintf(msg, "Sample rate: AUTO -> %d ms/sample (slowest: S%d, %lu ms per read)",
+                                    g_control_panel.sample_rate_ms, slow,
+                                    (mod_ticks[slow] * 10000L / AUTO_CAL_PASSES) / 182L);
+                        else
+                            sprintf(msg, "Sample rate: AUTO -> %d ms/sample",
+                                    g_control_panel.sample_rate_ms);
+                        vputs(2, 1, msg, 79);
+                    }
+                }
+            }
         }
         
+        /* KEYBOARD INPUT HANDLING */
         if (kbhit()) {
             key = getch();
             switch(toupper(key)) {
@@ -5448,10 +5901,19 @@ void continuous_monitor(void) {
                     break;
                     
                 case ' ':
+                    if (g_control_panel.running)   /* stopping: bank the run time */
+                        run_ticks += *((unsigned long far *)0x0040006CL) - run_mark;
+                    else
+                        run_mark = *((unsigned long far *)0x0040006CL);
                     g_control_panel.running = !g_control_panel.running;
                     if (g_control_panel.running) {
                         last_tick_count = *((unsigned long far *)0x0040006CL);
                         measurement_ticks = 0;
+                        if (g_control_panel.auto_rate) {   /* re-measure */
+                            auto_cal = 0;
+                            auto_sum = 0;
+                            for (i = 0; i < 10; i++) { mod_ticks[i] = 0; mon_last[i][0] = '\0'; }
+                        }
                     }
                     break;
                     
@@ -5460,6 +5922,10 @@ void continuous_monitor(void) {
                         clear_module_data(i);
                     }
                     g_system->data_count = 0;
+                    passes = 0;
+                    avg_shown = -1;
+                    run_ticks = 0;                 /* measurement time restarts */
+                    run_mark = *((unsigned long far *)0x0040006CL);
                     gotoxy(1, 22);
                     printf("*** All data cleared ***");
                     delay(500);
@@ -5469,6 +5935,7 @@ void continuous_monitor(void) {
             } 
         }
         
+        /* ADAPTIVE DELAY SYSTEM */
         if (g_control_panel.running && samples_taken > 0) {
             delay(5);  /* Shorter delay when actively sampling */
         } else {
@@ -5476,11 +5943,18 @@ void continuous_monitor(void) {
         }
     } 
     
+    /* CLEANUP AND SUMMARY */
+    g_store_suppress = 0;
+    clrscr();                  /* Grid-OS: summary on a clean screen */
     printf("\n\nMonitoring complete.\n");
-    printf("Total samples: %u\n", g_system->data_count);
-    if (g_system->data_count > 0) {
-        printf("First value: %.6f\n", g_system->data_buffer[0]);
-        printf("Last value: %.6f\n", g_system->data_buffer[g_system->data_count-1]);
+    printf("Readings per slot: %lu\n", passes);
+    for (i = 0; i < 10; i++) {          /* Grid-OS: per slot, from its own buffer */
+        tm5000_module *m = &g_system->modules[i];
+        if (!m->enabled || !m->module_data || m->module_data_count == 0) continue;
+        printf("S%d: %u samples", i, m->module_data_count);
+        if (m->avg_shift) printf(" (each the mean of %u readings)", 1u << m->avg_shift);
+        printf(", first %.10g, last %.10g\n", m->module_data[0],
+               m->module_data[m->module_data_count - 1]);
     }
     printf("\nPress any key to continue...");
     getch();

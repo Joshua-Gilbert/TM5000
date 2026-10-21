@@ -1,6 +1,27 @@
 /*
- * TM5000 GPIB Control System for the Gridcase 1520: shared types, globals, prototypes.
- * C89, 16-bit large model (int is 2 bytes); sources are split per module to fit 64 KB segments.
+ * TM5000 GPIB Control System for Gridcase 1520
+ * Version 3.7 - Grid-OS: TM5000G on the GRIDGPIB driver, double-precision
+ *               samples with time stamps, pooled/averaged buffers, auto-detect,
+ *               graph/print/FFT fixes (v3.6: regression fixes)
+ * Main header file with common definitions
+ * C89 compliant
+ *
+ * Changes in v3.0:
+ * - Split monolithic source into logical modules for DOS segment size limits
+ * - Improved maintainability and expansion capability
+ * - Preserved all v2.9 functionality
+ * - Enhanced modular design for future expansion
+ * - Fixed graph display crashes by adding comprehensive divide-by-zero protection
+ * - Implemented proper engineering scale logic for grid lines and range display
+ * - Added per-division calculation with 1-2-5 engineering increment rounding
+ * - Fixed unit switching based on per-division values (V/mV/µV) for instrument-grade scaling
+ * - Enhanced initial range from ±10V to ±1000V for full meter capability coverage
+ * - Fixed LF termination support for all DM5120 GPIB functions (remote, local, clear)
+ * - Improved bottom menu readability with better spacing and simplified text
+ * - Added clean fixed-format slot readout (S[n][sample]:XX.XX V) for consistency
+ * - Maintained ultra-precision 1µV zoom capability for DM5120 high-precision measurements
+ * - Fixed grid line labels to properly match range display units during zoom operations
+ * - Enhanced zoom behavior to properly switch units when per-division < 0.1V (V→mV→µV)
  */
 
 #ifndef TM5000_H
@@ -21,12 +42,17 @@
 #include <errno.h>
 
 /* Version information */
-#define TM5000_VERSION "3.6"
+#define TM5000_VERSION "3.7"
 #define TM5000_VERSION_MAJOR 3
-#define TM5000_VERSION_MINOR 6
+#define TM5000_VERSION_MINOR 7
 
-/* Per-slot sample buffer limits */
+/* Buffer size constants - v3.4 enhanced capacity */
 #define MAX_SAMPLES_PER_MODULE 1024
+/* Grid-OS buffer pooling: the monitor shares the memory of 10 x 1024-sample
+   slots among the modules it reads - one module gets up to POOLED_MAX
+   samples - 8192 x 8 bytes = one whole 64 KB segment (alloc_samples).  */
+#define POOL_SAMPLES   (10L * MAX_SAMPLES_PER_MODULE)
+#define POOLED_MAX     8192u
 #define MIN_BUFFER_SIZE 10
 #define MAX_BUFFER_SIZE MAX_SAMPLES_PER_MODULE
 
@@ -35,9 +61,10 @@
 #define DM5120_MIN_BUFFER_SIZE 10
 #define DM5120_DEFAULT_BUFFER_SIZE 250
 
+/* GPIB buffer optimization - v3.4 memory optimization */
 #define GPIB_BUFFER_SIZE 128
 
-/* GPIB timeout codes */
+/* GPIB timeout definitions */
 #define T10s    13         /* 10 seconds timeout */
 #define T1s     11         /* 1 second timeout */
 #define T300ms  10         /* 300 milliseconds timeout */
@@ -46,6 +73,16 @@
 #define CGA_MEMORY      0xB8000000L
 #define SCREEN_WIDTH    320
 #define SCREEN_HEIGHT   200
+/* GPIB pacing.  TM5000 waits a fixed time after most bus calls to suit
+ * Driver488.  The GRIDGPIB build (TM5000G, gpib_gg.c) compiles modules.c and
+ * module_funcs.c with -DGRIDGPIB: its calls return only when the bus
+ * transaction is complete, so the waits compile to nothing there.        */
+#ifdef GRIDGPIB
+#define GPIB_PACE(ms) ((void)0)
+#else
+#define GPIB_PACE(ms) delay(ms)
+#endif
+
 #define LPT1_BASE       0x378
 #define LPT1_STATUS     (LPT1_BASE + 1)
 #define LPT1_CONTROL    (LPT1_BASE + 2)
@@ -97,90 +134,100 @@ extern int ieee_out;  /* Handle for writing to GPIB */
 extern int ieee_in;   /* Handle for reading from GPIB */
 extern int gpib_error;
 
+/* Structure definitions - optimized member ordering and bit fields */
 #pragma pack(1)
 typedef struct {
-    float far *module_data;
-    char description[12];
-    float last_reading;
-    unsigned int module_data_count;
-    unsigned int module_data_size;   /* samples allocated */
-    unsigned char module_type;
-    unsigned char slot_number;
-    unsigned char gpib_address;
-    unsigned char enabled:1;
-    unsigned char is_result:1;   /* computed trace (FFT/math): no GPIB, exempt from phantom cleanup */
-    unsigned char reserved:6;
+    double far *module_data;     /* Grid-OS: double - keeps full counter resolution */
+    char description[12];        /* 12 bytes - reduced size */
+    double last_reading;         /* Grid-OS: double */
+    unsigned int module_data_count;  /* 4 bytes - Count for this module */
+    unsigned int module_data_size;   /* 4 bytes - Size allocated */
+    unsigned char module_type;   /* 1 byte */
+    unsigned char slot_number;   /* 1 byte */
+    unsigned char gpib_address;  /* 1 byte */
+    unsigned char enabled:1;     /* 1 bit - pack boolean flags */
+    unsigned char is_result:1;   /* 1 bit - computed trace (FFT/math): no GPIB, exempt from phantom cleanup */
+    unsigned char time_ok:1;     /* Grid-OS: every stored sample has a measurement-time stamp */
+    unsigned char reserved:5;    /* 5 bits - reserved for future flags */
+    /* Grid-OS: time stamps and averaging when the buffer fills */
+    unsigned long far *sample_t; /* measurement clock (BIOS ticks) of each sample (mean of its group) */
+    unsigned long t_origin;      /* measurement clock at the run's first reading */
+    double acc_v, acc_t;         /* readings waiting to be averaged into the next sample */
+    unsigned int acc_n;
+    unsigned char avg_shift;     /* each stored sample = mean of 2^avg_shift readings */
+    unsigned char src_measured;  /* computed trace: src_seconds came from time stamps */
+    float src_seconds;           /* computed trace (FFT): duration of the measurement used */
 } tm5000_module;
 #pragma pack()
 
 typedef struct {
-    tm5000_module modules[10];
-    int gpib_devices[10];
-    float far *data_buffer;
-    unsigned int buffer_size;
-    unsigned int data_count;
-    int sample_rate;
+    tm5000_module modules[10];   /* 10 * 35 = 350 bytes - largest member first */
+    int gpib_devices[10];        /* 40 bytes - second largest array */
+    double far *data_buffer;     /* Grid-OS: double */
+    unsigned int buffer_size;    /* 4 bytes */
+    unsigned int data_count;     /* 4 bytes */
+    int sample_rate;             /* 4 bytes */
 } measurement_system;
 
 typedef struct {
-    int x, y;
-    unsigned char present:1;
-    unsigned char left_button:1;
-    unsigned char right_button:1;
-    unsigned char reserved:5;
+    int x, y;                    /* 8 bytes - largest members first */
+    unsigned char present:1;     /* 1 bit - pack boolean flags */
+    unsigned char left_button:1; /* 1 bit */
+    unsigned char right_button:1;/* 1 bit */
+    unsigned char reserved:5;    /* 5 bits - reserved for future flags */
 } mouse_state;
 
 typedef struct {
-    char custom_rate[8];
-    int sample_rate_ms;       /* delay between samples, ms */
-    int selected_rate;        /* index into sample_rate_presets */
-    int monitor_mask;         /* bit per slot to monitor */
-    unsigned char running:1;
-    unsigned char use_custom:1; /* 0=preset, 1=custom_rate */
-    unsigned char monitor_all:1; /* 0=use monitor_mask, 1=all enabled modules */
-    unsigned char reserved:5;
+    char custom_rate[8];      /* 8 bytes - reduced size */
+    int sample_rate_ms;       /* 4 bytes - Delay between samples in milliseconds */
+    int selected_rate;        /* 4 bytes - Index of selected rate preset */
+    int monitor_mask;         /* 4 bytes - Bit mask of which modules to monitor */
+    unsigned char running:1;  /* 1 bit - pack boolean flags */
+    unsigned char use_custom:1; /* 1 bit - 0=use preset, 1=use custom */
+    unsigned char monitor_all:1; /* 1 bit - 0=selective, 1=monitor all enabled modules */
+    unsigned char auto_rate:1;   /* 1 bit - 1=AUTO: fastest cycle the instruments allow */
+    unsigned char reserved:4; /* 4 bits - reserved for future flags */
 } control_panel_state;
 
+/* FFT Configuration structure - optimized member ordering and bit fields */
 typedef struct {
-    float custom_sample_rate;
-    int input_points;      /* 64, 128, 256, 512, 1024 */
-    int output_points;     /* 32, 64, 128, 256, 512, 1024 (≤ input) */
-    int window_type;       /* 0=Rectangular, 1=Hamming, 2=Hanning, 3=Blackman */
-    int output_format;     /* 0=dB, 1=Linear magnitude, 2=Power */
-    unsigned char zero_pad:1;      /* pad to next power of 2 */
-    unsigned char dc_remove:1;     /* remove DC before FFT */
-    unsigned char peak_centering:1; /* center output on highest peak */
-    unsigned char reserved:5;
+    float custom_sample_rate; /* 4 bytes - largest member first */
+    int input_points;      /* 4 bytes - 64, 128, 256, 512, 1024 */
+    int output_points;     /* 4 bytes - 32, 64, 128, 256, 512, 1024 (≤ input) */
+    int window_type;       /* 4 bytes - 0=Rectangular, 1=Hamming, 2=Hanning, 3=Blackman */
+    int output_format;     /* 4 bytes - 0=dB, 1=Linear magnitude, 2=Power */
+    unsigned char zero_pad:1;      /* 1 bit - Auto-pad to next power of 2 */
+    unsigned char dc_remove:1;     /* 1 bit - Remove DC component before FFT */
+    unsigned char peak_centering:1; /* 1 bit - Center FFT output on highest peak */
+    unsigned char reserved:5;      /* 5 bits - reserved for future flags */
 } fft_config;
 
 typedef struct {
-    float min_value;
-    float max_value;
-    float scale_factor;
-    float pan_offset;
-    float zoom_factor;
-    int grid_divisions;
-    int sample_start;        /* first sample index displayed */
-    int sample_count;        /* samples displayed (0 = all) */
-    unsigned char auto_scale:1;
-    unsigned char reserved:7;
+    float min_value;         /* 4 bytes - largest members first */
+    float max_value;         /* 4 bytes */
+    float scale_factor;      /* 4 bytes */
+    float pan_offset;        /* 4 bytes */
+    float zoom_factor;       /* 4 bytes */
+    int grid_divisions;      /* 4 bytes */
+    int sample_start;        /* 4 bytes - Starting sample index for display */
+    int sample_count;        /* 4 bytes - Number of samples to display (0 = all) */
+    unsigned char auto_scale:1; /* 1 bit - pack boolean flags */
+    unsigned char reserved:7;   /* 7 bits - reserved for future flags */
 } graph_scale;
 
 typedef struct {
-    char label[12];
-    float *data;
-    float x_scale;               /* frequency traces: Hz per sample */
-    float x_offset;              /* X-axis offset (for centering) */
-    int data_count;
-    int slot;
-    int unit_type;               /* UNIT_* */
-    unsigned char color;
-    unsigned char enabled:1;
-    unsigned char reserved:7;
+    char label[12];              /* 12 bytes - reduced size */
+    double *data;                /* Grid-OS: double (points at module_data) */
+    float x_scale;               /* 4 bytes - For frequency traces: Hz per sample */
+    float x_offset;              /* 4 bytes - X-axis offset (for centering) */
+    int data_count;              /* 4 bytes */
+    int slot;                    /* 4 bytes */
+    int unit_type;               /* 4 bytes - 0=Voltage, 1=Frequency, 2=dB */
+    unsigned char color;         /* 1 byte */
+    unsigned char enabled:1;     /* 1 bit - pack boolean flags */
+    unsigned char reserved:7;    /* 7 bits - reserved */
 } trace_info;
 
-/* The *_config structs below are written raw into PROFILES.DAT (config_profiles.h):
-   any layout change needs a PROFILE_VERSION bump. */
 typedef struct {
     char function[12];      /* Current function (DCV, ACV, OHMS, etc.) */
     int range_mode;         /* 0=AUTO, 1-7=Manual range */
@@ -194,20 +241,21 @@ typedef struct {
     float max_value;       /* Maximum value tracked */
     int sample_count;      /* Samples taken since last clear */
     float sample_rate;     /* Internal sample rate (if supported) */
-
-    /* Async buffer fill tracking */
+    
+    /* Buffer state tracking for async operations */
     int buffer_state;      /* 0=idle, 1=filling, 2=half, 3=full */
-    unsigned long buffer_start_time; /* tick count when fill started */
+    unsigned long buffer_start_time; /* When buffer fill started (tick count) */
     int samples_ready;     /* Number of samples currently in buffer */
-
-    unsigned int filter_enabled:1;
-    unsigned int null_enabled:1;
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int filter_enabled:1;     /* Filter ON/OFF */
+    unsigned int null_enabled:1;      /* NULL function ON/OFF */
     unsigned int data_format:1;       /* 0=ASCII, 1=Scientific notation */
     unsigned int buffer_enabled:1;    /* Use internal buffering */
-    unsigned int min_max_enabled:1;
+    unsigned int min_max_enabled:1;   /* Track min/max values */
     unsigned int burst_mode:1;        /* 0=Normal, 1=Burst sampling */
-    unsigned int lf_termination:1;    /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int lf_termination:1;    /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:9;          /* Reserved for future use */
 } dm5120_config;
 
 typedef struct {
@@ -225,33 +273,35 @@ typedef struct {
     float dbr_reference;   /* dBr reference value */
     float min_value;       /* Minimum measured value */
     float max_value;       /* Maximum measured value */
-
-    unsigned int filter_enabled:1;     /* Digital filter */
-    unsigned int null_enabled:1;      /* NULL/REL */
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int filter_enabled:1;     /* Digital filter ON/OFF */
+    unsigned int null_enabled:1;      /* NULL/REL function ON/OFF */
     unsigned int data_format:1;       /* 0=ASCII, 1=Scientific notation */
-    unsigned int auto_zero:1;
-    unsigned int beeper_enabled:1;
-    unsigned int front_panel_lock:1;
-    unsigned int high_speed_mode:1;
-    unsigned int statistics_enabled:1; /* Track min/max */
-    unsigned int lf_termination:1;    /* terminate with LF, not CRLF */
-    unsigned int reserved:7;
+    unsigned int auto_zero:1;         /* Auto-zero ON/OFF */
+    unsigned int beeper_enabled:1;    /* Beeper ON/OFF */
+    unsigned int front_panel_lock:1;  /* Front panel lockout */
+    unsigned int high_speed_mode:1;   /* High speed acquisition mode */
+    unsigned int statistics_enabled:1; /* Track min/max statistics */
+    unsigned int lf_termination:1;    /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:7;          /* Reserved for future use */
 } dm5010_config;
 
 typedef struct {
     float voltage;          /* Output voltage setting (0-20V) */
     float current_limit;    /* Current limit (10-305mA) */
     int display_mode;       /* 0=Voltage, 1=Current, 2=Current Limit */
-
-    unsigned int output_enabled:1;
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int output_enabled:1;     /* Output ON/OFF */
     unsigned int vri_enabled:1;        /* Voltage regulation interrupt */
     unsigned int cri_enabled:1;        /* Current regulation interrupt */
     unsigned int uri_enabled:1;        /* Unregulated interrupt */
     unsigned int dt_enabled:1;         /* Device trigger */
     unsigned int user_enabled:1;       /* INST ID button */
     unsigned int rqs_enabled:1;        /* Service requests */
-    unsigned int lf_termination:1;     /* terminate with LF, not CRLF */
-    unsigned int reserved:8;
+    unsigned int lf_termination:1;     /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:8;           /* Reserved for future use */
 } ps5004_config;
 
 typedef struct {
@@ -272,18 +322,19 @@ typedef struct {
     unsigned char display_channel;        /* 0=Ch1, 1=Ch2, 2=Logic */
     unsigned char display_mode;           /* 0=Voltage, 1=Current */
     unsigned char error_queue_size;       /* Number of errors in queue */
-
-    unsigned int output1_enabled:1;
-    unsigned int output2_enabled:1;
-    unsigned int logic_enabled:1;
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int output1_enabled:1;        /* Channel 1 output ON/OFF */
+    unsigned int output2_enabled:1;        /* Channel 2 output ON/OFF */
+    unsigned int logic_enabled:1;          /* Logic output ON/OFF */
     unsigned int ovp_enabled:1;            /* Over voltage protection */
-    unsigned int cv_mode1:1;               /* Ch1 constant voltage */
-    unsigned int cc_mode1:1;               /* Ch1 constant current */
-    unsigned int cv_mode2:1;               /* Ch2 constant voltage */
-    unsigned int cc_mode2:1;               /* Ch2 constant current */
-    unsigned int srq_enabled:1;
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:6;
+    unsigned int cv_mode1:1;               /* Channel 1 in constant voltage mode */
+    unsigned int cc_mode1:1;               /* Channel 1 in constant current mode */
+    unsigned int cv_mode2:1;               /* Channel 2 in constant voltage mode */
+    unsigned int cc_mode2:1;               /* Channel 2 in constant current mode */
+    unsigned int srq_enabled:1;            /* Enable service requests */
+    unsigned int lf_termination:1;         /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:6;               /* Reserved for future use */
 } ps5010_config;
 
 typedef struct {
@@ -303,15 +354,16 @@ typedef struct {
     float level_b;              /* Trigger level Channel B */
     long overflow_count;        /* Extended range overflow counter */
     float last_measurement;     /* Last measurement result */
-
-    unsigned int filter_enabled:1;         /* Input filter */
-    unsigned int auto_trigger:1;
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int filter_enabled:1;         /* Input filter ON/OFF */
+    unsigned int auto_trigger:1;           /* Auto trigger mode */
     unsigned int overflow_enabled:1;       /* Overflow indication */
-    unsigned int preset_enabled:1;
-    unsigned int srq_enabled:1;
-    unsigned int measurement_complete:1;
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int preset_enabled:1;         /* Preset function */
+    unsigned int srq_enabled:1;            /* Service request */
+    unsigned int measurement_complete:1;   /* Measurement status flag */
+    unsigned int lf_termination:1;         /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:9;               /* Reserved for future use */
 } dc5009_config;
 
 typedef struct {
@@ -331,51 +383,54 @@ typedef struct {
     float level_b;              /* Trigger level Channel B */
     long overflow_count;        /* Extended range overflow counter */
     float last_measurement;     /* Last measurement result */
-
-    unsigned int filter_enabled:1;         /* Input filter */
-    unsigned int auto_trigger:1;
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int filter_enabled:1;         /* Input filter ON/OFF */
+    unsigned int auto_trigger:1;           /* Auto trigger mode */
     unsigned int overflow_enabled:1;       /* Overflow indication */
-    unsigned int preset_enabled:1;
-    unsigned int srq_enabled:1;
-    unsigned int measurement_complete:1;
-    unsigned int rise_fall_enabled:1;      /* DC5010 only */
-    unsigned int burst_mode:1;             /* DC5010 only */
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:7;
+    unsigned int preset_enabled:1;         /* Preset function */
+    unsigned int srq_enabled:1;            /* Service request */
+    unsigned int measurement_complete:1;   /* Measurement status flag */
+    unsigned int rise_fall_enabled:1;      /* Rise/fall time measurements (DC5010 specific) */
+    unsigned int burst_mode:1;             /* Burst measurement mode (DC5010 specific) */
+    unsigned int lf_termination:1;         /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:7;               /* Reserved for future use */
 } dc5010_config;
 
 typedef struct {
-    char waveform[12];
-    char trigger_source[10];    /* INT, EXT, MAN */
-    char trigger_slope[4];      /* POS, NEG */
-    char mod_type[4];           /* AM, FM */
-    float frequency;            /* Hz (0.1 Hz to 15 MHz) */
-    float amplitude;            /* Vpp (0.01 to 20 Vpp) */
-    float offset;               /* DC offset, V (-10 to +10) */
-    float duty_cycle;           /* square/pulse, % (1 to 99) */
-    float start_freq;           /* Sweep start frequency */
-    float stop_freq;            /* Sweep stop frequency */
-    float sweep_time;           /* s (0.1 to 999) */
-    float trigger_level;        /* External trigger level, V (-5 to +5) */
-    float phase;                /* degrees (0-360) */
-    float mod_freq;             /* Modulation frequency */
-    float mod_depth;            /* Modulation depth (%) */
-    float burst_period;         /* Burst repetition period */
-    int burst_count;            /* cycles per burst */
-    int sweep_type;             /* 0=Linear, 1=Log */
-    int units_freq;             /* 0=Hz, 1=kHz, 2=MHz */
-    int units_time;             /* 0=s, 1=ms, 2=us */
-
-    unsigned int output_enabled:1;
-    unsigned int sweep_enabled:1;
-    unsigned int sync_enabled:1;       /* Sync output */
-    unsigned int invert_enabled:1;
+    char waveform[12];          /* 12 bytes - largest string first */
+    char trigger_source[10];    /* 10 bytes - INT, EXT, MAN */
+    char trigger_slope[4];      /* 4 bytes - POS, NEG */
+    char mod_type[4];           /* 4 bytes - AM, FM */
+    float frequency;            /* 4 bytes - Output frequency in Hz (0.1 Hz to 15 MHz) */
+    float amplitude;            /* 4 bytes - Output amplitude in Vpp (0.01V to 20Vpp) */
+    float offset;               /* 4 bytes - DC offset in V (-10V to +10V) */
+    float duty_cycle;           /* 4 bytes - For square/pulse wave (1% to 99%) */
+    float start_freq;           /* 4 bytes - Sweep start frequency */
+    float stop_freq;            /* 4 bytes - Sweep stop frequency */
+    float sweep_time;           /* 4 bytes - Sweep duration in seconds (0.1s to 999s) */
+    float trigger_level;        /* 4 bytes - External trigger level (-5V to +5V) */
+    float phase;                /* 4 bytes - Phase offset in degrees (0-360) */
+    float mod_freq;             /* 4 bytes - Modulation frequency */
+    float mod_depth;            /* 4 bytes - Modulation depth (%) */
+    float burst_period;         /* 4 bytes - Burst repetition period */
+    int burst_count;            /* 4 bytes - Number of cycles per burst */
+    int sweep_type;             /* 4 bytes - 0=Linear, 1=Log */
+    int units_freq;             /* 4 bytes - 0=Hz, 1=kHz, 2=MHz */
+    int units_time;             /* 4 bytes - 0=s, 1=ms, 2=us */
+    
+    /* Bit-packed boolean flags to save memory */
+    unsigned int output_enabled:1;     /* Output ON/OFF */
+    unsigned int sweep_enabled:1;      /* Frequency sweep mode */
+    unsigned int sync_enabled:1;       /* Sync output ON/OFF */
+    unsigned int invert_enabled:1;     /* Invert output waveform */
     unsigned int modulation_enabled:1; /* AM/FM modulation */
-    unsigned int burst_enabled:1;
-    unsigned int lf_termination:1;     /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int burst_enabled:1;      /* Burst mode */
+    unsigned int lf_termination:1;     /* Use LF instead of CRLF for instruments showing "LF" */
+    unsigned int reserved:9;           /* Reserved for future use */
 } fg5010_config;
 
+/* Global variables (extern declarations) */
 extern measurement_system *g_system;
 extern unsigned char far *video_mem;
 extern char g_error_msg[64];
@@ -446,7 +501,7 @@ int dm5120_read_all_stored(int address, float far *buffer, int max_samples);
 /* From data.c */
 int allocate_module_buffer(int slot, unsigned int size);
 void free_module_buffer(int slot);
-void store_module_data(int slot, float value);
+void store_module_data(int slot, double value);
 void clear_module_data(int slot);
 void save_data(void);
 void load_data(void);
@@ -455,7 +510,7 @@ void load_data(void);
 void print_report(void);
 void print_graph_menu(void);
 
-/* From main.c */
+/* Utility functions */
 void delay(unsigned int milliseconds);
 void cleanup(void);
 

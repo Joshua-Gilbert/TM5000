@@ -9,6 +9,7 @@
 
 /* Module configuration functions */
 void configure_modules(void);
+void auto_detect_modules(void);
 void validate_enabled_modules(void);
 int module_is_result(int slot);   /* is_result set, or MOD_NONE slot that holds data */
 void display_trace_selection_menu(void);
@@ -124,7 +125,7 @@ void dc5009_set_averaging(int address, int count);
 void dc5009_auto_trigger(int address);
 void dc5009_start_measurement(int address);
 void dc5009_stop_measurement(int address);
-float dc5009_read_measurement(int address);
+double dc5009_read_measurement(int address);
 int dc5009_check_overflow(int address);
 void dc5009_clear_overflow(int address);
 void dc5009_query_function(int address, char *buffer);
@@ -152,7 +153,7 @@ void dc5010_set_averaging(int address, int count);
 void dc5010_auto_trigger(int address);
 void dc5010_start_measurement(int address);
 void dc5010_stop_measurement(int address);
-float dc5010_read_measurement(int address);
+double dc5010_read_measurement(int address);
 int dc5010_check_overflow(int address);
 void dc5010_clear_overflow(int address);
 void dc5010_set_burst_mode(int address, int enabled);
