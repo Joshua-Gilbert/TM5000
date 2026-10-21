@@ -1,5 +1,6 @@
 /*
- * TM5000 GPIB communication over the Personal488 driver (generic and per-instrument I/O).
+ * TM5000 GPIB communication (generic and per-instrument I/O). Implemented over
+ * Personal488/Driver488 by gpib.c (tm5000.exe) and over GRIDGPIB by gpib_gg.c (tm5000g.exe).
  */
 
 #ifndef GPIB_H
@@ -20,9 +21,9 @@ void gpib_clear(int address);
 int gpib_check_srq(int address);
 int ieee_spoll(int address, unsigned char *status);
 
-/* Grid-OS auto-detect: 1 if a device answers at address (id = its reply to
-   ID? or *IDN?, may be empty), 0 if nothing is there.  Uses short timeouts
-   and restores the normal ones. */
+/* Auto-detect: 1 if a device answers at address (id = its reply to ID? or
+   *IDN?, may be empty), 0 if nothing is there. Uses short timeouts and
+   restores the normal ones. */
 int gpib_probe(int address, char *id, int maxlen);
 
 /* Which GPIB driver this build talks to (start-up banner, terminal) */

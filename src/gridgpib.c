@@ -1,6 +1,6 @@
 /*
- * gridgpib.c - C interface to the GRIDGPIB resident GPIB driver (Grid-OS)
- * OpenWatcom C, 16-bit DOS, any memory model.
+ * C interface to the GRIDGPIB resident driver (driver/gridgpib); the INT API is
+ * documented at the top of GRIDGPIB.ASM. Any memory model: buffers go as far pointers.
  */
 #include <dos.h>
 #include <i86.h>
@@ -9,7 +9,7 @@
 
 int gg_lasterr = 0;
 static int gg_int = 0;
-static char gg_scratch[128];              /* discard area for overflow */
+static char gg_scratch[128];              /* sink for the unread rest of an overlong reply */
 
 static int gg_call(union REGS *r, struct SREGS *s)
 {
@@ -22,6 +22,8 @@ static int gg_call(union REGS *r, struct SREGS *s)
     return GG_OK;
 }
 
+/* Scan INT 60h-66h for the "GRIDGPIB" signature at the handler entry + 2, then
+   confirm with the presence call (AH=00 answers AX = 'GG'). */
 int gg_open(void)
 {
     int n;
@@ -99,7 +101,7 @@ int gg_puts(int addr, const char *cmd)
     }
 }
 
-/* after a GG_END_FULL read: pull the rest of the message and drop it */
+/* After a GG_END_FULL read, drain the rest of the message so the next transaction starts clean. */
 static void gg_discard_rest(int addr)
 {
     unsigned c; int endr = GG_END_FULL;

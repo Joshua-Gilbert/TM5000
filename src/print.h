@@ -1,5 +1,5 @@
 /*
- * TM5000 printing: reports and graphs (text or PostScript) sent directly to LPT1.
+ * TM5000 printing: reports, graphs (text or PostScript) and screen copies sent directly to LPT1.
  */
 
 #ifndef PRINT_H

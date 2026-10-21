@@ -94,7 +94,7 @@ void dual_trace_operations_menu(void) {
 
                         g_traces[result_slot].enabled = 1;
                         g_traces[result_slot].slot = result_slot;
-                        g_traces[result_slot].color = 0x0C; /* Light red for computed data */
+                        g_traces[result_slot].color = 0x0C; /* text attribute, not a CGA mode-4 index (& 3 = 0) */
                         g_traces[result_slot].unit_type = UNIT_VOLTAGE;
                         g_traces[result_slot].x_scale = 1.0;
                         g_traces[result_slot].x_offset = 0.0;

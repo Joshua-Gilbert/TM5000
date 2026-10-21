@@ -13,12 +13,12 @@ void free_module_buffer(int slot);
 void store_module_data(int slot, double value);
 void clear_module_data(int slot);
 
-/* Grid-OS: measurement-time stamps for the graph's time axis.  The monitor
- * sets g_mclock (BIOS ticks of measurement time, monotonic) and
- * g_mclock_valid around its own store; a sample stored any other way (file
- * load, single readings) has no time stamp and turns the slot's time axis
- * off until it is cleared.  g_store_suppress stops readers that store their
- * own result (read_dm5120_enhanced) from adding a second sample per pass.  */
+/* Measurement-time stamps for the graph's time axis. The monitor sets
+ * g_mclock (monotonic BIOS ticks of measurement time) and g_mclock_valid
+ * around its own store; a sample stored any other way (file load, single
+ * readings) has no stamp and turns the slot's time axis off until cleared.
+ * g_store_suppress keeps readers that store their own result
+ * (read_dm5120_enhanced) from adding a second sample per monitor pass. */
 extern unsigned long g_mclock;
 extern char g_mclock_valid;
 extern char g_store_suppress;
@@ -26,9 +26,9 @@ long sample_time_ms(int slot, unsigned int idx);   /* -1 = not available */
 double slot_interval_s(int slot);
 void copy_time_axis(int dst, int src);
 
-/* Grid-OS: sample-sized buffers up to 8192 x 8 bytes (exactly 64 KB).
-   _fmalloc takes a 16-bit size, so 65536 bytes would wrap to 0; such a
-   block comes from DOS as a whole segment instead.  Use free_samples(). */
+/* Sample buffers up to 8192 x 8 bytes (exactly 64 KB). _fmalloc takes a
+   16-bit size, so 65536 bytes would wrap to 0; blocks over 65000 bytes come
+   from DOS as a whole segment instead. Free with free_samples(). */
 void far *alloc_samples(unsigned n, unsigned elsize);
 extern unsigned g_buffer_samples;   /* 0 = AUTO (pooled), else samples */
 void free_samples(void far *p);

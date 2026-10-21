@@ -1,6 +1,7 @@
 /*
- * GPIB I/O through the Personal488 (Driver488) devices \DEV\IEEEOUT and \DEV\IEEEIN.
- * Driver488 enforces strict command/response pairing.
+ * Driver488 back end (tm5000.exe): GPIB I/O through the Personal488 devices
+ * \DEV\IEEEOUT and \DEV\IEEEIN. Driver488 enforces strict command/response pairing.
+ * gpib_gg.c implements the same gpib.h over GRIDGPIB.
  */
 
 #include "gpib.h"
@@ -58,13 +59,10 @@ int gpib_check_srq(int address) {
     return 0;
 }
 
-/* Grid-OS auto-detect through Driver488: a 1 s TIME OUT while probing
- * (OUTPUT to an empty address fails with "no listener"; a device that
- * listens but never talks times out), then back to Driver488's 10 s. */
 const char gpib_driver_name[] = "Personal488 (Driver488)";
 const char gpib_driver_note[] = "Note: Personal488 enforces strict command/response pairing\n";
 
-/* Driver488 build: keep TM5000's per-device LOCAL on exit */
+/* 0: cleanup() sends LOCAL to each instrument slot itself */
 int gpib_release_bus(void) { return 0; }
 
 void gpib_driver_help(void) {
@@ -73,6 +71,8 @@ void gpib_driver_help(void) {
     printf("2. Personal488 hardware is connected\n");
 }
 
+/* Probe under a 1 s TIME OUT: OUTPUT to an empty address fails with "no listener",
+ * and a device that listens but never talks times out. Restores Driver488's 10 s after. */
 int gpib_probe(int address, char *id, int maxlen) {
     char cmd[40];
     int present = 0;
@@ -110,10 +110,10 @@ int ieee_spoll(int address, unsigned char *status) {
     if (ieee_read(response, sizeof(response)) > 0) {
         result = atoi(response);
         *status = (unsigned char)(result & 0xFF);
-        return 0;  /* Success */
+        return 0;
     }
     *status = 0;
-    return -1;  /* Error */
+    return -1;
 }
 
 void gpib_write(int address, char *command) {
@@ -340,7 +340,7 @@ void gpib_remote_dm5120(int address) {
     
     sprintf(cmd_buffer, "remote %2d%s", address, termination);
     ieee_write(cmd_buffer);
-    delay(200);  /* Extended delay for DM5120 */
+    delay(200);
 }
 
 void gpib_local_dm5120(int address) {
@@ -478,7 +478,7 @@ void drain_input_buffer(void) {
     
     while ((bytes_read = read(ieee_in, buffer, sizeof(buffer))) > 0) {
         total_drained += bytes_read;
-        if (total_drained > 1024) break;  /* Safety limit */
+        if (total_drained > 1024) break;  /* bound the drain if the driver keeps returning data */
     }
 }
 
@@ -506,7 +506,7 @@ int init_gpib_system(void) {
     
     printf("Setting raw mode...\n");
     rawmode(ieee_out);
-    rawmode(ieee_in);  /* May fail on Personal488, that's OK */
+    rawmode(ieee_in);  /* may fail on Personal488; harmless */
     
     printf("Sending BREAK via IOCTL...\n");
     {

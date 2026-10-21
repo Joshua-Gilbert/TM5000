@@ -504,7 +504,7 @@ void configure_ps5004_advanced(int slot) {
                 printf("\n\nEnter current limit in mA (10-305): ");
                 scanf("%f", &temp_float);
                 if (temp_float >= 10.0 && temp_float <= 305.0) {
-                    cfg->current_limit = temp_float / 1000.0;  /* Convert to A */
+                    cfg->current_limit = temp_float / 1000.0;  /* entered in mA, stored in A */
                 }
                 break;
                 
@@ -920,7 +920,8 @@ void configure_ps5010_advanced(int slot) {
     }
 }
 
-/* Raw Driver488 console: each line is sent with CRLF, then a reply is always read. */
+/* Raw Driver488-command console (gpib_gg.c interprets the commands under GRIDGPIB):
+   each line is sent with CRLF, then a reply is always read. */
 void gpib_terminal_mode(void) {
     char command[GPIB_BUFFER_SIZE];
     char response[GPIB_BUFFER_SIZE];
