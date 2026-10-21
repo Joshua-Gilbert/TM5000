@@ -5,7 +5,7 @@
 
 #include "gpib.h"
 
-extern void rawmode(int handle);
+extern int rawmode(int handle);
 
 int ieee_write(const char *str) {
     if (ieee_out < 0) return -1;
@@ -78,30 +78,27 @@ int ieee_spoll(int address, unsigned char *status) {
 
 void gpib_write(int address, char *command) {
     char cmd_buffer[GPIB_BUFFER_SIZE];
-    
-    if (g_system && address >= 10 && address < 18) {
-        int slot = address - 10;
-        if (slot >= 0 && slot < 10 && 
-            g_system->modules[slot].module_type == MOD_DM5120) {
-            gpib_check_srq(address);
-            delay(50);
+    int is_dm5120 = 0;
+
+    if (g_system) {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                is_dm5120 = 1;
+                break;
+            }
         }
     }
-    
-    sprintf(cmd_buffer, "output %2d;%s\r\n", address, command);
-    ieee_write(cmd_buffer);
-    
-    if (g_system && address >= 10 && address < 18) {
-        int slot = address - 10;
-        if (slot >= 0 && slot < 10 && 
-            g_system->modules[slot].module_type == MOD_DM5120) {
-            delay(100);
-        } else {
-            delay(50);
-        }
-    } else {
+
+    if (is_dm5120) {
+        gpib_check_srq(address);
         delay(50);
     }
+
+    sprintf(cmd_buffer, "output %2d;%s\r\n", address, command);
+    ieee_write(cmd_buffer);
+
+    delay(is_dm5120 ? 100 : 50);
 }
 
 int gpib_read(int address, char *buffer, int maxlen) {
@@ -225,14 +222,14 @@ int gpib_read_dm5120(int address, char *buffer, int maxlen) {
     ieee_write(cmd_buffer);
     
     delay(100);
-    
-    bytes_read = ieee_read(buffer, maxlen-1);
+
+    bytes_read = ieee_read(buffer, maxlen);
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
     } else {
         buffer[0] = '\0';
     }
-    
+
     return bytes_read;
 }
 
@@ -381,14 +378,14 @@ int gpib_read_dm5010(int address, char *buffer, int maxlen) {
     ieee_write(cmd_buffer);
     
     delay(100);
-    
-    bytes_read = ieee_read(buffer, maxlen-1);
+
+    bytes_read = ieee_read(buffer, maxlen);
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
     } else {
         buffer[0] = '\0';
     }
-    
+
     return bytes_read;
 }
 
@@ -404,9 +401,6 @@ int gpib_read_float_dm5010(int address, float *value) {
     if (ieee_read(buffer, sizeof(buffer)) > 0) {
         if (sscanf(buffer, "%e", value) == 1) return 1;
         if (sscanf(buffer, "%f", value) == 1) return 1;
-        if (sscanf(buffer, "%eV", value) == 1) return 1;
-        if (sscanf(buffer, "%eA", value) == 1) return 1;
-        if (sscanf(buffer, "%eR", value) == 1) return 1;
     }
     
     return 0;
@@ -702,7 +696,8 @@ void check_gpib_error(void) {
         printf("GPIB Status: %s\n", status);
         
         if (strstr(status, "ERROR") || strstr(status, "Error")) {
-            strcpy(g_error_msg, status);
+            strncpy(g_error_msg, status, sizeof(g_error_msg) - 1);
+            g_error_msg[sizeof(g_error_msg) - 1] = '\0';
             gpib_error = 1;
             
             if (strstr(status, "SEQUENCE")) {

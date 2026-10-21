@@ -173,6 +173,19 @@ optimization routines that are **not called from C** (only `extern`-declared). W
 `OPTION ELIMINATE` they are stripped from the image; they stay in the tree as
 scaffolding to wire in or remove.
 
+They are not safe to call as written:
+
+- All four are `.MODEL SMALL` with near procedures reading stack arguments at `[bp+4]`,
+  while the C side is large-model with Watcom's register calling convention.
+- `cga_asm.asm`: the `PUBLIC` names (`cga_draw_hline_`, …) don't match the procedure names
+  (`_cga_draw_hline`, …). `cga_draw_hline` exits its leading-pixel loop with `cx` still
+  pushed. `cga_clear_screen` writes 32 KB, past CGA's 16 KB.
+- `mem286.asm`: in `fast_fmemcpy_286`, `cmp cx,1000h` clobbers the carry from `shr`, so
+  every aligned copy moves one extra byte. `fast_memcmp_286` compares the later byte of a
+  mismatched word first, so its sign can disagree with `memcmp`.
+- `fixed286.asm`: `fixed_mul_286`, `fixed_div_286`, `fixed_cos_286` and `fixed_sqrt_286`
+  have wrong arithmetic or stack handling, and the `FIXED_PI*` constants are wrong.
+
 ---
 
 ## 10. Known limitations

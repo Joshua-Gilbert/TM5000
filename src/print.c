@@ -50,6 +50,16 @@ static char *ps_unit_of(char *u) {
     return u;  /* power spectrum (^2/Hz) and anything else: pass through */
 }
 
+/* Send a string for use inside a PostScript ( ) literal, escaping ( ) and \. */
+static void ps_print_escaped(char *str) {
+    while (*str) {
+        if (*str == '(' || *str == ')' || *str == '\\') {
+            lpt_send_byte('\\');
+        }
+        lpt_send_byte(*str++);
+    }
+}
+
 /* Voltage units only; use get_trace_print_units for other unit types. */
 void get_print_units(float range, char **unit_str, float *scale_factor, int *decimal_places, char **postscript_unit) {
     get_graph_units(range, unit_str, scale_factor, decimal_places);
@@ -108,7 +118,8 @@ void print_graph_menu(void) {
                 if (fgets(input_buffer, sizeof(input_buffer), stdin)) {
                     input_buffer[strcspn(input_buffer, "\n")] = '\0';
                     if (strlen(input_buffer) > 0) {
-                        strcpy(g_custom_header_text, input_buffer);
+                        strncpy(g_custom_header_text, input_buffer, sizeof(g_custom_header_text) - 1);
+                        g_custom_header_text[sizeof(g_custom_header_text) - 1] = '\0';
                         g_use_custom_header = 1;
                     }
                 }
@@ -127,7 +138,7 @@ void print_graph_text(void) {
     float value, y_range;
     int y_pos;
     int samples_to_print;
-    char label[40];
+    char label[128];
     int trace_count = 0;
     int max_samples = 0;
     int dominant_trace = -1;
@@ -265,7 +276,11 @@ void print_graph_text(void) {
         
         {
             char *range_postscript_unit;
-            get_print_units(y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
+            if (dominant_trace >= 0) {
+                get_trace_print_units(dominant_trace, y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
+            } else {
+                get_print_units(y_range, &range_unit_str, &range_scale_factor, &range_decimal_places, &range_postscript_unit);
+            }
             range_unit_str = range_postscript_unit;
         }
 
@@ -331,7 +346,11 @@ void print_graph_text(void) {
             float per_div_scale;
             int per_div_decimal;
             char *per_div_ps_unit;
-            get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
+            if (dominant_trace >= 0) {
+                get_trace_print_units(dominant_trace, fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
+            } else {
+                get_print_units(fabs(per_div), &per_div_unit, &per_div_scale, &per_div_decimal, &per_div_ps_unit);
+            }
             sprintf(label, "Units per div: %.*f %s, Auto Scale: %s\r\n",
                     per_div_decimal, per_div * per_div_scale, per_div_ps_unit,
                     g_graph_scale.auto_scale ? "ON" : "OFF");
@@ -345,7 +364,7 @@ void print_graph_text(void) {
     print_string(label);
     
     for (y = 0; y < graph_lines; y++) {
-        for (x = 0; x < 100; x++) {
+        for (x = 0; x < 80; x++) {
             line[x] = ' ';
             plot_chars[x] = ' ';
         }
@@ -422,12 +441,12 @@ void print_graph_text(void) {
     
     print_string("            0");
 
-    /* Any dB (FFT) trace -> frequency X axis (unit_type 2 == UNIT_DB) */
+    /* Any dB (FFT) trace -> frequency X axis */
     {
         int has_fft_trace = 0;
         int fft_trace_idx = -1;
         for (i = 0; i < 10; i++) {
-            if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == 2) {
+            if (g_traces[i].enabled && g_traces[i].data_count > 0 && g_traces[i].unit_type == UNIT_DB) {
                 has_fft_trace = 1;
                 fft_trace_idx = i;
                 break;
@@ -578,7 +597,7 @@ void print_graph_text(void) {
 void print_graph_postscript(void) {
     int i, j, x, y;
     float value, y_range;
-    char label[80];
+    char label[128];
     int trace_count = 0;
     int dominant_trace = -1;
     float x_scale, y_scale;
@@ -685,7 +704,7 @@ void print_graph_postscript(void) {
 
     print_string("%!PS-Adobe-3.0\r\n");
     print_string("%%Title: TM5000 High-Precision Measurement Graph\r\n");
-    print_string("%%Creator: TM5000 Control System v3.2\r\n");
+    print_string("%%Creator: TM5000 Control System v" TM5000_VERSION "\r\n");
     print_string("%%BoundingBox: 0 0 612 792\r\n");
     print_string("%%DocumentNeededResources: font Times-Roman\r\n");
     print_string("%%Pages: 1\r\n");
@@ -715,7 +734,7 @@ void print_graph_postscript(void) {
         
         print_string("72 720 moveto\r\n");
         print_string("(");
-        print_string(graph_title);
+        ps_print_escaped(graph_title);
         print_string(") show\r\n");
     }
     
@@ -902,12 +921,12 @@ void print_graph_postscript(void) {
         print_string(label);
     }
     
-    /* Any dB (FFT) trace -> frequency X axis (unit_type 2 == UNIT_DB) */
+    /* Any dB (FFT) trace -> frequency X axis */
     {
         int has_fft_trace = 0;
         int fft_trace_idx = -1;
         for (j = 0; j < 10; j++) {
-            if (g_traces[j].enabled && g_traces[j].data_count > 0 && g_traces[j].unit_type == 2) {
+            if (g_traces[j].enabled && g_traces[j].data_count > 0 && g_traces[j].unit_type == UNIT_DB) {
                 has_fft_trace = 1;
                 fft_trace_idx = j;
                 break;
@@ -982,24 +1001,15 @@ void print_graph_postscript(void) {
     print_string("90 rotate\r\n");
     print_string("0 0 moveto\r\n");
     
-    /* Y-axis label from the first enabled trace, not the unit-priority trace above */
     {
-        int dominant_trace = -1;
         char *y_label = "Measurement";
-        
-        for (j = 0; j < 10; j++) {
-            if (g_traces[j].enabled && g_traces[j].data_count > 0) {
-                dominant_trace = j;
-                break;
-            }
-        }
-        
+
         if (dominant_trace >= 0) {
             switch (g_traces[dominant_trace].unit_type) {
-                case 1:  /* UNIT_FREQUENCY */
+                case UNIT_FREQUENCY:
                     y_label = "Frequency";
                     break;
-                case 2:  /* UNIT_DB */
+                case UNIT_DB:
                     y_label = "Magnitude";
                     break;
                 default: /* voltage, current, resistance, derivative, power */
@@ -1039,7 +1049,7 @@ void print_graph_postscript(void) {
             
             print_string("newpath\r\n");
             
-            x_scale = graph_width / (float)(g_traces[i].data_count - 1);
+            x_scale = (g_traces[i].data_count > 1) ? graph_width / (float)(g_traces[i].data_count - 1) : 0.0;
             y_scale = graph_height / y_range;
             
             value = g_traces[i].data[0];

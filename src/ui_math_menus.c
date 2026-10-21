@@ -71,6 +71,7 @@ void dual_trace_operations_menu(void) {
                    (operation == 4) ? "=====" : (operation == 5) ? "=======" :
                    (operation == 6) ? "=======" : "==========");
             
+            trace1 = trace2 = result_slot = -1;  /* stay invalid if scanf fails */
             printf("\nEnter first trace slot (0-9): ");
             scanf("%d", &trace1);
             
@@ -226,6 +227,7 @@ void digital_filter_menu(void) {
             case '5':
                 printf("\n\nApply Filter\n");
                 printf("Enter trace slot to filter (0-9): ");
+                trace_slot = -1;
                 scanf("%d", &trace_slot);
                 
                 if (trace_slot >= 0 && trace_slot < 10) {
@@ -307,6 +309,7 @@ void curve_fitting_menu(void) {
                        (method == 1) ? "Linear Regression (y = a + bx)" :
                        (method == 2) ? "Polynomial Fitting" : "Exponential Fitting (y = a*e^bx)");
                 printf("Enter trace slot for Y data (0-9): ");
+                trace_slot = -1;
                 scanf("%d", &trace_slot);
                 if (method == 2) {
                     printf("Polynomial order (2-3): ");
@@ -410,6 +413,7 @@ void correlation_analysis_menu(void) {
         switch (choice) {
             case '1':
                 printf("\n\nPearson Correlation Analysis\n");
+                trace1 = trace2 = -1;
                 printf("Enter first trace slot (0-9): ");
                 scanf("%d", &trace1);
                 
@@ -457,6 +461,7 @@ void correlation_analysis_menu(void) {
                 int count1, count2, count, lag, best_lag = 0;
                 float *d1, *d2, *corr, best = -2.0;
                 printf("\n\nCross-Correlation\n");
+                trace1 = trace2 = -1;
                 printf("Enter first trace slot (0-9): ");
                 scanf("%d", &trace1);
                 printf("Enter second trace slot (0-9): ");
@@ -510,6 +515,7 @@ void correlation_analysis_menu(void) {
                 float sample_rate;
                 int lag;
                 printf("\n\nPhase Shift / Delay Analysis\n");
+                trace1 = trace2 = -1;
                 printf("Enter first (reference) trace slot (0-9): ");
                 scanf("%d", &trace1);
                 printf("Enter second trace slot (0-9): ");

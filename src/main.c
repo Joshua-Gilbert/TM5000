@@ -125,7 +125,7 @@ int main(void) {
     _asm {
         ; Without a 287 a waiting FPU instruction can hang, so only no-wait
         ; (FN*) forms belong before the probe result is known.
-        fclex
+        fnclex
 
         fninit
 

@@ -46,6 +46,8 @@ void send_custom_command(void) {
             slot = input - '0';
         } else {
             printf("\nInvalid input!\n");
+            printf("Press any key to continue...");
+            getch();
             return;
         }
     }
@@ -99,8 +101,7 @@ void send_custom_command(void) {
         
         if (strchr(command, '?') != NULL || 
             strcasecmp(command, "X") == 0 ||
-            strcasecmp(command, "SEND") == 0 ||
-            strncasecmp(command, "F", 1) == 0) {
+            strcasecmp(command, "SEND") == 0) {
             
             printf("Reading response...\n");
             delay(200);

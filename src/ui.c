@@ -356,14 +356,14 @@ void file_operations_menu(void) {
                         delay(10);
                     }
                     
-                    if (g_mouse.y == 3) { choice = '1'; break; }   /* Save Data */
-                    if (g_mouse.y == 5) { choice = '2'; break; }   /* Load Data */
-                    if (g_mouse.y == 7) { choice = '3'; break; }  /* Save Settings */
-                    if (g_mouse.y == 9) { choice = '4'; break; }  /* Load Settings */
-                    if (g_mouse.y == 11) { choice = '5'; break; }  /* Print Report */
-                    if (g_mouse.y == 13) { choice = '6'; break; }  /* Configuration Profiles */
-                    if (g_mouse.y == 15) { choice = '7'; break; }  /* Export Data*/
-                    if (g_mouse.y == 17) { choice = '0'; break; }  /* Return */
+                    if (g_mouse.y == 5) { choice = '1'; break; }   /* Save Data */
+                    if (g_mouse.y == 7) { choice = '2'; break; }   /* Load Data */
+                    if (g_mouse.y == 9) { choice = '3'; break; }  /* Save Settings */
+                    if (g_mouse.y == 11) { choice = '4'; break; }  /* Load Settings */
+                    if (g_mouse.y == 13) { choice = '5'; break; }  /* Print Report */
+                    if (g_mouse.y == 15) { choice = '6'; break; }  /* Configuration Profiles */
+                    if (g_mouse.y == 17) { choice = '7'; break; }  /* Export Data*/
+                    if (g_mouse.y == 19) { choice = '0'; break; }  /* Return */
                 }
                 
                 delay(10);
@@ -418,6 +418,13 @@ void configuration_profiles_menu(void) {
     char profile_name[PROFILE_NAME_LENGTH];
     char profile_desc[PROFILE_DESC_LENGTH];
     int i, selected_index;
+    
+    if (init_profile_system() != PROFILE_SUCCESS) {
+        printf("\nCannot open or create PROFILES.DAT (disk full, read-only, or wrong version).\n");
+        printf("Press any key to continue...");
+        getch();
+        return;
+    }
     
     while (!done) {
         clrscr();
@@ -643,7 +650,7 @@ void enhanced_export_menu(void) {
                     
                     if (export_data_enhanced(filename, &config) == EXPORT_SUCCESS) {
                         printf("Export successful: %s\n", filename);
-                        printf("File size: %d bytes\n", get_export_file_size(filename));
+                        printf("File size: %ld bytes\n", get_export_file_size(filename));
                     } else {
                         display_error("Export failed");
                     }
@@ -752,6 +759,7 @@ void sample_rate_menu(void) {
         getch();
     } else if (choice == '8') {
         printf("\nEnter custom rate (10-60000 ms): ");
+        custom_rate = 0;  /* stays invalid if scanf fails */
         scanf("%d", &custom_rate);
         if (custom_rate >= 10 && custom_rate <= 60000) {
             g_control_panel.sample_rate_ms = custom_rate;
@@ -896,6 +904,7 @@ void calculate_statistics(void) {
     printf("===============================\n\n");
     
     printf("Select source slot (0-9): ");
+    slot = -1;  /* stays invalid if scanf fails */
     scanf("%d", &slot);
     
     if (slot < 0 || slot > 9 || !g_system->modules[slot].enabled ||
@@ -1057,7 +1066,7 @@ void module_selection_menu(void) {
                 g_control_panel.monitor_all = 0;  /* any toggle means selective mode */
             }
         } else if (toupper(key) == 'A') {
-            g_control_panel.monitor_mask = 0xFF;
+            g_control_panel.monitor_mask = 0x3FF;  /* slots 0-9 */
             g_control_panel.monitor_all = 1;
         } else if (toupper(key) == 'N') {
             g_control_panel.monitor_mask = 0;
@@ -1114,6 +1123,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1150,6 +1160,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1186,6 +1197,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1222,6 +1234,7 @@ void module_settings_menu(void) {
                 }
                 
                 printf("\nEnter slot number: ");
+                slot = -1;
                 scanf("%d", &slot);
                 
                 if (slot >= 0 && slot < 10 && 
@@ -1498,13 +1511,13 @@ void graph_display(void) {
         float max_freq = sample_rate / 2.0;
         
         if (max_freq >= 1000000.0) {
-            freq_unit_str = "MHz";
+            freq_unit_str = "MHZ";
             freq_multiplier = 1000000.0;
         } else if (max_freq >= 1000.0) {
-            freq_unit_str = "kHz";
+            freq_unit_str = "KHZ";
             freq_multiplier = 1000.0;
         } else {
-            freq_unit_str = "Hz";
+            freq_unit_str = "HZ";
             freq_multiplier = 1.0;
         }
         unit_str = freq_unit_str;
@@ -1666,7 +1679,7 @@ void graph_display(void) {
             if (selected_trace >= 0 && g_system->modules[selected_trace].module_type == MOD_DM5120) {
                 dm5120_config *cfg = &g_dm5120_config[selected_trace];
                 if (cfg->buffer_enabled && cfg->burst_mode) {
-                    sprintf(readout, "BUF@%.0fHz", cfg->sample_rate);
+                    sprintf(readout, "BUF@%.0fHZ", cfg->sample_rate);
                     draw_text(280, 193, readout, 3);
                 }
             }
@@ -1676,15 +1689,15 @@ void graph_display(void) {
                 char mode_str[10];
                 if (is_fft_trace[selected_trace]) {
                     if (fine_cursor_mode) {
-                        strcpy(mode_str, "0.01Hz");
+                        strcpy(mode_str, "0.01HZ");
                     } else {
-                        strcpy(mode_str, "0.1Hz");
+                        strcpy(mode_str, "0.1HZ");
                     }
                 } else {
                     if (fine_cursor_mode) {
-                        strcpy(mode_str, "1smp");
+                        strcpy(mode_str, "1SMP");
                     } else {
-                        strcpy(mode_str, "10smp");
+                        strcpy(mode_str, "10SMP");
                     }
                 }
                 draw_text(290, 186, mode_str, fine_cursor_mode ? 3 : 2);  /* Bright when fine, dim when coarse */
@@ -1952,7 +1965,7 @@ void graph_display(void) {
                             if (g_traces[i].enabled) active_traces++;
                         }
                         
-                        if (!g_traces[selected_trace].enabled) {
+                        if (selected_trace < 0 || !g_traces[selected_trace].enabled) {
                             selected_trace = -1;
                             for (i = 0; i < 10; i++) {
                                 if (g_traces[i].enabled) {
@@ -1961,7 +1974,7 @@ void graph_display(void) {
                                 }
                             }
                         }
-                        
+
                         need_redraw = 1;
                     }
                 }
@@ -1992,13 +2005,13 @@ void graph_display(void) {
                         float max_freq = sample_rate / 2.0;
                         
                         if (max_freq >= 1000000.0) {
-                            freq_unit_str = "MHz";
+                            freq_unit_str = "MHZ";
                             freq_multiplier = 1000000.0;
                         } else if (max_freq >= 1000.0) {
-                            freq_unit_str = "kHz";
+                            freq_unit_str = "KHZ";
                             freq_multiplier = 1000.0;
                         } else {
-                            freq_unit_str = "Hz";
+                            freq_unit_str = "HZ";
                             freq_multiplier = 1.0;
                         }
                         unit_str = freq_unit_str;
@@ -2392,7 +2405,7 @@ void graph_display(void) {
                                             if (g_traces[i].enabled) active_traces++;
                                         }
                                         
-                                        if (!g_traces[selected_trace].enabled) {
+                                        if (selected_trace < 0 || !g_traces[selected_trace].enabled) {
                                             selected_trace = -1;
                                             for (i = 0; i < 10; i++) {
                                                 if (g_traces[i].enabled) {
@@ -2438,7 +2451,6 @@ void graph_display(void) {
                     break;
                     
                 case 'F':  /* Toggle fine/coarse cursor mode */
-                case 'f':
                     fine_cursor_mode = !fine_cursor_mode;
                     cursor_mode_changed = 1;
                     /* Update current frequency for FFT traces to maintain position */
@@ -2450,7 +2462,6 @@ void graph_display(void) {
                     break;
                     
                 case 'H':  /* Help/Config menu */
-                case 'h':
                     text_mode();
                     graph_config_menu();
                     need_redraw = 1;
@@ -2458,7 +2469,6 @@ void graph_display(void) {
                     break;
                     
                 case 'T':  /* Trace selection menu */
-                case 't':
                     text_mode();
                     display_trace_selection_menu();
                     need_redraw = 1;

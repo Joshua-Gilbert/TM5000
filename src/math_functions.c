@@ -518,14 +518,21 @@ void execute_fft_with_config(void) {
         for (k = 0; k < dft_size/2; k++) {
             sum_real = 0.0;
             sum_imag = 0.0;
-            
+
+            /* Rotate a unit phasor by the bin's step: one cos/sin pair per bin */
+            angle = -2.0 * 3.14159265 * k / dft_size;
+            c = cos(angle);
+            s = sin(angle);
+            ur = 1.0;
+            ui = 0.0;
+
             for (j = 0; j < dft_size; j++) {
-                angle = -2.0 * 3.14159 * k * j / dft_size;
-                c = 1.0 - angle*angle/2.0;  /* small-angle cos; inaccurate for large angle */
-                s = angle;                   /* small-angle sin */
-                
-                sum_real += real_data[j] * c;
-                sum_imag += real_data[j] * s;
+                sum_real += real_data[j] * ur;
+                sum_imag += real_data[j] * ui;
+
+                temp_real = ur;
+                ur = temp_real * c - ui * s;
+                ui = temp_real * s + ui * c;
             }
             
             magnitude[k] = sqrt(sum_real * sum_real + sum_imag * sum_imag);
@@ -622,6 +629,22 @@ void execute_fft_with_config(void) {
     } else {
         printf("\nStoring FFT in slot %d...\n", target_slot);
     }
+
+    /* A reused slot's buffer may be smaller than output_points (source data is already copied out) */
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned int)g_fft_config.output_points) {
+        if (!allocate_module_buffer(target_slot, g_fft_config.output_points)) {
+            printf("\nInsufficient memory for FFT result!\n");
+            _ffree(real_data);
+            _ffree(imag_data);
+            _ffree(magnitude);
+            _ffree(window_data);
+            printf("Press any key...");
+            getch();
+            return;
+        }
+    }
+
     /* is_result marks a computed trace (fresh slot or overwritten source) so
        continuous monitoring won't re-read it. */
     g_system->modules[target_slot].enabled = 1;
@@ -630,10 +653,6 @@ void execute_fft_with_config(void) {
     strcpy(g_system->modules[target_slot].description, "FFT Result");
     g_system->modules[target_slot].gpib_address = 0;  /* No GPIB for computed data */
 
-    if (!g_system->modules[target_slot].module_data) {
-        allocate_module_buffer(target_slot, g_fft_config.output_points);
-    }
-    
     /* Apply peak centering if enabled */
     if (g_fft_config.peak_centering && peak_index > 0) {
         int center_position = g_fft_config.output_points / 2;
@@ -769,8 +788,16 @@ void perform_differentiation(void) {
     strcpy(g_system->modules[target_slot].description, "Derivative");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
-        allocate_module_buffer(target_slot, count);
+    /* Grow a reused slot's buffer; never true when target_slot == slot */
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned int)count) {
+        if (!allocate_module_buffer(target_slot, count)) {
+            g_system->modules[target_slot].enabled = 0;
+            printf("\nInsufficient memory for result!\n");
+            printf("Press any key...");
+            getch();
+            return;
+        }
     }
     result_data = g_system->modules[target_slot].module_data;
     
@@ -870,8 +897,16 @@ void perform_integration(void) {
     strcpy(g_system->modules[target_slot].description, "Integral");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
-        allocate_module_buffer(target_slot, count);
+    /* Grow a reused slot's buffer; never true when target_slot == slot */
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned int)count) {
+        if (!allocate_module_buffer(target_slot, count)) {
+            g_system->modules[target_slot].enabled = 0;
+            printf("\nInsufficient memory for result!\n");
+            printf("Press any key...");
+            getch();
+            return;
+        }
     }
     result_data = g_system->modules[target_slot].module_data;
     
@@ -897,7 +932,20 @@ void perform_integration(void) {
     }
     
     g_system->modules[target_slot].module_data_count = count;
-    
+
+    if (target_slot >= 0 && target_slot < 10) {
+        g_traces[target_slot].unit_type = UNIT_VOLTAGE;  /* no V*s unit; plotted on the V axis */
+        g_traces[target_slot].x_scale = 1.0;  /* x axis in samples */
+        g_traces[target_slot].x_offset = 0.0;
+        strcpy(g_traces[target_slot].label, "Integral");
+
+        g_traces[target_slot].data = g_system->modules[target_slot].module_data;
+        g_traces[target_slot].data_count = g_system->modules[target_slot].module_data_count;
+        g_traces[target_slot].enabled = 1;
+        g_traces[target_slot].slot = target_slot;
+        g_traces[target_slot].color = 0x0E;  /* yellow */
+    }
+
     printf("\nIntegration complete!\n");
     printf("Units changed from V to V*s\n");
     printf("Final value: %.6f V*s\n", result_data[count-1]);
@@ -970,8 +1018,16 @@ void perform_smoothing(void) {
     strcpy(g_system->modules[target_slot].description, "Smoothed");
     g_system->modules[target_slot].gpib_address = 0;
     
-    if (!g_system->modules[target_slot].module_data) {
-        allocate_module_buffer(target_slot, count);
+    /* Grow a reused slot's buffer; never true when target_slot == slot */
+    if (!g_system->modules[target_slot].module_data ||
+        g_system->modules[target_slot].module_data_size < (unsigned int)count) {
+        if (!allocate_module_buffer(target_slot, count)) {
+            g_system->modules[target_slot].enabled = 0;
+            printf("\nInsufficient memory for result!\n");
+            printf("Press any key...");
+            getch();
+            return;
+        }
     }
     result_data = g_system->modules[target_slot].module_data;
     
