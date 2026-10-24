@@ -113,6 +113,7 @@ int ps5004_parse_number(const char *s, float *value);
 int ps5004_read_value(int address, float *value);
 void ps5004_select_display(int slot, int mode);
 void ps5004_forget_display(int slot);
+int ps5004_display_shown(int address);
 int ps5004_measure(int slot, int mode, float *value);
 void ps5004_init(int address);
 void ps5004_set_voltage(int address, float voltage);

@@ -4289,13 +4289,22 @@ void ps5004_forget_display(int slot) {
     ps5004_disp_sent[slot] = -1;
 }
 
+/* What the supply shows, from "DISPLAY CLIMIT;" etc. (manual p. 3-6); -1 no reply */
+int ps5004_display_shown(int address) {
+    char *r = ps5004_query(address, "DISPLAY?");
+    if (r == NULL) return -1;
+    return strstr(r, "CL") ? 2 : strstr(r, "CU") ? 1 : 0;
+}
+
 /* One reading of what mode selects. Called from the monitor: no printf. */
 int ps5004_measure(int slot, int mode, float *value) {
     ps5004_select_display(slot, mode);
     return ps5004_read_value(g_system->modules[slot].gpib_address, value);
 }
 
+/* INIT is a setting command: error 201 in local (manual p. 3-19) */
 void ps5004_init(int address) {
+    gpib_remote(address);
     gpib_write(address, "INIT");
     GPIB_PACE(100);
 }
@@ -4356,8 +4365,7 @@ static const struct { int code; const char *text; } __far ps5004_errors[] = {
     { 401, "Power on" },
     { 403, "User request (INST ID button)" },
     { 724, "Voltage regulation" },
-    { 725, "Current regulation" },
-    { 726, "Unregulated" }      /* Table 3-1 prints 725 twice */
+    { 725, "Current regulation or unregulated" }    /* Table 3-1 gives 725 for both */
 };
 
 static const char *ps5004_error_text(int code) {
@@ -4372,7 +4380,7 @@ static const char *ps5004_error_text(int code) {
    and clears the highest-priority one, 0 when none is left (manual p. 3-7,
    3-20, 3-21). Either way this clears the power-on SRQ. */
 int ps5004_show_errors(int address, int print) {
-    unsigned char stb;
+    unsigned char stb = 0;
     char *r = ps5004_query(address, "RQS?");
     int rqs_on = r == NULL || strstr(r, "RQS ON") != NULL;
     int i, code, shown = 0;
@@ -4383,18 +4391,22 @@ int ps5004_show_errors(int address, int print) {
         if (!ps5004_query_value(address, "ERROR?", &v)) break;
         code = (int)v;
         if (code <= 0) break;
-        if (print) printf("  %s %d: %s\n", code >= 400 ? "EVENT" : "ERROR", code, ps5004_error_text(code));
+        /* Device-status STB 203 (219 busy) is the unregulated one of the two 725s (Fig. 3-3) */
+        if (print) printf("  %s %d: %s\n", code >= 400 ? "EVENT" : "ERROR", code,
+                          code == 725 && (stb & 0x83) == 0x83 ? "Unregulated" : ps5004_error_text(code));
         shown++;
     }
     return shown;
 }
 
 /* Under DT SET every setting, DT OFF included, waits for GET (manual p. 3-6):
-   send DT OFF and GET so the commands after this one take effect. SET? and
-   DT? report SET as ON. A plain DT ON supply answers the GET with error 206. */
+   send DT OFF and GET so the commands after this one take effect. DT? lists
+   only ON and OFF (p. 3-6), so SET reads as ON. A plain DT ON supply answers
+   the GET with error 206. */
 void ps5004_release_dt(int address) {
     char *r = ps5004_query(address, "DT?");
     if (r == NULL || strstr(r, "ON") == NULL) return;
+    gpib_remote(address);
     ps5004_send_flag(address, PS5004_DT, 0);
     ps5004_trigger(address);
 }
@@ -4409,9 +4421,11 @@ void ps5004_clear_srq(int address) {
 }
 
 /* GET (manual p. 3-18) runs settings held by DT SET; both GPIB back ends
-   take Driver488's TRIGGER command */
+   take Driver488's TRIGGER command. In local GET is ignored (206), so go
+   remote first. */
 void ps5004_trigger(int address) {
     char cmd[16];
+    gpib_remote(address);
     sprintf(cmd, "TRIGGER %2d\r\n", address);
     ieee_write(cmd);
     GPIB_PACE(50);
@@ -4517,7 +4531,7 @@ void test_ps5004_comm(int address) {
     ps5004_config now;
     char *r;
     float v, a, v2, a2;
-    int slot = ps5004_slot_at(address), mode = 0, good = 0;
+    int slot = ps5004_slot_at(address), mode, good = 0;
 
     printf("\nTesting PS5004 at address %d (queries only)...\n", address);
 
@@ -4554,11 +4568,11 @@ void test_ps5004_comm(int address) {
         printf("  no reply\n");
     }
 
-    r = ps5004_query(address, "DISPLAY?");
-    if (r) mode = strstr(r, "CL") ? 2 : strstr(r, "CU") ? 1 : 0;
+    mode = ps5004_display_shown(address);
     printf("\nRegulation: %s\n", ps5004_regulation_name(ps5004_get_regulation_status(address)));
     if (ps5004_read_value(address, &v)) {
-        if (mode == 0) printf("Reading (SEND): %.4f V\n", v);
+        if (mode < 0) printf("Reading (SEND): %g (no reply to DISPLAY?)\n", v);
+        else if (mode == 0) printf("Reading (SEND): %.4f V\n", v);
         else printf("Reading (SEND): %.1f mA%s\n", v * 1000, mode == 2 ? " current limit" : "");
         good++;
     } else {
@@ -4960,12 +4974,14 @@ void single_measurement(void) {
                 break;
                 
             case MOD_PS5004:
-                /* SEND reads what DISPLAY selects (manual p. 3-6), so select it first */
+                /* SEND reads what DISPLAY selects (manual p. 3-6), so select it first.
+                   One-shot: always resend it, the front panel may have changed it. */
                 {
                     int mode = g_ps5004_config[slot].display_mode;
                     int reg_status = ps5004_get_regulation_status(g_system->modules[slot].gpib_address);
                     float reading;
 
+                    ps5004_forget_display(slot);
                     if (!ps5004_measure(slot, mode, &reading)) {
                         printf("No reply\n");
                         break;

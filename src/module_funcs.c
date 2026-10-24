@@ -630,11 +630,13 @@ static int ps5004_ask_choice(int max) {
 }
 
 /* Raw bytes of a binary-block reply. Shown only: the block format is not in
-   the manual (p. 3-10), and a 0Ah byte inside it ends the read early. */
+   the manual (p. 3-10), and a 0Ah byte inside it ends the read early, so the
+   tail is drained rather than left to answer the next query. */
 static void ps5004_show_block(int address, const char *query) {
     char *r;
     int i, n = ps5004_query_block(address, query, &r);
 
+    drain_input_buffer();
     printf("%s %d bytes:", query, n);
     for (i = 0; i < n && i < 40; i++) printf(" %02X", (unsigned char)r[i]);
     printf("\n");
@@ -661,15 +663,18 @@ static void ps5004_apply(int slot) {
     ps5004_release_dt(address);
     ps5004_send_flag(address, PS5004_RQS, 0);
     ps5004_show_errors(address, 0);     /* older events, and a 206 from the GET; report only Apply's */
+    /* Output OFF before the new voltage, so a live load never sees it; ON only after */
+    if (!cfg->output_enabled) ps5004_set_output(address, 0);
     ps5004_set_voltage(address, cfg->voltage);
     ps5004_set_current(address, cfg->current_limit);
     ps5004_forget_display(slot);
     ps5004_select_display(slot, cfg->display_mode);
     for (i = 0; i < 4; i++) ps5004_send_flag(address, plain[i], ps5004_flag(cfg, plain[i]));
-    ps5004_set_output(address, cfg->output_enabled);
+    if (cfg->output_enabled) ps5004_set_output(address, 1);
 
+    /* VRI/CRI/URI crossovers (724, 725) show up here too, so "codes", not "errors" */
     if (ps5004_show_errors(address, 1) == 0) printf("Settings applied\n");
-    else printf("The supply reported the errors above\n");
+    else printf("Settings sent; the supply reported the codes above\n");
     if (cfg->rqs_enabled) ps5004_send_flag(address, PS5004_RQS, 1);
     /* Last: after DT SET even RQS would wait for GET */
     if (cfg->dt_enabled) {
@@ -776,7 +781,7 @@ static void ps5004_utilities_menu(int slot) {
 
 void configure_ps5004_advanced(int slot) {
     static const char __far flag_keys[] = "3567x9A";    /* ps5004_flag() order; DT has its own prompt */
-    int choice, done = 0, temp_int;
+    int choice, done = 0, temp_int, shown;
     int address = g_system->modules[slot].gpib_address;
     ps5004_config *cfg = &g_ps5004_config[slot];
     ps5004_config now;
@@ -871,10 +876,16 @@ void configure_ps5004_advanced(int slot) {
                 printf("\n\nMeasuring...\n");
                 for (temp_int = 0; temp_int < 3; temp_int++) {
                     printf("%-20s", ps5004_disp_name[temp_int]);
-                    if (!ps5004_measure(slot, temp_int, &temp_float)) printf("no reply\n");
+                    ps5004_forget_display(slot);
+                    ps5004_select_display(slot, temp_int);
+                    /* Label by DISPLAY?: under DT SET the change waits for GET (p. 3-6) */
+                    shown = ps5004_display_shown(address);
+                    if (shown >= 0 && shown != temp_int) printf("not selected (DT SET? T sends GET)\n");
+                    else if (shown < 0 || !ps5004_read_value(address, &temp_float)) printf("no reply\n");
                     else if (temp_int == 0) printf("%.4f V\n", temp_float);
                     else printf("%.1f mA\n", temp_float * 1000);
                 }
+                ps5004_forget_display(slot);
                 ps5004_select_display(slot, cfg->display_mode);
                 printf("Regulation          %s\n", ps5004_regulation_name(ps5004_get_regulation_status(address)));
                 printf("\nPress any key to continue...");
