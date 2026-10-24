@@ -965,20 +965,14 @@ void save_ps5010_config(FILE *fp, int slot) {
     ps5010_config *cfg = &g_ps5010_config[slot];
     
     fprintf(fp, "Slot%d:PS5010\n", slot);
-    fprintf(fp, "voltage1=%.6f|current_limit1=%.6f|output1_enabled=%d|\n",
-            cfg->voltage1, cfg->current_limit1, cfg->output1_enabled);
-    fprintf(fp, "voltage2=%.6f|current_limit2=%.6f|output2_enabled=%d|\n",
-            cfg->voltage2, cfg->current_limit2, cfg->output2_enabled);
-    fprintf(fp, "logic_voltage=%.6f|logic_current_limit=%.6f|logic_enabled=%d|\n",
-            cfg->logic_voltage, cfg->logic_current_limit, cfg->logic_enabled);
-    fprintf(fp, "tracking_mode=%d|tracking_ratio=%.6f|display_channel=%d|display_mode=%d|\n",
-            cfg->tracking_mode, cfg->tracking_ratio, cfg->display_channel, cfg->display_mode);
-    fprintf(fp, "ovp_enabled=%d|ovp_level1=%.6f|ovp_level2=%.6f|\n",
-            cfg->ovp_enabled, cfg->ovp_level1, cfg->ovp_level2);
-    fprintf(fp, "cv_mode1=%d|cc_mode1=%d|cv_mode2=%d|cc_mode2=%d|\n",
-            cfg->cv_mode1, cfg->cc_mode1, cfg->cv_mode2, cfg->cc_mode2);
-    fprintf(fp, "srq_enabled=%d|error_queue_size=%d|lf_termination=%d\n",
-            cfg->srq_enabled, cfg->error_queue_size, cfg->lf_termination);
+    fprintf(fp, "voltage1=%.6f|current_limit1=%.6f|voltage2=%.6f|current_limit2=%.6f|\n",
+            cfg->voltage1, cfg->current_limit1, cfg->voltage2, cfg->current_limit2);
+    fprintf(fp, "logic_voltage=%.6f|logic_current_limit=%.6f|high_power=%d|\n",
+            cfg->logic_voltage, cfg->logic_current_limit, cfg->high_power);
+    fprintf(fp, "fsout_enabled=%d|logic_enabled=%d|srq_enabled=%d|pri_enabled=%d|\n",
+            cfg->fsout_enabled, cfg->logic_enabled, cfg->srq_enabled, cfg->pri_enabled);
+    fprintf(fp, "nri_enabled=%d|lri_enabled=%d|user_enabled=%d|dt_enabled=%d\n",
+            cfg->nri_enabled, cfg->lri_enabled, cfg->user_enabled, cfg->dt_enabled);
 }
 
 /* DC5009 and DC5010 share one config layout */
@@ -1162,27 +1156,21 @@ int load_ps5010_config(FILE *fp, int slot, char *line, int line_size) {
             if (sscanf(token, "%[^=]=%s", key, value) == 2) {
                 if (strcmp(key, "voltage1") == 0) cfg->voltage1 = (float)atof(value);
                 else if (strcmp(key, "current_limit1") == 0) cfg->current_limit1 = (float)atof(value);
-                else if (strcmp(key, "output1_enabled") == 0) cfg->output1_enabled = atoi(value);
                 else if (strcmp(key, "voltage2") == 0) cfg->voltage2 = (float)atof(value);
                 else if (strcmp(key, "current_limit2") == 0) cfg->current_limit2 = (float)atof(value);
-                else if (strcmp(key, "output2_enabled") == 0) cfg->output2_enabled = atoi(value);
                 else if (strcmp(key, "logic_voltage") == 0) cfg->logic_voltage = (float)atof(value);
                 else if (strcmp(key, "logic_current_limit") == 0) cfg->logic_current_limit = (float)atof(value);
-                else if (strcmp(key, "logic_enabled") == 0) cfg->logic_enabled = atoi(value);
-                else if (strcmp(key, "tracking_mode") == 0) cfg->tracking_mode = atoi(value);
-                else if (strcmp(key, "tracking_ratio") == 0) cfg->tracking_ratio = (float)atof(value);
-                else if (strcmp(key, "display_channel") == 0) cfg->display_channel = atoi(value);
-                else if (strcmp(key, "display_mode") == 0) cfg->display_mode = atoi(value);
-                else if (strcmp(key, "ovp_enabled") == 0) cfg->ovp_enabled = atoi(value);
-                else if (strcmp(key, "ovp_level1") == 0) cfg->ovp_level1 = (float)atof(value);
-                else if (strcmp(key, "ovp_level2") == 0) cfg->ovp_level2 = (float)atof(value);
-                else if (strcmp(key, "cv_mode1") == 0) cfg->cv_mode1 = atoi(value);
-                else if (strcmp(key, "cc_mode1") == 0) cfg->cc_mode1 = atoi(value);
-                else if (strcmp(key, "cv_mode2") == 0) cfg->cv_mode2 = atoi(value);
-                else if (strcmp(key, "cc_mode2") == 0) cfg->cc_mode2 = atoi(value);
-                else if (strcmp(key, "srq_enabled") == 0) cfg->srq_enabled = atoi(value);
-                else if (strcmp(key, "error_queue_size") == 0) cfg->error_queue_size = atoi(value);
-                else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = atoi(value);
+                else if (strcmp(key, "high_power") == 0) cfg->high_power = atoi(value) != 0;
+                /* output1_enabled: v3.7's CH1 flag, the one that sent FSOUT */
+                else if (strcmp(key, "fsout_enabled") == 0 || strcmp(key, "output1_enabled") == 0)
+                    cfg->fsout_enabled = atoi(value) != 0;
+                else if (strcmp(key, "logic_enabled") == 0) cfg->logic_enabled = atoi(value) != 0;
+                else if (strcmp(key, "srq_enabled") == 0) cfg->srq_enabled = atoi(value) != 0;
+                else if (strcmp(key, "pri_enabled") == 0) cfg->pri_enabled = atoi(value) != 0;
+                else if (strcmp(key, "nri_enabled") == 0) cfg->nri_enabled = atoi(value) != 0;
+                else if (strcmp(key, "lri_enabled") == 0) cfg->lri_enabled = atoi(value) != 0;
+                else if (strcmp(key, "user_enabled") == 0) cfg->user_enabled = atoi(value) != 0;
+                else if (strcmp(key, "dt_enabled") == 0) cfg->dt_enabled = atoi(value) != 0;
             }
             token = strtok(NULL, "|");
         }

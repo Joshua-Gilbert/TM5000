@@ -293,36 +293,31 @@ typedef struct {
     unsigned int reserved:7;
 } ps5004_config;
 
+/* PS5010 slot settings, sent by Apply. Stored raw in PROFILES.DAT: the layout is
+   the v3.7 one, with bits that never held a setting renamed. */
 typedef struct {
-    /* Positive/Negative Floating Supplies - Constant Voltage Mode: 0 to ±32V */
-    float voltage1;             /* Positive supply voltage (0 to +32V) */
-    float current_limit1;       /* Current limit Ch1: 50mA-750mA (1.6A @ ≤15V) */
-    float voltage2;             /* Negative supply voltage (0 to -32V) */
-    float current_limit2;       /* Current limit Ch2: 50mA-750mA (1.6A @ ≤15V) */
-    
-    /* Logic Supply - Constant Voltage Mode: 4.5-5.5V */
-    float logic_voltage;        /* Logic supply voltage (4.5-5.5V) */
-    float logic_current_limit;  /* Logic current limit (100mA-3.0A) */
-    float tracking_ratio;       /* Ratio for asymmetric tracking */
-    float ovp_level1;           /* OVP threshold channel 1 */
-    float ovp_level2;           /* OVP threshold channel 2 */
-    
-    unsigned char tracking_mode;          /* 0=Independent, 1=Series, 2=Parallel */
-    unsigned char display_channel;        /* 0=Ch1, 1=Ch2, 2=Logic */
-    unsigned char display_mode;           /* 0=Voltage, 1=Current */
-    unsigned char error_queue_size;       /* Number of errors in queue */
-    
-    unsigned int output1_enabled:1;
-    unsigned int output2_enabled:1;
-    unsigned int logic_enabled:1;
-    unsigned int ovp_enabled:1;            /* Over voltage protection */
-    unsigned int cv_mode1:1;               /* Ch1 constant voltage */
-    unsigned int cc_mode1:1;               /* Ch1 constant current */
-    unsigned int cv_mode2:1;               /* Ch2 constant voltage */
-    unsigned int cc_mode2:1;               /* Ch2 constant current */
-    unsigned int srq_enabled:1;
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:6;
+    float voltage1;             /* VPOS, 0-32 V */
+    float current_limit1;       /* IPOS, 0.05 A steps; max per compartment */
+    float voltage2;             /* VNEG magnitude, 0-32 V */
+    float current_limit2;       /* INEG */
+    float logic_voltage;        /* VLOG, 4.50-5.50 V */
+    float logic_current_limit;  /* ILOG, 0.1-3.0 A in 0.1 A steps */
+    float unused_f[3];          /* no PS5010 command: tracking ratio, OVP levels */
+    unsigned char unused_c[4];  /* no PS5010 command: tracking/display modes */
+
+    unsigned int fsout_enabled:1;   /* FSOUT: + and - floating supplies switch together */
+    unsigned int unused_out2:1;     /* was a CH2 output flag; the supply has no such switch */
+    unsigned int logic_enabled:1;   /* LSOUT */
+    unsigned int high_power:1;      /* in the high-power compartment (was OVP, always 0) */
+    unsigned int unused_b:4;
+    unsigned int srq_enabled:1;     /* RQS */
+    unsigned int unused_lf:1;
+    unsigned int pri_enabled:1;     /* regulation-change SRQs, manual p. 3-8..3-10 */
+    unsigned int nri_enabled:1;
+    unsigned int lri_enabled:1;
+    unsigned int user_enabled:1;    /* USER: SRQ on the INST ID button */
+    unsigned int dt_enabled:1;      /* DT SET: new settings wait for GET */
+    unsigned int reserved:1;
 } ps5010_config;
 
 /* DC5009 and DC5010 share one layout, the same size as before. Fields a model

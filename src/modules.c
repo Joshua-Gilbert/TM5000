@@ -5200,259 +5200,202 @@ void test_ps5004_comm(int address) {
     getch();
 }
 
-/* PS5010 triple power supply */
-void init_ps5010_config(int slot) {
-    ps5010_config *cfg = &g_ps5010_config[slot];
-    
-    cfg->voltage1 = 0.0;        /* Positive supply (0 to +32V) */
-    cfg->current_limit1 = 0.1;  /* 100mA default (50mA-750mA range, 1.6A @ ≤15V) */
-    cfg->output1_enabled = 0;
-    
-    cfg->voltage2 = 0.0;        /* Negative supply (0 to -32V) */
-    cfg->current_limit2 = 0.1;  /* 100mA default (50mA-750mA range, 1.6A @ ≤15V) */
-    cfg->output2_enabled = 0;
-    
-    cfg->logic_voltage = 5.0;   /* Logic supply (4.5-5.5V range) */
-    cfg->logic_current_limit = 1.0;  /* 1A default (100mA-3.0A range) */
-    cfg->logic_enabled = 0;
-    
-    cfg->tracking_mode = 0;  /* Independent */
-    cfg->tracking_ratio = 1.0;  /* 1:1 tracking */
-    
-    cfg->display_channel = 0;  /* Show channel 1 */
-    cfg->display_mode = 0;     /* Show voltage */
-    
-    cfg->ovp_enabled = 0;
-    cfg->ovp_level1 = 35.0;  /* Just above 32V max */
-    cfg->ovp_level2 = 35.0;
-    
-    cfg->cv_mode1 = 1;
-    cfg->cc_mode1 = 0;
-    cfg->cv_mode2 = 1;
-    cfg->cc_mode2 = 0;
-    
-    cfg->srq_enabled = 1;
-    cfg->error_queue_size = 0;
-    cfg->lf_termination = 0;  /* Default to CRLF */
-}
-void ps5010_init(int address) {
-    gpib_write(address, "INIT");
-    delay(500);  /* PS5010 needs time for reset */
-}
-void ps5010_set_voltage(int address, int channel, float voltage) {
-    
-    switch(channel) {
-        case 1:  /* Positive floating supply */
-            if (voltage < 0.0) voltage = 0.0;
-            if (voltage > 32.0) voltage = 32.0;
-            sprintf(gpib_cmd_buffer, "VPOS %.1f", voltage);
-            break;
-        case 2:  /* Negative floating supply */
-            if (voltage < 0.0) voltage = 0.0;
-            if (voltage > 32.0) voltage = 32.0;
-            sprintf(gpib_cmd_buffer, "VNEG %.1f", voltage);
-            break;
-        case 3:  /* Logic supply */
-            if (voltage < 4.5) voltage = 4.5;
-            if (voltage > 5.5) voltage = 5.5;
-            sprintf(gpib_cmd_buffer, "VLOG %.1f", voltage);
-            break;
-        default:
-            return;  /* Invalid channel */
+/* PS5010 triple power supply, manual 070-3391-00. Every reply carries a header
+   ("VPOS 29.7;", and "ILOGIC 1.6;" for ILOG?) and there is no header-off command
+   (p. 3-2). The supply measures nothing: REG? is its only read-back. */
+const char * const __far ps5010_flag_cmd[PS5010_NFLAGS] = {
+    "FSOUT", "LSOUT", "PRI", "NRI", "LRI", "RQS", "USER", "DT"
+};
+
+int ps5010_get_flag(const ps5010_config *cfg, int i) {
+    switch (i) {
+        case 0: return cfg->fsout_enabled;
+        case 1: return cfg->logic_enabled;
+        case 2: return cfg->pri_enabled;
+        case 3: return cfg->nri_enabled;
+        case 4: return cfg->lri_enabled;
+        case 5: return cfg->srq_enabled;
+        case 6: return cfg->user_enabled;
+        case 7: return cfg->dt_enabled;
     }
-    
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-void ps5010_set_current(int address, int channel, float current) {
-    
-    switch(channel) {
-        case 1:  /* Positive supply */
-            if (current < 0.050) current = 0.050;  /* 50mA minimum */
-            if (current > 0.750) current = 0.750;  /* 750mA maximum (1.6A @ ≤15V) */
-            sprintf(gpib_cmd_buffer, "IPOS %.3f", current);
-            break;
-        case 2:  /* Negative supply */
-            if (current < 0.050) current = 0.050;  /* 50mA minimum */
-            if (current > 0.750) current = 0.750;  /* 750mA maximum (1.6A @ ≤15V) */
-            sprintf(gpib_cmd_buffer, "INEG %.3f", current);
-            break;
-        case 3:  /* Logic supply */
-            if (current < 0.100) current = 0.100;  /* 100mA minimum */
-            if (current > 3.0) current = 3.0;      /* 3.0A maximum */
-            sprintf(gpib_cmd_buffer, "ILOG %.3f", current);
-            break;
-        default:
-            return;
-    }
-    
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-void ps5010_set_output(int address, int channel, int on) {
-    
-    switch(channel) {
-        case 0:  /* All outputs */
-            sprintf(gpib_cmd_buffer, "OUT %s", on ? "ON" : "OFF");
-            break;
-        case 1:  /* Floating supplies only */
-            sprintf(gpib_cmd_buffer, "FSOUT %s", on ? "ON" : "OFF");
-            break;
-        case 2:  /* Logic supply only */
-            sprintf(gpib_cmd_buffer, "LSOUT %s", on ? "ON" : "OFF");
-            break;
-        default:
-            return;
-    }
-    
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-void ps5010_set_tracking_voltage(int address, float voltage) {
-    
-    if (voltage < 0.0) voltage = 0.0;
-    if (voltage > 40.0) voltage = 40.0;
-    
-    sprintf(gpib_cmd_buffer, "VTRA %.1f", voltage);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-int ps5010_read_regulation(int address, int *neg_stat, int *pos_stat, int *log_stat) {
-    
-    
-    gpib_write(address, "REG?");
-    GPIB_PACE(100);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        /* REG returns <neg>,<pos>,<logic> where:
-           1 = voltage regulation
-           2 = current regulation
-           3 = unregulated */
-        if (sscanf(gpib_response_buffer, "%d,%d,%d", neg_stat, pos_stat, log_stat) == 3) {
-            return 1;  /* Success */
-        }
-    }
-    
-    return 0;  /* Failed */
-}
-int ps5010_get_settings(int address, char *buffer, int maxlen) {
-    gpib_write(address, "SET?");
-    GPIB_PACE(100);
-    return gpib_read(address, gpib_response_buffer, maxlen);
-}
-int ps5010_get_error(int address) {
-    
-    int error_code = 0;
-    
-    gpib_write(address, "ERR?");
-    GPIB_PACE(50);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        sscanf(gpib_response_buffer, "%d", &error_code);
-    }
-    
-    return error_code;
-}
-void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on) {
-    gpib_write(address, pri_on ? "PRI ON" : "PRI OFF");
-    GPIB_PACE(50);
-    gpib_write(address, nri_on ? "NRI ON" : "NRI OFF");
-    GPIB_PACE(50);
-    gpib_write(address, lri_on ? "LRI ON" : "LRI OFF");
-    GPIB_PACE(50);
-}
-void ps5010_set_srq(int address, int on) {
-    gpib_write(address, on ? "RQS ON" : "RQS OFF");
-    GPIB_PACE(50);
+    return 0;
 }
 
+void ps5010_set_flag(ps5010_config *cfg, int i, int on) {
+    on = on ? 1 : 0;
+    switch (i) {
+        case 0: cfg->fsout_enabled = on; break;
+        case 1: cfg->logic_enabled = on; break;
+        case 2: cfg->pri_enabled = on; break;
+        case 3: cfg->nri_enabled = on; break;
+        case 4: cfg->lri_enabled = on; break;
+        case 5: cfg->srq_enabled = on; break;
+        case 6: cfg->user_enabled = on; break;
+        case 7: cfg->dt_enabled = on; break;
+    }
+}
+
+/* The supply's power-on/INIT settings, Table 3-3 (p. 3-22): outputs OFF */
+void init_ps5010_config(int slot) {
+    ps5010_config *cfg = &g_ps5010_config[slot];
+
+    memset(cfg, 0, sizeof(*cfg));
+    cfg->current_limit1 = 0.4f;
+    cfg->current_limit2 = 0.4f;
+    cfg->logic_voltage = 5.0f;
+    cfg->logic_current_limit = 1.0f;
+    cfg->srq_enabled = 1;
+}
+
+/* Floating current limit range, p. 3-5/3-6: 0.75 A (1.6 A at 15 V and below) in
+   the high-power compartment, 0.40 A (0.75 A at 15 V and below) in a standard one */
+float ps5010_max_current(int high_power, float volts) {
+    if (volts <= 15.0f) return high_power ? 1.6f : 0.75f;
+    return high_power ? 0.75f : 0.40f;
+}
+
+/* Nearest unit of resolution, as the supply itself rounds (p. 3-17) */
+float ps5010_round(float v, float step) {
+    return (float)floor(v / step + 0.5f) * step;
+}
+
+/* Reply length without the terminator, 0 if none */
+int ps5010_query(int address, const char *query, char *buf, int maxlen) {
+    int n;
+
+    buf[0] = '\0';
+    if (gpib_write(address, (char *)query) < 0) return 0;
+    GPIB_PACE(20);
+    n = gpib_read(address, buf, maxlen);
+    if (n <= 0) {
+        buf[0] = '\0';
+        return 0;
+    }
+    buf[strcspn(buf, "\r\n")] = '\0';
+    return strlen(buf);
+}
+
+/* Argument after the reply's header, or NULL */
+static const char *ps5010_arg(const char *reply) {
+    const char *p = reply + strspn(reply, " ");
+    p += strcspn(p, " ");
+    if (*p == '\0') return NULL;
+    return p + strspn(p, " ");
+}
+
+int ps5010_query_value(int address, const char *query, float *value) {
+    static char __far r[40];
+    const char *p;
+
+    if (!ps5010_query(address, query, r, sizeof(r)) || (p = ps5010_arg(r)) == NULL) return 0;
+    return sscanf(p, "%f", value) == 1;
+}
+
+/* 1 for ON or SET, 0 for OFF, -1 for no reply */
+int ps5010_query_on(int address, const char *query) {
+    static char __far r[24];
+    const char *p;
+
+    if (!ps5010_query(address, query, r, sizeof(r)) || (p = ps5010_arg(r)) == NULL) return -1;
+    if (strncmp(p, "OFF", 3) == 0) return 0;
+    return (strncmp(p, "ON", 2) == 0 || strncmp(p, "SET", 3) == 0) ? 1 : -1;
+}
+
+/* REG <neg>,<pos>,<logic>, each 1 CV, 2 CC, 3 unregulated (p. 3-10). No printf:
+   the monitor loop calls this. */
+int ps5010_read_regulation(int address, int *neg_stat, int *pos_stat, int *log_stat) {
+    static char __far r[32];
+    const char *p;
+
+    if (!ps5010_query(address, "REG?", r, sizeof(r)) || (p = ps5010_arg(r)) == NULL) return 0;
+    return sscanf(p, "%d,%d,%d", neg_stat, pos_stat, log_stat) == 3;
+}
+
+const char *ps5010_reg_text(int code) {
+    return code == 1 ? "CV" : code == 2 ? "CC" : code == 3 ? "UR" : "??";
+}
+
+/* ERR? codes, Table 3-1 (p. 3-21) */
+static const int __far ps5010_err_code[] = {
+    101, 102, 103, 104, 106, 107, 108, 109,
+    201, 202, 203, 204, 205, 206, 302, 303, 401, 403
+};
+static const char * const __far ps5010_err_msg[] = {
+    "command header error", "header delimiter error", "command argument error",
+    "argument delimiter error", "missing argument", "invalid message unit delimiter",
+    "binary block checksum error", "binary block byte counter error",
+    "command not executable in local mode", "returned to local, pending settings lost",
+    "I/O buffers full, output dumped", "settings conflict",
+    "argument out of range", "GET ignored", "system error", "math pack error",
+    "power on", "user request (INST ID button)"
+};
+
+const char *ps5010_error_text(int code) {
+    static char __far buf[48];
+    static const char * const __far sup[] = { "negative", "positive", "logic" };
+    static const char * const __far mode[] = { "constant voltage", "constant current", "unregulated" };
+    int i;
+
+    if (code >= 721 && code <= 729) {
+        sprintf(buf, "%s supply went to %s", sup[(code - 721) / 3], mode[(code - 721) % 3]);
+        return buf;
+    }
+    for (i = 0; i < (int)(sizeof(ps5010_err_code) / sizeof(ps5010_err_code[0])); i++) {
+        if (ps5010_err_code[i] == code) return ps5010_err_msg[i];
+    }
+    return "unknown code";
+}
+
+/* Print every pending error and event; returns how many were errors (below 400),
+   or -1 if ERR? got no reply, so callers never take silence for success.
+   With RQS ON, ERR? only reports what a serial poll already delivered, so RQS is
+   off for the drain and restored after (p. 3-3, 3-22). Needs remote: RQS is a
+   setting. Prints, so never from the monitor loop. */
+int ps5010_show_errors(int address) {
+    float v;
+    int i, code, errors = 0;
+    int rqs = ps5010_query_on(address, "RQS?");
+
+    if (rqs == 1) gpib_write(address, "RQS OFF");
+    else if (rqs < 0) printf("  No reply to RQS?: errors already reported by SRQ may not show\n");
+    for (i = 0; i < 12; i++) {
+        if (!ps5010_query_value(address, "ERR?", &v)) {
+            printf("  No reply to ERR?\n");
+            if (i == 0) errors = -1;
+            break;
+        }
+        code = (int)v;
+        if (code == 0) break;
+        printf("  %s %d: %s\n", code < 400 ? "ERROR" : "Event", code, ps5010_error_text(code));
+        if (code < 400) errors++;
+    }
+    if (rqs == 1) gpib_write(address, "RQS ON");
+    return errors;
+}
+
+/* Read only: no supply setting changes and no output switches */
 void test_ps5010_comm(int address) {
-    
+    static char __far buf[160];   /* SET? is about 120 characters (p. 3-11) */
     int neg_stat, pos_stat, log_stat;
-    
-    printf("\nTesting PS5010 at address %d...\n", address);
-    
-    printf("Setting REMOTE mode...\n");
+
+    printf("\nTesting PS5010 at address %d (read only)...\n", address);
     gpib_remote(address);
     GPIB_PACE(200);
-    
-    printf("\nResetting PS5010...\n");
-    ps5010_init(address);
-    
-    printf("\nGetting ID...\n");
-    gpib_write(address, "ID?");
-    GPIB_PACE(100);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-    } else {
-        printf("No ID response\n");
-    }
-    
-    printf("\nSetting test voltages...\n");
-    ps5010_set_voltage(address, 1, 5.0);   /* VPOS 5.0 */
-    ps5010_set_voltage(address, 2, 12.0);  /* VNEG 12.0 */
-    ps5010_set_current(address, 1, 0.1);   /* IPOS 0.1 */
-    ps5010_set_current(address, 2, 0.1);   /* INEG 0.1 */
-    ps5010_set_voltage(address, 3, 5.0);   /* VLOG 5.0 */
-    ps5010_set_current(address, 3, 1.0);   /* ILOG 1.0 */
-    
-    printf("\nQuerying settings...\n");
-    if (ps5010_get_settings(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-    }
-    
-    printf("\nReading regulation status...\n");
+
+    printf("\nID?  %s\n", ps5010_query(address, "ID?", buf, sizeof(buf)) ? buf : "No response");
+    printf("SET? %s\n", ps5010_query(address, "SET?", buf, sizeof(buf)) ? buf : "No response");
+    printf("OUT? %s\n", ps5010_query(address, "OUT?", buf, sizeof(buf)) ? buf : "No response");
     if (ps5010_read_regulation(address, &neg_stat, &pos_stat, &log_stat)) {
-        printf("Negative supply: %s\n", 
-               neg_stat == 1 ? "Voltage regulation (CV)" : 
-               (neg_stat == 2 ? "Current regulation (CC)" : "Unregulated"));
-        printf("Positive supply: %s\n",
-               pos_stat == 1 ? "Voltage regulation (CV)" : 
-               (pos_stat == 2 ? "Current regulation (CC)" : "Unregulated"));
-        printf("Logic supply: %s\n",
-               log_stat == 1 ? "Voltage regulation (CV)" : 
-               (log_stat == 2 ? "Current regulation (CC)" : "Unregulated"));
+        printf("REG? negative %s, positive %s, logic %s\n", ps5010_reg_text(neg_stat),
+               ps5010_reg_text(pos_stat), ps5010_reg_text(log_stat));
+    } else {
+        printf("REG? No response\n");
     }
-    
-    printf("\nTesting VTRA (tracking voltage) command...\n");
-    ps5010_set_tracking_voltage(address, 10.0);
-    GPIB_PACE(200);
-    printf("Set both POS and NEG to 10V using VTRA\n");
-    
-    printf("\nChecking error status...\n");
-    gpib_write(address, "ERR?");
-    GPIB_PACE(50);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        int error_code = atoi(gpib_response_buffer);
-        if (error_code == 0) {
-            printf("No errors\n");
-        } else {
-            printf("Error code: %d\n", error_code);
-        }
-    }
-    
-    printf("\nTesting output control...\n");
-    ps5010_set_output(address, 0, 0);  /* All outputs OFF */
-    printf("All outputs OFF\n");
-    delay(500);
-    
-    ps5010_set_output(address, 1, 1);  /* Floating supplies ON */
-    printf("Floating supplies ON\n");
-    delay(500);
-    
-    ps5010_set_output(address, 2, 1);  /* Logic supply ON */
-    printf("Logic supply ON\n");
-    
-    printf("\nFinal settings check...\n");
-    if (ps5010_get_settings(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-    }
-    
-    printf("\nNote: PS5010 cannot measure output voltage/current.\n");
-    printf("It can only report regulation status (CV/CC/UR).\n");
-    printf("Use an external DMM to verify actual output values.\n");
-    
+    printf("\nErrors and events (ERR?):\n");
+    if (ps5010_show_errors(address) == 0) printf("  No errors\n");
+
+    printf("\nThe PS5010 can't measure its outputs; REG? (CV/CC/unregulated) is its\n");
+    printf("only read-back. Use a DMM to check output values.\n");
     printf("\nTest complete. Press any key to continue...");
     getch();
 }
@@ -5561,14 +5504,13 @@ void single_measurement(void) {
                 break;
                 
             case MOD_PS5010:
-                /* Power supply regulation status */
+                /* Regulation status is the supply's only read-back */
                 {
                     int neg_stat, pos_stat, log_stat;
                     if (ps5010_read_regulation(g_system->modules[slot].gpib_address, &neg_stat, &pos_stat, &log_stat)) {
-                        printf("POS:%s NEG:%s LOG:%s\n",
-                               pos_stat == 1 ? "CV" : (pos_stat == 2 ? "CC" : "UR"),
-                               neg_stat == 1 ? "CV" : (neg_stat == 2 ? "CC" : "UR"),
-                               log_stat == 1 ? "CV" : (log_stat == 2 ? "CC" : "UR"));
+                        printf("POS:%s NEG:%s LOG:%s\n", ps5010_reg_text(pos_stat),
+                               ps5010_reg_text(neg_stat), ps5010_reg_text(log_stat));
+                        g_system->modules[slot].last_reading = neg_stat * 100 + pos_stat * 10 + log_stat;
                     } else {
                         printf("Communication Error\n");
                     }
@@ -5995,19 +5937,19 @@ void continuous_monitor(void) {
                             
                         case MOD_PS5010:  
                             {
-                                ps5010_config *ps_cfg = &g_ps5010_config[i];
                                 int neg_stat, pos_stat, log_stat;
-                                
+
+                                /* The supply measures nothing: store REG? in its own order,
+                                   neg*100 + pos*10 + logic (1 CV, 2 CC, 3 unregulated), so
+                                   111 is all CV and a jump marks a supply leaving CV */
                                 if (ps5010_read_regulation(g_system->modules[i].gpib_address,
                                                           &neg_stat, &pos_stat, &log_stat)) {
-                                    lp("P:%s N:%s L:%s     ",
-                                           pos_stat == 1 ? "CV" : (pos_stat == 2 ? "CC" : "UR"),
-                                           neg_stat == 1 ? "CV" : (neg_stat == 2 ? "CC" : "UR"),
-                                           log_stat == 1 ? "CV" : (log_stat == 2 ? "CC" : "UR"));
-                                    value = 0.0;
+                                    lp("P:%s N:%s L:%s     ", ps5010_reg_text(pos_stat),
+                                       ps5010_reg_text(neg_stat), ps5010_reg_text(log_stat));
+                                    value = neg_stat * 100 + pos_stat * 10 + log_stat;
                                 } else {
                                     lp("No status         ");
-                                    value = 0.0;
+                                    value = g_system->modules[i].last_reading;
                                 }
                             }
                             break;
