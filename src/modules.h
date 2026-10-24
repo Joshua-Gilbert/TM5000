@@ -83,16 +83,13 @@ void dm5120_reset_buffer_async(int slot);
 /* DM5010 functions */
 void init_dm5010_config(int slot);
 void configure_dm5010_advanced(int slot);
-void dm5010_set_function(int address, char *function);
-void dm5010_set_range(int address, char *function, float range);
-void dm5010_set_filter(int address, int enabled, int count);
-void dm5010_set_trigger(int address, char *mode);
-void dm5010_set_autozero(int address, int enabled);
-void dm5010_set_null(int address, int enabled, float value);
-void dm5010_set_calculation(int address, int mode, float factor, float offset);
-void dm5010_beeper(int address, int enabled);
-void dm5010_lock_front_panel(int address, int locked);
-float read_dm5010_enhanced(int address, int slot);
+void dm5010_fix_legacy_config(int slot);
+#define DM5010_READ_NONE 0      /* no reply or no number */
+#define DM5010_READ_OK   1
+#define DM5010_READ_OVER 2      /* +-1.E+99 */
+int dm5010_read(int address, int slot, double *value);
+const char *dm5010_unit(int slot);
+void dm5010_format(int slot, int r, double v, char *out);
 void test_dm5010_comm(int address);
 
 /* PS5004 functions */

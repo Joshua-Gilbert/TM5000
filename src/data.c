@@ -935,17 +935,18 @@ void save_dm5120_config(FILE *fp, int slot) {
 void save_dm5010_config(FILE *fp, int slot) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     
+    /* Lines stay under the loader's 128-byte line buffer */
     fprintf(fp, "Slot%d:DM5010\n", slot);
-    fprintf(fp, "function=%s|range_mode=%d|filter_enabled=%d|filter_count=%d|trigger_mode=%d|\n",
-            cfg->function, cfg->range_mode, cfg->filter_enabled, cfg->filter_count, cfg->trigger_mode);
-    fprintf(fp, "digits=%d|nullval=%.6f|null_enabled=%d|data_format=%d|auto_zero=%d|\n",
-            cfg->digits, cfg->nullval, cfg->null_enabled, cfg->data_format, cfg->auto_zero);
-    fprintf(fp, "calculation_mode=%d|scale_factor=%.6f|scale_offset=%.6f|avg_count=%d|\n",
-            cfg->calculation_mode, cfg->scale_factor, cfg->scale_offset, cfg->avg_count);
-    fprintf(fp, "dbm_reference=%.6f|dbr_reference=%.6f|beeper_enabled=%d|front_panel_lock=%d|\n",
-            cfg->dbm_reference, cfg->dbr_reference, cfg->beeper_enabled, cfg->front_panel_lock);
-    fprintf(fp, "high_speed_mode=%d|statistics_enabled=%d|lf_termination=%d\n",
-            cfg->high_speed_mode, cfg->statistics_enabled, cfg->lf_termination);
+    fprintf(fp, "function=%s|range_mode=%d|trigger_mode=%d|dt_trig=%d|high_speed_mode=%d|lfr_on=%d|\n",
+            cfg->function, cfg->range_mode, cfg->trigger_mode, cfg->dt_trig, cfg->high_speed_mode, cfg->lfr_on);
+    fprintf(fp, "source_front=%d|nullval=%.7g|null_enabled=%d|filter_enabled=%d|avg_count=%d|\n",
+            cfg->source_front, cfg->nullval, cfg->null_enabled, cfg->filter_enabled, cfg->avg_count);
+    fprintf(fp, "ratio_on=%d|scale_factor=%.7g|scale_offset=%.7g|calculation_mode=%d|dbr_reference=%.7g|\n",
+            cfg->ratio_on, cfg->scale_factor, cfg->scale_offset, cfg->calculation_mode, cfg->dbr_reference);
+    fprintf(fp, "cmpr_on=%d|limit_hi=%.7g|limit_lo=%.7g|monitor_on=%d|opc_on=%d|over_on=%d|user_on=%d|\n",
+            cfg->cmpr_on, cfg->limit_hi, cfg->limit_lo, cfg->monitor_on, cfg->opc_on, cfg->over_on, cfg->user_on);
+    fprintf(fp, "rqs_on=%d|statistics_enabled=%d|lf_termination=%d\n",
+            cfg->rqs_on, cfg->statistics_enabled, cfg->lf_termination);
 }
 
 void save_ps5004_config(FILE *fp, int slot) {
@@ -1073,41 +1074,55 @@ int load_dm5010_config(FILE *fp, int slot, char *line, int line_size) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     char key[64], value[64];
     char *token;
+    int n, more = 0;
 
+    /* v3.7 files also hold SCPI-era keys (digits, auto_zero, beeper_enabled...);
+       they have no DM5010 counterpart and are skipped */
     while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            more = 1;
+            break;
         }
-        
+
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
-                if (strcmp(key, "function") == 0) strcpy(cfg->function, value);
-                else if (strcmp(key, "range_mode") == 0) cfg->range_mode = atoi(value);
-                else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = atoi(value);
-                else if (strcmp(key, "filter_count") == 0) cfg->filter_count = atoi(value);
-                else if (strcmp(key, "trigger_mode") == 0) cfg->trigger_mode = atoi(value);
-                else if (strcmp(key, "digits") == 0) cfg->digits = atoi(value);
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
+                n = atoi(value);
+                if (strcmp(key, "function") == 0) {
+                    strncpy(cfg->function, value, sizeof(cfg->function) - 1);
+                    cfg->function[sizeof(cfg->function) - 1] = '\0';
+                }
+                else if (strcmp(key, "range_mode") == 0) cfg->range_mode = n;
+                else if (strcmp(key, "trigger_mode") == 0) cfg->trigger_mode = n;
+                else if (strcmp(key, "dt_trig") == 0) cfg->dt_trig = n != 0;
+                else if (strcmp(key, "high_speed_mode") == 0) cfg->high_speed_mode = n != 0;
+                else if (strcmp(key, "lfr_on") == 0) cfg->lfr_on = n != 0;
+                else if (strcmp(key, "source_front") == 0) cfg->source_front = n != 0;
                 else if (strcmp(key, "nullval") == 0) cfg->nullval = (float)atof(value);
-                else if (strcmp(key, "null_enabled") == 0) cfg->null_enabled = atoi(value);
-                else if (strcmp(key, "data_format") == 0) cfg->data_format = atoi(value);
-                else if (strcmp(key, "auto_zero") == 0) cfg->auto_zero = atoi(value);
-                else if (strcmp(key, "calculation_mode") == 0) cfg->calculation_mode = atoi(value);
+                else if (strcmp(key, "null_enabled") == 0) cfg->null_enabled = n != 0;
+                else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = n != 0;
+                else if (strcmp(key, "avg_count") == 0) cfg->avg_count = n > 255 ? 255 : n < 1 ? 2 : n;
+                else if (strcmp(key, "ratio_on") == 0) cfg->ratio_on = n != 0;
                 else if (strcmp(key, "scale_factor") == 0) cfg->scale_factor = (float)atof(value);
                 else if (strcmp(key, "scale_offset") == 0) cfg->scale_offset = (float)atof(value);
-                else if (strcmp(key, "avg_count") == 0) cfg->avg_count = atoi(value);
-                else if (strcmp(key, "dbm_reference") == 0) cfg->dbm_reference = (float)atof(value);
+                else if (strcmp(key, "calculation_mode") == 0) cfg->calculation_mode = n;
                 else if (strcmp(key, "dbr_reference") == 0) cfg->dbr_reference = (float)atof(value);
-                else if (strcmp(key, "beeper_enabled") == 0) cfg->beeper_enabled = atoi(value);
-                else if (strcmp(key, "front_panel_lock") == 0) cfg->front_panel_lock = atoi(value);
-                else if (strcmp(key, "high_speed_mode") == 0) cfg->high_speed_mode = atoi(value);
-                else if (strcmp(key, "statistics_enabled") == 0) cfg->statistics_enabled = atoi(value);
-                else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = atoi(value);
+                else if (strcmp(key, "cmpr_on") == 0) cfg->cmpr_on = n != 0;
+                else if (strcmp(key, "limit_hi") == 0) cfg->limit_hi = (float)atof(value);
+                else if (strcmp(key, "limit_lo") == 0) cfg->limit_lo = (float)atof(value);
+                else if (strcmp(key, "monitor_on") == 0) cfg->monitor_on = n != 0;
+                else if (strcmp(key, "opc_on") == 0) cfg->opc_on = n != 0;
+                else if (strcmp(key, "over_on") == 0) cfg->over_on = n != 0;
+                else if (strcmp(key, "user_on") == 0) cfg->user_on = n != 0;
+                else if (strcmp(key, "rqs_on") == 0) cfg->rqs_on = n != 0;
+                else if (strcmp(key, "statistics_enabled") == 0) cfg->statistics_enabled = n != 0;
+                else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = n != 0;
             }
             token = strtok(NULL, "|");
         }
     }
-    return 0;
+    dm5010_fix_legacy_config(slot);
+    return more;
 }
 
 int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {

@@ -239,32 +239,41 @@ typedef struct {
     unsigned int reserved:7;
 } dm5120_config;
 
+/* DM5010: Tek Codes & Formats settings (manual pp. 3-3/3-4). Same layout as the
+   v3.7 struct; renamed fields reuse ones that held 0 (or, inverted, 1) in old
+   profiles, and dm5010_fix_legacy_config converts the rest. */
 typedef struct {
-    char function[10];      /* Current function (DCV, ACV, OHMS, CURR, DIODE) */
-    unsigned char range_mode;         /* 0=AUTO, 1-7=Manual range */
-    unsigned char filter_count;       /* Filter count 1-100 */
-    unsigned char trigger_mode;       /* 0=FREE, 1=SINGLE, 2=EXT */
-    unsigned char digits;            /* Display digits (4-5) */
-    float nullval;         /* Null/REL value for relative measurements */
-    unsigned char calculation_mode;  /* 0=NONE, 1=AVG, 2=SCALE, 3=DBM, 4=DBR */
-    float scale_factor;    /* Scaling factor for calculations */
-    float scale_offset;    /* Scaling offset for calculations */
-    unsigned char avg_count;         /* Number of readings for averaging */
-    float dbm_reference;   /* dBm reference resistance (default 600) */
-    float dbr_reference;   /* dBr reference value */
-    float min_value;       /* Minimum measured value */
-    float max_value;       /* Maximum measured value */
-    
-    unsigned int filter_enabled:1;     /* Digital filter */
-    unsigned int null_enabled:1;      /* NULL/REL */
-    unsigned int data_format:1;       /* 0=ASCII, 1=Scientific notation */
-    unsigned int auto_zero:1;
-    unsigned int beeper_enabled:1;
-    unsigned int front_panel_lock:1;
-    unsigned int high_speed_mode:1;
+    char function[10];      /* DCV, ACV, ACDC, OHMS or DIODE */
+    unsigned char range_mode;         /* 0=AUTO, 1-6 = full-scale index (modules.c table) */
+    unsigned char filter_count;       /* unused */
+    unsigned char trigger_mode;       /* 0=MODE RUN, 1=MODE TRIG */
+    unsigned char digits;            /* unused: DIGIT is high_speed_mode */
+    float nullval;         /* NULL offset, V or ohms */
+    unsigned char calculation_mode;  /* dB: 0=off, 3=CALC DBM, 4=CALC DBR */
+    float scale_factor;    /* RATIO A, not 0 */
+    float scale_offset;    /* RATIO B */
+    unsigned char avg_count;         /* AVE N, 1-255 here */
+    float dbm_reference;   /* unused: dBm is fixed at 1 mW in 600 ohm (p. 3-7) */
+    float dbr_reference;   /* DBR ref, not 0 */
+    float limit_hi;        /* LIMITS first argument (upper button) */
+    float limit_lo;        /* LIMITS second argument */
+
+    unsigned int filter_enabled:1;     /* CALC AVE */
+    unsigned int null_enabled:1;
+    unsigned int source_front:1;      /* 1 = SOURCE FRONT, the power-on state */
+    unsigned int rqs_on:1;            /* 1 = RQS ON, the power-on state */
+    unsigned int unused_bit:1;
+    unsigned int lfr_on:1;
+    unsigned int high_speed_mode:1;   /* DIGIT 3.5 */
     unsigned int statistics_enabled:1; /* Track min/max */
     unsigned int lf_termination:1;    /* terminate with LF, not CRLF */
-    unsigned int reserved:7;
+    unsigned int ratio_on:1;          /* CALC RATIO */
+    unsigned int cmpr_on:1;           /* CALC CMPR */
+    unsigned int dt_trig:1;           /* DT TRIG */
+    unsigned int monitor_on:1;        /* MONITOR ON */
+    unsigned int opc_on:1;
+    unsigned int over_on:1;
+    unsigned int user_on:1;
 } dm5010_config;
 
 typedef struct {

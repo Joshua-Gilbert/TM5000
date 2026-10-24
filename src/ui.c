@@ -1137,6 +1137,7 @@ void module_settings_menu(void) {
         printf("4. FG5010 Advanced Configuration\n\n");
         printf("5. DC5009 Counter Configuration\n\n");
         printf("6. DC5010 Counter Configuration\n\n");
+        printf("7. DM5010 Advanced Configuration\n\n");
         printf("0. Return to Module Functions Menu\n");
         
         printf("\nEnter choice: ");
@@ -1304,14 +1305,15 @@ void module_settings_menu(void) {
 
             case '5':
             case '6':
+            case '7':
                 {
-                    int type = choice == '5' ? MOD_DC5009 : MOD_DC5010;
-                    const char *name = choice == '5' ? "DC5009" : "DC5010";
+                    int type = choice == '5' ? MOD_DC5009 : choice == '6' ? MOD_DC5010 : MOD_DM5010;
+                    const char *name = choice == '5' ? "DC5009" : choice == '6' ? "DC5010" : "DM5010";
 
                     found = 0;
                     clrscr();
-                    printf("%s Counter Modules:\n", name);
-                    printf("========================\n\n");
+                    printf("%s Modules:\n", name);
+                    printf("================\n\n");
                     for (i = 0; i < 10; i++) {
                         if (g_system->modules[i].enabled && g_system->modules[i].module_type == type) {
                             printf("Slot %d: %s (GPIB %d)\n", i, name, g_system->modules[i].gpib_address);
@@ -1330,7 +1332,8 @@ void module_settings_menu(void) {
                     if (slot >= 0 && slot < 10 && g_system->modules[slot].enabled &&
                         g_system->modules[slot].module_type == type) {
                         if (type == MOD_DC5009) configure_dc5009_advanced(slot);
-                        else configure_dc5010_advanced(slot);
+                        else if (type == MOD_DC5010) configure_dc5010_advanced(slot);
+                        else configure_dm5010_advanced(slot);
                     } else {
                         printf("Invalid slot or not a %s.\n", name);
                         printf("\nPress any key to continue...");
