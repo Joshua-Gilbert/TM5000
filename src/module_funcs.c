@@ -192,7 +192,8 @@ static int dm5120_confirm(const char *what) {
 static void dm5120_utilities_menu(int address) {
     static char __far reply[128];
     char text[16];
-    int choice, done = 0;
+    int choice, done = 0, i;
+    long lval;
 
     while (!done) {
         clrscr();
@@ -207,8 +208,12 @@ static void dm5120_utilities_menu(int address) {
         printf("7. RESET - factory default settings\n");
         printf("8. PONSAVE - save current settings as power-on\n");
         printf("9. Firmware help (HELP?)\n");
+        printf("A. Trigger delay (DELAY)          B. Trigger on GET (DT TRIG/OFF)\n");
+        printf("C. Send GET (bus trigger)         D. Null on this reading (NULLVAL ACQUIRE)\n");
+        printf("E. Press a front-panel key (KEY)  F. Event reporting (ERRSTAT/OVER/USER)\n");
+        printf("A-F are not kept in the slot; PONSAVE keeps them in the meter.\n");
         printf("0. Return\n\nSelect option: ");
-        choice = getch();
+        choice = toupper(getch());
         printf("\n\n");
 
         switch (choice) {
@@ -261,6 +266,66 @@ static void dm5120_utilities_menu(int address) {
                     gpib_write_dm5120(address, "PONSAVE");
                     GPIB_PACE(300);
                     printf("\nSaved as the power-on settings\n");
+                }
+                break;
+            case 'A':
+                printf("Delay from trigger to conversion, 0-65000 ms (manual p. 3-11): ");
+                lval = -1;
+                scanf("%ld", &lval);
+                if (lval < 0 || lval > 65000L) {
+                    printf("Out of range\n");
+                    break;
+                }
+                sprintf(reply, "DELAY %ld", lval);
+                gpib_write_dm5120(address, reply);
+                if (dm5120_show_errors(address) == 0) printf("DELAY %ld ms set\n", lval);
+                break;
+            case 'B':
+                /* GET adds a trigger to the TRIGGER source, it doesn't replace it (p. 3-12) */
+                printf("Trigger a reading on GET: 1 = DT TRIG, 0 = DT OFF: ");
+                lval = -1;
+                scanf("%ld", &lval);
+                if (lval != 0 && lval != 1) break;
+                gpib_write_dm5120(address, lval ? "DT TRIG" : "DT OFF");
+                if (dm5120_show_errors(address) == 0) printf("DT %s\n", lval ? "TRIG" : "OFF");
+                break;
+            case 'C':
+                sprintf(reply, "TRIGGER %d\r\n", address);   /* Driver488's GET; gpib_gg has it too */
+                ieee_write(reply);
+                printf("GET sent (a reading follows only with DT TRIG)\n");
+                break;
+            case 'D':
+                gpib_write_dm5120(address, "NULLVAL ACQUIRE");
+                if (dm5120_show_errors(address) == 0)
+                    printf("Null value taken from the latest reading; NULL ON uses it\n");
+                break;
+            case 'E':
+                /* Table 3-2 */
+                printf("0 ACV  1 OHMS  2 DCA  3 ACA  4 DECREMENT  5 INCREMENT  6 AUTO  7 NULL\n");
+                printf("8 FILTER  9 dB  10 DCV  11 ENTER  12 PRGM  13 EXT  14 INT\n");
+                printf("Key (0-14): ");
+                lval = -1;
+                scanf("%ld", &lval);
+                if (lval < 0 || lval > 14) break;
+                gpib_write_dm5120(address, "TEXT \"\"");   /* KEY needs the display text cleared */
+                sprintf(reply, "KEY %ld", lval);
+                gpib_write_dm5120(address, reply);
+                if (dm5120_show_errors(address) == 0) printf("Key %ld pressed\n", lval);
+                break;
+            case 'F':
+                {
+                    static const char * __far evs[] = { "ERRSTAT", "OVER", "USER" };
+                    printf("1 ERRSTAT (report errors)  2 OVER (overflow)  3 USER (ID key): ");
+                    lval = -1;
+                    scanf("%ld", &lval);
+                    if (lval < 1 || lval > 3) break;
+                    printf("1 = ON, 0 = OFF: ");
+                    i = -1;
+                    scanf("%d", &i);
+                    if (i != 0 && i != 1) break;
+                    sprintf(reply, "%s %s", evs[lval - 1], i ? "ON" : "OFF");
+                    gpib_write_dm5120(address, reply);
+                    if (dm5120_show_errors(address) == 0) printf("%s\n", reply);
                 }
                 break;
             case '0':
