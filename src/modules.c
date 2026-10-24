@@ -3736,7 +3736,9 @@ static const struct { int code; const char *text; } __far dm5010_errors[] = {
 /* Function and calculations the meter reported with its last reading; the unit
    label follows these, so a front-panel change shows up */
 static struct { char funct[6]; unsigned char calc; } __far dm5010_live[10];
-static float __far dm5010_min[10], dm5010_max[10];
+/* Cleared state; a profile or settings load does not run init_dm5010_config */
+static float __far dm5010_min[10] = { 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f, 1e30f };
+static float __far dm5010_max[10] = { -1e30f, -1e30f, -1e30f, -1e30f, -1e30f, -1e30f, -1e30f, -1e30f, -1e30f, -1e30f };
 static char __far dm5010_reply[256];     /* SET? replies run to 225 characters (p. 3-19) */
 
 /* Ranges of a function; 0 for DIODE, which takes no argument (p. 3-10) */
@@ -3861,7 +3863,8 @@ static long dm5010_result_ms(int slot) {
 }
 
 /* Read timeout for the DM5010 at this address: two results plus autorange settling
-   (1.24 s ohms step response, p. 1-7), at least 5 s, within the drivers' 16 bits */
+   (1.24 s ohms step response, p. 1-7), at least 5 s, within 16 bits with room for
+   gpib.c to round up to whole seconds */
 unsigned dm5010_timeout_ms(int address) {
     int i;
     long ms;
@@ -3874,7 +3877,7 @@ unsigned dm5010_timeout_ms(int address) {
     if (i == 10) return 5000u;
     ms = 2 * dm5010_result_ms(i) + 2000;
     if (ms < 5000) ms = 5000;
-    if (ms > 65000L) ms = 65000L;
+    if (ms > 64000L) ms = 64000L;
     return (unsigned)ms;
 }
 
@@ -3912,16 +3915,20 @@ static int dm5010_query_error(int address) {
     return (int)v;
 }
 
-/* Print and drain ERR? until it reports 0; returns how many were shown */
-static int dm5010_show_errors(int address) {
-    int i, code, shown = 0;
+/* Print and drain ERR? until it reports 0. Returns the 1xx-3xx errors (4xx-7xx
+   are events and warnings, Table 3-1), -1 if ERR? got no reply. */
+static int dm5010_show_errors(int address, int *events) {
+    int i, code, errors = 0, shown = 0;
     for (i = 0; i < 10; i++) {
         code = dm5010_query_error(address);
+        if (code < 0 && i == 0) errors = -1;
         if (code <= 0) break;
         printf("  ERR %d: %s\n", code, dm5010_error_text(code));
         shown++;
+        if (code < 400) errors++;
     }
-    return shown;
+    if (events) *events = shown;
+    return errors;
 }
 
 /* Parse the output of "FUNCT?;CALC?;SEND", e.g. "OHMS -2.E+4;CALC OFF;+1.234E+3;"
@@ -3958,6 +3965,10 @@ int dm5010_read(int address, int slot, double *value) {
     if (gpib_write_dm5010(address, "FUNCT?;CALC?;SEND") == 0 &&
         gpib_read_dm5010(address, dm5010_reply, sizeof(dm5010_reply)) > 0) {
         r = dm5010_parse_reading(slot, dm5010_reply, value);
+        /* An answer without the reading (SEND dropped from the message): SEND alone */
+        if (r == DM5010_READ_NONE && gpib_write_dm5010(address, "SEND") == 0 &&
+            gpib_read_dm5010(address, dm5010_reply, sizeof(dm5010_reply)) > 0)
+            r = dm5010_parse_reading(slot, dm5010_reply, value);
     }
     if (r == DM5010_READ_OK) {
         store_module_data(slot, *value);
@@ -3996,65 +4007,71 @@ static int dm5010_confirm(const char *what) {
     return toupper(getch()) == 'Y';
 }
 
-static void dm5010_cmd(int address, char *cmd) {
-    gpib_write_dm5010(address, cmd);
+/* 1 if the message went out */
+static int dm5010_cmd(int address, char *cmd) {
+    int ok = gpib_write_dm5010(address, cmd) == 0;
     GPIB_PACE(50);
+    return ok;
 }
 
 /* Send the slot's settings, one command per message so an error drops only that
    one (p. 3-22). Function first, since it clears NULL (p. 3-15); CALC turns off
    whatever it doesn't list (p. 3-7). RQS OFF keeps errors queued for ERR?, not
-   cleared by the serial polls (p. 3-25). Returns how many errors were reported. */
+   cleared by the serial polls (p. 3-25). Numbers go in the manual's upper-case
+   E form (p. 3-21). Returns the errors reported, -1 if the meter didn't answer. */
 static int dm5010_apply(int slot) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     int address = g_system->modules[slot].gpib_address;
     unsigned char c = dm5010_cfg_calc(cfg);
     const float *fs;
-    int k, errors;
+    int k, errors, sent = 1;
 
     gpib_remote(address);
     GPIB_PACE(100);
-    dm5010_cmd(address, "RQS OFF");
+    sent &= dm5010_cmd(address, "RQS OFF");
+    /* Events queued before this Apply are not its errors */
+    for (k = 0; k < 10 && dm5010_query_error(address) > 0; k++) ;
     if (dm5010_ranges(cfg->function, &fs) == 0) strcpy(gpib_cmd_buffer, "DIODE");
-    else sprintf(gpib_cmd_buffer, "%s %g", cfg->function,      /* 0 = autorange */
+    else sprintf(gpib_cmd_buffer, "%s %G", cfg->function,      /* 0 = autorange */
                  cfg->range_mode ? fs[cfg->range_mode - 1] : 0.0f);
-    dm5010_cmd(address, gpib_cmd_buffer);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
     for (k = 0; k < D10_RQS; k++) {
         if (k == 1 && cfg->function[0] != 'A') continue;     /* LFR is for ACV/ACDC (p. 3-13) */
-        /* Asked again here: a loaded profile can hold REAR (caution, p. 3-19) */
-        if (k == 2 && !cfg->source_front && dm5010_query(address, "SOURCE?") &&
-            strstr(dm5010_reply, "FRONT")) {
+        /* Asked again here unless the meter is already on REAR: a loaded profile
+           can hold REAR (caution, p. 3-19) */
+        if (k == 2 && !cfg->source_front &&
+            !(dm5010_query(address, "SOURCE?") && strstr(dm5010_reply, "REAR"))) {
             printf("CAUTION: switching to the rear input with over 500 V peak on the front\n");
             printf("input can damage the meter (p. 3-19).\n");
             if (!dm5010_confirm("Switch to SOURCE REAR")) {
-                printf("\nInput left on FRONT\n");
+                printf("\nSOURCE REAR not sent\n");
                 continue;
             }
             printf("\n");
         }
         sprintf(gpib_cmd_buffer, "%s %s", d10_flags[k].hdr, d10_arg(cfg, k));
-        dm5010_cmd(address, gpib_cmd_buffer);
+        sent &= dm5010_cmd(address, gpib_cmd_buffer);
     }
     sprintf(gpib_cmd_buffer, "AVE %d", cfg->avg_count);
-    dm5010_cmd(address, gpib_cmd_buffer);
-    sprintf(gpib_cmd_buffer, "RATIO %g,%g", cfg->scale_factor, cfg->scale_offset);
-    dm5010_cmd(address, gpib_cmd_buffer);
-    sprintf(gpib_cmd_buffer, "DBR %g", cfg->dbr_reference);
-    dm5010_cmd(address, gpib_cmd_buffer);
-    sprintf(gpib_cmd_buffer, "LIMITS %g,%g", cfg->limit_hi, cfg->limit_lo);
-    dm5010_cmd(address, gpib_cmd_buffer);
-    sprintf(gpib_cmd_buffer, "NULL %g", cfg->null_enabled ? cfg->nullval : 0.0f);
-    dm5010_cmd(address, gpib_cmd_buffer);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "RATIO %G,%G", cfg->scale_factor, cfg->scale_offset);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "DBR %G", cfg->dbr_reference);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "LIMITS %G,%G", cfg->limit_hi, cfg->limit_lo);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "NULL %G", cfg->null_enabled ? cfg->nullval : 0.0f);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
     sprintf(gpib_cmd_buffer, "CALC %s%s%s%s%s", c & D10_AVE ? "AVE," : "", c & D10_CMPR ? "CMPR," : "",
             c & D10_DBM ? "DBM," : "", c & D10_DBR ? "DBR," : "", c & D10_RATIO ? "RATIO," : "");
     if (c) gpib_cmd_buffer[strlen(gpib_cmd_buffer) - 1] = '\0';
     else strcat(gpib_cmd_buffer, "OFF");
-    dm5010_cmd(address, gpib_cmd_buffer);
+    sent &= dm5010_cmd(address, gpib_cmd_buffer);
 
-    errors = dm5010_show_errors(address);
-    if (cfg->rqs_on) dm5010_cmd(address, "RQS ON");
+    errors = dm5010_show_errors(address, NULL);
+    if (cfg->rqs_on) sent &= dm5010_cmd(address, "RQS ON");
     dm5010_live[slot].funct[0] = '\0';
-    return errors;
+    return sent ? errors : -1;
 }
 
 /* Settings from a SET? reply (example p. 3-19) into the slot */
@@ -4142,7 +4159,8 @@ static const char * __far dm5010_queries[] = {
     "CALC?", "RATIO?", "DBR?", "LIMITS?", "MONITOR?", "OPC?", "OVER?", "RQS?", "USER?"
 };
 
-static void dm5010_utilities_menu(int address) {
+static void dm5010_utilities_menu(int slot) {
+    int address = g_system->modules[slot].gpib_address;
     double v;
     int i, choice, done = 0;
 
@@ -4164,37 +4182,44 @@ static void dm5010_utilities_menu(int address) {
 
         switch (choice) {
             case '1':
+                printf("%s\n", dm5010_query(address, "ID?") ? dm5010_reply : "No reply");
+                break;
             case '4':
-                if (dm5010_query(address, choice == '1' ? "ID?" : "RDY?")) {
-                    printf("%s\n", dm5010_reply);
-                    if (choice == '4' && dm5010_reply_number(dm5010_reply, &v))
-                        printf("%s\n", v != 0.0 ? "A reading is available" : "Measuring or waiting for a trigger");
-                } else {
-                    printf("No reply\n");
-                }
+                /* "RDY  0;" measuring or waiting for a trigger, "RDY  1;" ready (p. 3-17) */
+                if (dm5010_query(address, "RDY?") && strncmp(dm5010_reply, "RDY", 3) == 0 &&
+                    dm5010_reply_number(dm5010_reply, &v))
+                    printf("%s\n%s\n", dm5010_reply, v != 0.0 ? "A reading is available" : "Measuring or waiting for a trigger");
+                else
+                    printf("No reply: %s\n", dm5010_reply);
                 break;
             case '2':
-                /* TEST only reports the stored checksum (p. 3-20) */
-                if (dm5010_query(address, "TEST") && dm5010_reply_number(dm5010_reply, &v)) {
+                /* TEST only reports the stored checksum, "TEST 0;" or "TEST 351;" (p. 3-20) */
+                if (dm5010_query(address, "TEST") && strncmp(dm5010_reply, "TEST", 4) == 0 &&
+                    dm5010_reply_number(dm5010_reply, &v)) {
                     printf("%s\n%s\n", dm5010_reply, v == 0.0 ? "Calibration checksum correct"
                                                              : "Calibration checksum ERROR (351)");
                 } else {
-                    printf("No reply\n");
+                    printf("No reply: %s\n", dm5010_reply);
                 }
                 break;
             case '3':
-                if (dm5010_show_errors(address) == 0) printf("No errors or events\n");
+                if (dm5010_show_errors(address, &i) < 0) printf("No reply\n");
+                else if (i == 0) printf("No errors or events\n");
                 break;
             case '5':
-                /* DATA neither triggers nor waits (p. 3-8) */
-                if (dm5010_query(address, "DATA")) {
-                    printf("%s\n", dm5010_reply);
+                /* "DATA <number>;" or "DATA +-1.E+99;"; neither triggers nor waits (p. 3-8) */
+                if (dm5010_query(address, "DATA") && strncmp(dm5010_reply, "DATA", 4) == 0) {
                     if (strstr(dm5010_reply, "E+99")) printf("Over-range\n");
+                    else if (dm5010_reply_number(dm5010_reply, &v)) printf("%.7G %s\n", v, dm5010_unit(slot));
+                    else printf("%s\n", dm5010_reply);
                 } else {
-                    printf("No reply\n");
+                    printf("No reply: %s\n", dm5010_reply);
                 }
                 break;
             case '6':
+                /* GET in local state is ignored (206, p. 3-23) */
+                gpib_remote(address);
+                GPIB_PACE(100);
                 sprintf(gpib_cmd_buffer, "trigger %2d\r\n", address);
                 ieee_write(gpib_cmd_buffer);
                 GPIB_PACE(50);
@@ -4205,7 +4230,7 @@ static void dm5010_utilities_menu(int address) {
                 } else {
                     printf("No reading\n");
                 }
-                if (dm5010_show_errors(address)) printf("(206 = GET ignored: DT is OFF or the meter was busy)\n");
+                if (dm5010_show_errors(address, NULL) > 0) printf("(206 = GET ignored: DT is OFF or the meter was busy)\n");
                 break;
             case '7':
                 for (i = 0; i < sizeof(dm5010_queries) / sizeof(dm5010_queries[0]); i++) {
@@ -4215,9 +4240,19 @@ static void dm5010_utilities_menu(int address) {
                 break;
             case '8':
                 if (dm5010_confirm("Reset the meter's function, range, calculations and SRQs")) {
-                    gpib_write_dm5010(address, "INIT");
+                    /* Operational: refused in local state (201, p. 3-3) */
+                    gpib_remote(address);
+                    GPIB_PACE(100);
+                    if (gpib_write_dm5010(address, "INIT") != 0) {
+                        printf("\nNo reply from the meter\n");
+                        break;
+                    }
                     GPIB_PACE(300);
-                    printf("\nMeter at its power-on settings (DCV autorange). D in the setup menu re-applies TM5000's.\n");
+                    dm5010_live[slot].funct[0] = '\0';
+                    printf("\n");
+                    i = dm5010_show_errors(address, NULL);
+                    printf("%s\n", i == 0 ? "Meter at its power-on settings (DCV autorange). D in the setup menu re-applies TM5000's." :
+                                   i > 0 ? "INIT not done: see the errors above" : "No reply to ERR?");
                 }
                 break;
             case '0':
@@ -4347,7 +4382,7 @@ void configure_dm5010_advanced(int slot) {
                     cfg->filter_enabled = (a >= 1.0f);
                     if (a >= 1.0f) cfg->avg_count = (unsigned char)a;   /* the meter truncates too (p. 3-6) */
                     if (dm5010_result_ms(slot) > 60000L)
-                        printf("One result now takes %ld s; reads time out at 65 s\n", dm5010_result_ms(slot) / 1000L);
+                        printf("One result now takes %ld s; reads time out at 64 s\n", dm5010_result_ms(slot) / 1000L);
                     else
                         pause = 0;
                 }
@@ -4404,8 +4439,9 @@ void configure_dm5010_advanced(int slot) {
                 break;
             case 'D':
                 printf("Applying settings to DM5010...\n");
-                if (dm5010_apply(slot) == 0) printf("Settings applied, no errors\n");
-                else printf("The meter reported the errors above\n");
+                i = dm5010_apply(slot);
+                printf("%s\n", i == 0 ? "Settings applied, no errors" : i > 0 ? "The meter reported the errors above" :
+                                 "No reply from the meter: check the address and cable");
                 break;
             case 'E':
                 if (!dm5010_query(address, "SET?") || dm5010_reply[0] == '\0') {
@@ -4439,7 +4475,7 @@ void configure_dm5010_advanced(int slot) {
                 pause = 0;
                 break;
             case 'I':
-                dm5010_utilities_menu(address);
+                dm5010_utilities_menu(slot);
                 pause = 0;
                 break;
             case '0':
@@ -4461,7 +4497,7 @@ void configure_dm5010_advanced(int slot) {
 /* Each step counts only when its reply checks out. No INIT, so the user's
    front-panel setup survives. */
 void test_dm5010_comm(int address) {
-    int pass = 0, code = -1, n, bad = 0;
+    int pass = 0, n;
     double v;
     unsigned char stb;
 
@@ -4496,22 +4532,20 @@ void test_dm5010_comm(int address) {
     }
 
     printf("4. Calibration checksum (TEST)\n");
-    if (dm5010_query(address, "TEST") && dm5010_reply_number(dm5010_reply, &v)) {
+    if (dm5010_query(address, "TEST") && strncmp(dm5010_reply, "TEST", 4) == 0 &&
+        dm5010_reply_number(dm5010_reply, &v)) {
         printf("   %s - %s\n", dm5010_reply, v == 0.0 ? "correct" : "calibration checksum error");
         if (v == 0.0) pass++;
     } else {
-        printf("   No reply\n");
+        printf("   No reply: %s\n", dm5010_reply);
     }
 
     printf("5. Status (serial poll, ERR?)\n");
     if (ieee_spoll(address, &stb) == 0) {
         printf("   Status byte %u\n", stb);
-        for (n = 0; n < 10 && (code = dm5010_query_error(address)) > 0; n++) {
-            printf("   ERR %d: %s\n", code, dm5010_error_text(code));
-            if (code < 400) bad++;      /* 4xx-7xx are events and warnings */
-        }
-        if (code == 0 && !bad) pass++;
-        else if (code < 0) printf("   ERR? not answered\n");
+        n = dm5010_show_errors(address, NULL);
+        if (n == 0) pass++;
+        else if (n < 0) printf("   ERR? not answered\n");
     } else {
         printf("   Serial poll failed\n");
     }

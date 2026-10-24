@@ -389,7 +389,8 @@ int gpib_read_dm5010(int address, char *buffer, int maxlen) {
     char cmd_buffer[80];
     int bytes_read;
     /* A reading with AVE or LFR can outlast Driver488's 10 s TIME OUT */
-    unsigned t = (dm5010_timeout_ms(address) + 999u) / 1000u;
+    unsigned ms = dm5010_timeout_ms(address);
+    unsigned t = ms / 1000u + (ms % 1000u != 0);
 
     if (t > 10) {
         sprintf(cmd_buffer, "TIME OUT %u\r\n", t);
