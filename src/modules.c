@@ -1191,17 +1191,21 @@ static void fg5010_set_num(fg5010_config *cfg, int n, float v) {
 
 /* Why value n is refused with the slot's other settings, or NULL */
 static const char *fg5010_num_error(fg5010_config *cfg, int n, float v) {
-    float ampl = n == 1 ? v : cfg->amplitude, offs = n == 2 ? v : cfg->offset;
-    float sym = n == 3 ? v : cfg->duty_cycle, freq = n == 0 ? v : cfg->frequency;
+    float ampl, offs, sym, freq;
 
+    if (n >= 3) v = (int)(v + (v < 0 ? -0.5 : 0.5));   /* as fg5010_set_num stores it */
+    ampl = n == 1 ? v : cfg->amplitude;
+    offs = n == 2 ? v : cfg->offset;
+    sym = n == 3 ? v : cfg->duty_cycle;
+    freq = n == 0 ? v : cfg->frequency;
     if (!(v >= fg5010_nums[n].lo && v <= fg5010_nums[n].hi) &&
         !(v == 0.0 && (n == 1 || (n == 0 && (cfg->toggles & FG5010_VCF)))))  /* AMPL 0; FREQ 0 in VCF */
         return "out of range";
-    if (ampl / 2.0 + fabs(offs) > 15.0)
+    if ((n == 1 || n == 2) && ampl / 2.0 + fabs(offs) > 15.0)
         return "peak plus offset over 15 V (p. 3-6)";
     /* Each triangle ramp must last 25 ns or more: 10-90 % up to 4 MHz, only
        50 % at 20 MHz (p. 3-21, Fig. 3-2) */
-    if ((sym < 50.0 ? sym : 100.0 - sym) + 0.01 < freq * 2.5e-6)
+    if ((n == 0 || n == 3) && (sym < 50.0 ? sym : 100.0 - sym) + 0.01 < freq * 2.5e-6)
         return "symmetry too far from 50 % at this frequency (error 251, Fig. 3-2)";
     return NULL;
 }
@@ -5395,11 +5399,14 @@ void continuous_monitor(void) {
                                once a second (every 10 s while it doesn't answer), so the
                                generator doesn't set the pace */
                             {
-                                static unsigned long fg5010_due[10];
+                                static unsigned long fg5010_last[10];
+                                static unsigned char fg5010_slow[10];
                                 unsigned long now = *((unsigned long far *)0x0040006CL);
-                                if (!mon_last[i][0] || (long)(now - fg5010_due[i]) >= 0) {
-                                    fg5010_due[i] = now + (fg5010_state_text(g_system->modules[i].gpib_address,
-                                                                             mon_last[i]) ? 18 : 182);
+                                if (!mon_last[i][0] ||
+                                    now - fg5010_last[i] >= (fg5010_slow[i] ? 182UL : 18UL)) {
+                                    fg5010_slow[i] = !fg5010_state_text(g_system->modules[i].gpib_address,
+                                                                        mon_last[i]);
+                                    fg5010_last[i] = now;
                                 }
                                 lp("%s", mon_last[i]);
                                 lp_nl();
