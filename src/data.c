@@ -956,8 +956,8 @@ void save_ps5004_config(FILE *fp, int slot) {
             cfg->voltage, cfg->current_limit, cfg->output_enabled, cfg->display_mode);
     fprintf(fp, "vri_enabled=%d|cri_enabled=%d|uri_enabled=%d|dt_enabled=%d|\n",
             cfg->vri_enabled, cfg->cri_enabled, cfg->uri_enabled, cfg->dt_enabled);
-    fprintf(fp, "user_enabled=%d|rqs_enabled=%d|lf_termination=%d\n",
-            cfg->user_enabled, cfg->rqs_enabled, cfg->lf_termination);
+    fprintf(fp, "user_enabled=%d|rqs_enabled=%d|lf_termination=%d|dt_set=%d\n",
+            cfg->user_enabled, cfg->rqs_enabled, cfg->lf_termination, cfg->dt_set);
 }
 
 void save_ps5010_config(FILE *fp, int slot) {
@@ -1141,6 +1141,7 @@ int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
                 else if (strcmp(key, "user_enabled") == 0) cfg->user_enabled = atoi(value);
                 else if (strcmp(key, "rqs_enabled") == 0) cfg->rqs_enabled = atoi(value);
                 else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = atoi(value);
+                else if (strcmp(key, "dt_set") == 0) cfg->dt_set = atoi(value);
             }
             token = strtok(NULL, "|");
         }
