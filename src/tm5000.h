@@ -87,6 +87,8 @@
 #define UNIT_CURRENT    4    /* A, mA, µA for current measurements */
 #define UNIT_RESISTANCE 5    /* Ω, mΩ, µΩ for resistance measurements */
 #define UNIT_POWER      6    /* Power spectrum units (V²/Hz) */
+#define UNIT_TIME       7    /* s, ms, us, ns (counter period/width/interval) */
+#define UNIT_COUNT      8    /* dimensionless: counts, ratios */
 
 /* Mouse definitions */
 #define MOUSE_INT       0x33
@@ -313,63 +315,45 @@ typedef struct {
     unsigned int reserved:6;
 } ps5010_config;
 
+/* DC5009 and DC5010 share one layout, the same size as before. Fields a model
+   lacks keep their defaults. */
 typedef struct {
-    char function[8];           /* FREQ, PERIOD, WIDTH, RATIO, TIME, TOTALIZE, etc. */
-    char channel[4];            /* A, B, AB, BA, etc. */
-    float gate_time;            /* Gate time in seconds */
-    int averaging;              /* -1=auto, 1=no avg, >1=avg count */
+    char function[8];           /* header: FREQ PER WID RAT TIME TOT EVE TMAN PROB RISE FALL */
+    char channel[4];            /* its argument: A B/A AB BA A+B A-B A&B, or "" */
+    float gate_time;            /* unused: neither counter has a gate time */
+    int averaging;              /* -1 = auto (~0.3 s), else n for AVE 1.E+n */
     char coupling_a[4];         /* AC, DC */
-    char coupling_b[4];         /* AC, DC */
-    char impedance_a[4];        /* HI, LO */
-    char impedance_b[4];        /* HI, LO */
-    char attenuation_a[4];      /* X1, X10 */
-    char attenuation_b[4];      /* X1, X10 */
+    char coupling_b[4];
+    char impedance_a[4];        /* DC5010 termination: HI (1 Mohm) or LO (50 ohm) */
+    char impedance_b[4];
+    char attenuation_a[4];      /* "1" or "5" (X1 / X5) */
+    char attenuation_b[4];
     char slope_a[4];            /* POS, NEG */
-    char slope_b[4];            /* POS, NEG */
-    float level_a;              /* Trigger level Channel A */
-    float level_b;              /* Trigger level Channel B */
-    long overflow_count;        /* Extended range overflow counter */
-    float last_measurement;     /* Last measurement result */
-    
-    unsigned int filter_enabled:1;         /* Input filter */
-    unsigned int auto_trigger:1;
-    unsigned int overflow_enabled:1;       /* Overflow indication */
-    unsigned int preset_enabled:1;
-    unsigned int srq_enabled:1;
-    unsigned int measurement_complete:1;
+    char slope_b[4];
+    float level_a;              /* programmed trigger level, V */
+    float level_b;
+    long overflow_count;        /* TOT/TMAN counter overflows seen (OVER ON) */
+    float last_measurement;     /* last reading: sets the expected measurement time */
+
+    unsigned int filter_enabled:1;         /* DC5010 FIL ON (20 MHz) */
+    unsigned int auto_trigger:1;           /* AUTO levels (DC5009 both channels, DC5010 A) */
+    unsigned int overflow_enabled:1;       /* OVER ON */
+    unsigned int preset_enabled:1;         /* PRE ON: /16 prescaler on channel A */
+    unsigned int srq_enabled:1;            /* RQS ON */
+    unsigned int opc_enabled:1;            /* OPC ON */
     unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int null_enabled:1;           /* DC5010 NULL ON */
+    unsigned int fptrig:1;                 /* DC5009 levels from the front-panel knobs */
+    unsigned int rear_a:1;                 /* DC5009 SOUR REAR, channel A */
+    unsigned int rear_b:1;
+    unsigned int user_enabled:1;           /* USER ON */
+    unsigned int dt_mode:2;                /* DT OFF / TRIG / GATE */
+    unsigned int b_level_swap:1;           /* DC5010: channel B in the other level mode than A */
+    unsigned int reserved:1;
 } dc5009_config;
 
-typedef struct {
-    char function[8];           /* FREQ, PERIOD, WIDTH, RATIO, TIME, TOTALIZE, etc. */
-    char channel[4];            /* A, B, AB, BA, etc. */
-    float gate_time;            /* Gate time in seconds */
-    int averaging;              /* -1=auto, 1=no avg, >1=avg count */
-    char coupling_a[4];         /* AC, DC */
-    char coupling_b[4];         /* AC, DC */
-    char impedance_a[4];        /* HI, LO */
-    char impedance_b[4];        /* HI, LO */
-    char attenuation_a[4];      /* X1, X10 */
-    char attenuation_b[4];      /* X1, X10 */
-    char slope_a[4];            /* POS, NEG */
-    char slope_b[4];            /* POS, NEG */
-    float level_a;              /* Trigger level Channel A */
-    float level_b;              /* Trigger level Channel B */
-    long overflow_count;        /* Extended range overflow counter */
-    float last_measurement;     /* Last measurement result */
-    
-    unsigned int filter_enabled:1;         /* Input filter */
-    unsigned int auto_trigger:1;
-    unsigned int overflow_enabled:1;       /* Overflow indication */
-    unsigned int preset_enabled:1;
-    unsigned int srq_enabled:1;
-    unsigned int measurement_complete:1;
-    unsigned int rise_fall_enabled:1;      /* DC5010 only */
-    unsigned int burst_mode:1;             /* DC5010 only */
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:7;
-} dc5010_config;
+typedef dc5009_config dc5010_config;
+unsigned dc50xx_timeout_ms(int slot);   /* modules.c; gpib_gg.c's counter read timeout */
 
 typedef struct {
     char waveform[12];

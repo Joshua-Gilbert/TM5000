@@ -132,6 +132,10 @@ static char *ps_unit_of(char *u) {
     if (strcmp(u, "UO")   == 0) return "uO";   /* uOhm */
     if (strcmp(u, "MO")   == 0) return "mO";   /* mOhm */
     if (strcmp(u, "O")    == 0) return "O";    /* Ohm */
+    if (strcmp(u, "S")    == 0) return "s";    /* counter time units */
+    if (strcmp(u, "MS")   == 0) return "ms";
+    if (strcmp(u, "US")   == 0) return "us";
+    if (strcmp(u, "NS")   == 0) return "ns";
     return u;  /* power spectrum (^2/Hz) and anything else: pass through */
 }
 
@@ -1320,6 +1324,9 @@ void print_graph_postscript(void) {
                     break;
                 case UNIT_DB:
                     y_label = "Magnitude";
+                    break;
+                case UNIT_TIME:
+                    y_label = "Time";
                     break;
                 default: /* voltage, current, resistance, derivative, power */
                     y_label = "Measurement";
