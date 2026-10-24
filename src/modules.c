@@ -1119,473 +1119,837 @@ void configure_dc5010_advanced(int slot) {
 }
 
 /* ========================================================================== */
-/* FG5010 Function Generator                                                  */
+/* FG5010 Function Generator (manual 070-3467-01, section 3)                  */
 /* ========================================================================== */
 
-void init_fg5010_config(int slot) {
-    fg5010_config *cfg = &g_fg5010_config[slot];
+#ifdef GRIDGPIB
+#include "gridgpib.h"
+#endif
 
-    if (slot < 0 || slot >= 10) return;
+static const char* __far fg5010_funcs[] = { "SINE", "SQUARE", "TRIANGLE" };
+/* MODE? answers LOCK for PHLOCK (manual p. 3-14) */
+static const char* __far fg5010_modes[] = { "CONT", "TRIG", "GATE", "BURST", "PHLOCK" };
+static const char* __far fg5010_dts[] = { "OFF", "SET", "TRIG", "GATE" };
 
-    cfg->frequency = 1000.0;           /* 1 kHz default frequency */
-    cfg->amplitude = 5.0;              /* 5 Vpp default amplitude */
-    cfg->offset = 0.0;                 /* No DC offset */
-    strcpy(cfg->waveform, "SINE");     /* Sine wave default */
-    cfg->output_enabled = 0;           /* Output OFF by default */
-    cfg->duty_cycle = 50.0;            /* 50% duty cycle */
-    
-    /* Sweep settings */
-    cfg->sweep_enabled = 0;            /* Sweep OFF */
-    cfg->start_freq = 100.0;           /* 100 Hz start */
-    cfg->stop_freq = 10000.0;          /* 10 kHz stop */
-    cfg->sweep_time = 1.0;             /* 1 second sweep */
-    cfg->sweep_type = 0;               /* Linear sweep */
-    
-    /* Trigger settings */
-    strcpy(cfg->trigger_source, "INT"); /* Internal trigger */
-    strcpy(cfg->trigger_slope, "POS");  /* Positive slope */
-    cfg->trigger_level = 1.0;          /* 1V trigger level */
-    
-    /* Additional features */
-    cfg->sync_enabled = 0;             /* Sync OFF */
-    cfg->invert_enabled = 0;           /* No inversion */
-    cfg->phase = 0.0;                  /* 0 degree phase */
-    
-    /* Modulation settings */
-    cfg->modulation_enabled = 0;       /* Modulation OFF */
-    strcpy(cfg->mod_type, "AM");       /* AM modulation */
-    cfg->mod_freq = 100.0;             /* 100 Hz mod frequency */
-    cfg->mod_depth = 50.0;             /* 50% modulation depth */
-    
-    /* Burst settings */
-    cfg->burst_enabled = 0;            /* Burst OFF */
-    cfg->burst_count = 10;             /* 10 cycles per burst */
-    cfg->burst_period = 0.1;           /* 100ms burst period */
-    
-    /* Units and termination */
-    cfg->units_freq = 1;               /* kHz default */
-    cfg->units_time = 1;               /* ms default */
-    cfg->lf_termination = 0;           /* CRLF termination */
+/* ON/OFF settings; bit n of cfg->toggles is fg5010_toggles[n] */
+#define FG5010_COMP 0x01
+#define FG5010_AM   0x02
+#define FG5010_FM   0x04
+#define FG5010_VCF  0x08
+#define FG5010_HOLD 0x10
+#define FG5010_GATE 0x20
+static const char* __far fg5010_toggles[] = {
+    "COMP", "AM", "FM", "VCF", "HOLD", "GATE", "PLI", "USER"
+};
+static const char* __far fg5010_toggle_help[] = {
+    "invert waveform (p. 3-7)", "AM from AM INPUT (p. 3-6)",
+    "FM from FM/VCF INPUT (p. 3-9)", "VCF from FM/VCF INPUT (p. 3-25)",
+    "hold output voltage, 200 Hz max (p. 3-11)", "gate on, MODE GATE (p. 3-10)",
+    "SRQ on phase lock change (p. 3-17)", "SRQ on INST ID button (p. 3-24)"
+};
+
+/* Other settings with a query form; with fg5010_toggles, "query one setting" */
+static const char* __far fg5010_queries[] = {
+    "FUNC", "MODE", "SLOPE", "FREQ", "AMPL", "OFFS", "SYM", "PHAS", "NBUR", "OUT",
+    "DT", "RQS"
+};
+
+/* Numeric settings: SET? header, prompt, range, power-on value (p. 3-33).
+   Index order is fg5010_get_num's. */
+static const struct { const char *hdr, *prompt; float lo, hi, def; } __far fg5010_nums[] = {
+    { "FREQ",  "Frequency in Hz (0.002 to 20E6, 0 with VCF, p. 3-9)", 0.002, 20.0e6, 1000.0 },
+    { "AMPL",  "Amplitude, V p-p open circuit (0, 0.02 to 20, p. 3-6)", 0.02, 20.0, 0.5 },
+    { "OFFS",  "Offset, V open circuit (-7.5 to 7.5, p. 3-15)", -7.5, 7.5, 0.0 },
+    { "SYM",   "Symmetry, % (10 to 90, p. 3-21)", 10.0, 90.0, 50.0 },
+    { "PHASE", "Phase, degrees (-90 to 90, p. 1-6)", -90.0, 90.0, 0.0 },
+    { "NBUR",  "Cycles per burst (1 to 9999, p. 3-15)", 1.0, 9999.0, 10.0 }
+};
+
+static float fg5010_get_num(fg5010_config *cfg, int n) {
+    switch (n) {
+        case 0:  return cfg->frequency;
+        case 1:  return cfg->amplitude;
+        case 2:  return cfg->offset;
+        case 3:  return cfg->duty_cycle;
+        case 4:  return cfg->phase;
+        default: return cfg->burst_count;
+    }
 }
 
-void configure_fg5010(int slot) {
-    fg5010_config *cfg = &g_fg5010_config[slot];
-    char input[50];
-    int choice, done = 0;
-    int temp_choice;
-    
+/* SYM, PHAS and NBUR take whole numbers (1 % and 1 degree resolution) */
+static void fg5010_set_num(fg5010_config *cfg, int n, float v) {
+    if (n >= 3) v = (int)(v + (v < 0 ? -0.5 : 0.5));
+    switch (n) {
+        case 0:  cfg->frequency = v; break;
+        case 1:  cfg->amplitude = v; break;
+        case 2:  cfg->offset = v; break;
+        case 3:  cfg->duty_cycle = v; break;
+        case 4:  cfg->phase = v; break;
+        default: cfg->burst_count = (int)v; break;
+    }
+}
+
+/* Why value n is refused with the slot's other settings, or NULL */
+static const char *fg5010_num_error(fg5010_config *cfg, int n, float v) {
+    float ampl = n == 1 ? v : cfg->amplitude, offs = n == 2 ? v : cfg->offset;
+    float sym = n == 3 ? v : cfg->duty_cycle, freq = n == 0 ? v : cfg->frequency;
+
+    if (!(v >= fg5010_nums[n].lo && v <= fg5010_nums[n].hi) &&
+        !(v == 0.0 && (n == 1 || (n == 0 && (cfg->toggles & FG5010_VCF)))))  /* AMPL 0; FREQ 0 in VCF */
+        return "out of range";
+    if (ampl / 2.0 + fabs(offs) > 15.0)
+        return "peak plus offset over 15 V (p. 3-6)";
+    /* Each triangle ramp must last 25 ns or more: 10-90 % up to 4 MHz, only
+       50 % at 20 MHz (p. 3-21, Fig. 3-2) */
+    if ((sym < 50.0 ? sym : 100.0 - sym) + 0.01 < freq * 2.5e-6)
+        return "symmetry too far from 50 % at this frequency (error 251, Fig. 3-2)";
+    return NULL;
+}
+
+/* ERR? codes, manual Table 3-1 (p. 3-31, 3-32) */
+static const struct { int code; const char *text; } __far fg5010_errors[] = {
+    {   0, "No errors or events" },
+    { 101, "Invalid command header" },
+    { 102, "Header delimiter error" },
+    { 103, "Argument error" },
+    { 104, "Argument delimiter error" },
+    { 106, "Missing argument" },
+    { 107, "Invalid message unit delimiter" },
+    { 108, "Binary block checksum error" },
+    { 109, "Binary block byte-count error" },
+    { 201, "Not executable in local state" },
+    { 202, "Settings lost because of rtl" },
+    { 203, "I/O buffers full, output dumped" },
+    { 205, "Argument out of range" },
+    { 206, "GET ignored" },
+    { 251, "Frequency-symmetry conflict" },
+    { 252, "Amplitude-offset conflict" },
+    { 254, "Hold-phase lock mode conflict" },
+    { 255, "Frequency-hold mode conflict" },
+    { 256, "FM-phase lock mode conflict" },
+    { 257, "VCF-phase lock mode conflict" },
+    { 258, "Gate-mode conflict" },
+    { 401, "Power on" },
+    { 403, "User request (INST ID button)" },
+    { 731, "Went out of phase lock" },
+    { 732, "Went into phase lock" }
+};
+
+static const char *fg5010_error_text(int code) {
+    int i;
+    for (i = 0; i < sizeof(fg5010_errors) / sizeof(fg5010_errors[0]); i++)
+        if (fg5010_errors[i].code == code) return fg5010_errors[i].text;
+    if (code >= 300 && code < 400) return "Internal error (hardware or firmware)";
+    return "Unknown code";
+}
+
+/* SET? runs to about 200 characters (p. 3-19); a reply longer than the read
+   would be left in the driver and misread as the next one */
+static char __far fg5010_reply[256];
+
+/* Send a query and read its reply into fg5010_reply, CR/LF removed. 0 if there
+   was none: a rejected query leaves only the one-byte all-ones "no output"
+   message (p. 3-29), which must not pass for an answer. */
+static int fg5010_query(int address, const char *query) {
+    int n;
+
+    fg5010_reply[0] = '\0';
+    if (gpib_write(address, (char *)query) != 0) return 0;
+    GPIB_PACE(50);
+    n = gpib_read(address, fg5010_reply, sizeof(fg5010_reply));
+    if (n <= 0 || (unsigned char)fg5010_reply[0] == 0xFF) {
+        fg5010_reply[0] = '\0';
+        return 0;
+    }
+    fg5010_reply[strcspn(fg5010_reply, "\r\n")] = '\0';
+    return 1;
+}
+
+/* Value text of a header in a reply such as "FREQ 1.0E+3;AMPL 500.0E-3;...":
+   the header must start the reply or follow a ';'. NULL if absent. */
+static const char *fg5010_field(const char *reply, const char *hdr) {
+    int n = strlen(hdr);
+    const char *p = reply;
+
+    while (p) {
+        while (*p == ';' || *p == ' ') p++;
+        if (strncmp(p, hdr, n) == 0 && p[n] == ' ') return p + n + 1;
+        p = strchr(p, ';');
+    }
+    return NULL;
+}
+
+static int fg5010_on(const char *reply, const char *hdr) {
+    const char *p = fg5010_field(reply, hdr);
+    return p && strncmp(p, "ON", 2) == 0;
+}
+
+/* Query, then the number after the reply's header ("AMPL 2.000;") */
+static int fg5010_query_value(int address, const char *query, const char *hdr, float *v) {
+    const char *p;
+    return fg5010_query(address, query) && (p = fg5010_field(fg5010_reply, hdr)) != NULL &&
+           sscanf(p, "%f", v) == 1;
+}
+
+/* Copy the word at p (up to ';') */
+static void fg5010_word(const char *p, char *w, int size) {
+    int i = 0;
+    if (p) while (i < size - 1 && p[i] && p[i] != ';' && p[i] != ' ') { w[i] = p[i]; i++; }
+    w[i] = '\0';
+}
+
+/* ERR? code, -1 if there was no reply. With RQS ON it only explains the last
+   serial-polled status byte, so callers turn RQS off first (p. 3-8). */
+static int fg5010_query_error(int address) {
+    float code;
+    return fg5010_query_value(address, "ERR?", "ERR", &code) ? (int)code : -1;
+}
+
+/* Print ERR? until it reports 0 (p. 3-32). Returns the number of errors, not
+   counting the 400/700 events (power on, INST ID, phase lock), or -1 if ERR?
+   went unanswered. */
+static int fg5010_show_errors(int address) {
+    int i, code, errors = 0;
+
+    for (i = 0; i < 16; i++) {
+        code = fg5010_query_error(address);
+        if (code < 0) {
+            printf("  No reply to ERR?\n");
+            return -1;
+        }
+        if (code == 0) break;
+        printf("  ERR %d: %s\n", code, fg5010_error_text(code));
+        if (code < 400) errors++;
+    }
+    return errors;
+}
+
+/* REMOTE (in local every setting is error 201, p. 3-30), then RQS OFF so
+   errors queue for ERR? instead of each raising SRQ. Returns RQS to restore. */
+static int fg5010_begin(int address) {
+    int rqs_was_on;
+
+    gpib_remote(address);
+    GPIB_PACE(100);
+    rqs_was_on = !fg5010_query(address, "RQS?") || fg5010_on(fg5010_reply, "RQS");
+    gpib_write(address, "RQS OFF");
+    GPIB_PACE(20);
+    return rqs_was_on;
+}
+
+/* Call after the error queue is drained: RQS ON raises SRQ for every event
+   still unreported (p. 3-18) */
+static void fg5010_end(int address, int rqs_was_on) {
+    if (rqs_was_on) gpib_write(address, "RQS ON");
+    GPIB_PACE(20);
+}
+
+/* One command with its errors read back; 1 if the FG5010 reported none */
+static int fg5010_send_checked(int address, const char *cmd) {
+    int rqs = fg5010_begin(address);
+    int errors;
+
+    gpib_write(address, (char *)cmd);
+    GPIB_PACE(60);  /* longest settling, recall: 58 ms (Table 1-6, p. 1-9) */
+    errors = fg5010_show_errors(address);
+    fg5010_end(address, rqs);
+    return errors == 0;
+}
+
+/* Power-on settings, manual p. 3-33 */
+void init_fg5010_config(int slot) {
+    fg5010_config *cfg;
+    int n;
+
     if (slot < 0 || slot >= 10) return;
-    
+    cfg = &g_fg5010_config[slot];
+    memset(cfg, 0, sizeof(*cfg));
+    strcpy(cfg->waveform, "SINE");
+    strcpy(cfg->trigger_slope, "POS");
+    for (n = 0; n < 6; n++) fg5010_set_num(cfg, n, fg5010_nums[n].def);
+    cfg->layout = FG5010_LAYOUT;
+}
+
+/* Into range after an older profile or a hand-edited .cfg. Older layouts kept
+   sweep/trigger/modulation fields the FG5010 lacks: their mode and flag bits
+   mean nothing here and are dropped. */
+void fg5010_fix_config(int slot) {
+    fg5010_config *cfg = &g_fg5010_config[slot];
+    int i;
+
+    if (cfg->layout != FG5010_LAYOUT) {
+        cfg->mode = 0;
+        cfg->toggles = 0;
+        cfg->dt_mode = 0;
+        cfg->reserved = 0;
+        cfg->layout = FG5010_LAYOUT;
+    }
+    for (i = 0; i < 3 && strcmp(cfg->waveform, fg5010_funcs[i]) != 0; i++) ;
+    if (i == 3) strcpy(cfg->waveform, "SINE");
+    if (strcmp(cfg->trigger_slope, "NEG") != 0) strcpy(cfg->trigger_slope, "POS");
+    for (i = 0; i < 6; i++) {
+        float v = fg5010_get_num(cfg, i);
+        fg5010_set_num(cfg, i, fg5010_num_error(cfg, i, v) ? fg5010_nums[i].def : v);
+    }
+    if (cfg->mode < 0 || cfg->mode > 4) cfg->mode = 0;
+}
+
+/* Programmed state from SET?, one line for the monitor and single measurement
+   (out holds 60). No printf: the monitor loop calls this. 1 if it answered. */
+int fg5010_state_text(int address, char *out) {
+    const char *p;
+    float f, a = 0.0, o = 0.0;
+    char func[4], mode[6], relay[4];
+
+    if (!fg5010_query(address, "SET?") || (p = fg5010_field(fg5010_reply, "FREQ")) == NULL ||
+        sscanf(p, "%f", &f) != 1) {
+        strcpy(out, "No reply to SET?");
+        return 0;
+    }
+    if ((p = fg5010_field(fg5010_reply, "AMPL")) != NULL) sscanf(p, "%f", &a);
+    if ((p = fg5010_field(fg5010_reply, "OFFS")) != NULL) sscanf(p, "%f", &o);
+    fg5010_word(fg5010_field(fg5010_reply, "FUNC"), func, sizeof(func));
+    fg5010_word(fg5010_field(fg5010_reply, "MODE"), mode, sizeof(mode));
+    fg5010_word(fg5010_field(fg5010_reply, "OUT"), relay, sizeof(relay));
+    if (f >= 1.0e6)      sprintf(out, "%8.4f MHz", f / 1.0e6);
+    else if (f >= 1.0e3) sprintf(out, "%8.3f kHz", f / 1.0e3);
+    else                 sprintf(out, "%8.3f Hz ", f);
+    sprintf(out + strlen(out), " %6.3fVpp %+5.2fV %-3s %-5s OUT %s", a, o, func, mode, relay);
+    return 1;
+}
+
+/* Send the slot's settings and read back the errors. OUT is never sent: the
+   relay moves only on the menu's own Output item. */
+static void fg5010_apply(int slot) {
+    fg5010_config *cfg = &g_fg5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    int i, rqs, on, errors;
+    char msg[100];
+
+    printf("Applying settings to the FG5010 (the output relay is left as it is)...\n");
+    rqs = fg5010_begin(address);
+    /* Under DT SET new settings wait for GET (p. 3-8): off while these go in,
+       the slot's DT goes last */
+    gpib_write(address, "DT OFF");
+
+    /* Each group is one message: the FG5010 checks a message's settings together,
+       so FREQ/SYM and AMPL/OFFS need no particular order, and an error discards
+       only that message (p. 3-28). OFFs go first: FM, VCF and HOLD block PHLOCK,
+       HOLD blocks FREQ over 200 Hz. */
+    for (on = 0; on <= 1; on++) {
+        if (on) {
+            sprintf(msg, "MODE %s;SLOPE %s;%s", fg5010_modes[cfg->mode], cfg->trigger_slope,
+                    cfg->waveform);         /* FUNC header is optional (p. 3-10) */
+            gpib_write(address, msg);
+            /* NR2 (fixed point) throughout: 5 decimals hold 4 digits down to 0.002 Hz */
+            sprintf(msg, "%sFREQ %.5f;SYM %d", cfg->frequency == 0.0 ? "VCF ON;" : "",
+                    cfg->frequency, (int)cfg->duty_cycle);
+            gpib_write(address, msg);
+            sprintf(msg, "AMPL %.4f;OFFS %.2f", cfg->amplitude, cfg->offset);
+            gpib_write(address, msg);
+            sprintf(msg, "PHAS %d;NBUR %d", (int)cfg->phase, cfg->burst_count);
+            gpib_write(address, msg);
+        }
+        msg[0] = '\0';
+        for (i = 0; i < 8; i++) {
+            if (!(cfg->toggles & (1 << i)) == !on) {
+                if (msg[0]) strcat(msg, ";");
+                strcat(msg, fg5010_toggles[i]);
+                strcat(msg, on ? " ON" : " OFF");
+            }
+        }
+        if (msg[0]) gpib_write(address, msg);
+    }
+    sprintf(msg, "DT %s", fg5010_dts[cfg->dt_mode]);
+    gpib_write(address, msg);
+    GPIB_PACE(60);  /* longest settling, recall: 58 ms (Table 1-6, p. 1-9) */
+
+    errors = fg5010_show_errors(address);
+    fg5010_end(address, rqs);
+    if (errors == 0) printf("Settings applied\n");
+    else if (errors > 0) printf("The FG5010 reported the errors above\n");
+}
+
+/* Load the slot's settings from the FG5010's SET? reply */
+static void fg5010_read_back(int slot) {
+    fg5010_config *cfg = &g_fg5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    char word[10];
+    const char *p;
+    int i, col = 0;
+    float v;
+
+    if (!fg5010_query(address, "SET?")) {
+        printf("No reply to SET?\n");
+        return;
+    }
+    /* One query response per ';', three to a line */
+    for (p = fg5010_reply; *p; ) {
+        int n = strcspn(p, ";");
+        if (n > 0) {
+            printf("%-26.*s", n > 25 ? 25 : n, p);
+            if (++col % 3 == 0) printf("\n");
+        }
+        p += n;
+        if (*p == ';') p++;
+    }
+    if (col % 3) printf("\n");
+
+    printf("\nCopy these into the slot's settings (Y/N)? ");
+    if (toupper(getch()) != 'Y') {
+        printf("\n");
+        return;
+    }
+    /* SET? spells out PHASE (p. 3-19) */
+    for (i = 0; i < 6; i++)
+        if ((p = fg5010_field(fg5010_reply, fg5010_nums[i].hdr)) && sscanf(p, "%f", &v) == 1)
+            fg5010_set_num(cfg, i, v);
+    fg5010_word(fg5010_field(fg5010_reply, "FUNC"), word, sizeof(word));
+    if (word[0]) strcpy(cfg->waveform, word);
+    fg5010_word(fg5010_field(fg5010_reply, "SLOPE"), word, sizeof(cfg->trigger_slope));
+    if (word[0]) strcpy(cfg->trigger_slope, word);
+    fg5010_word(fg5010_field(fg5010_reply, "MODE"), word, sizeof(word));
+    for (i = 0; i < 5; i++)
+        if (strcmp(word, fg5010_modes[i]) == 0 || (i == 4 && strcmp(word, "LOCK") == 0)) cfg->mode = i;
+    fg5010_word(fg5010_field(fg5010_reply, "DT"), word, sizeof(word));
+    for (i = 0; i < 4; i++)
+        if (strcmp(word, fg5010_dts[i]) == 0) cfg->dt_mode = i;
+    for (i = 0; i < 8; i++) {
+        if (fg5010_field(fg5010_reply, fg5010_toggles[i]) == NULL) continue;
+        if (fg5010_on(fg5010_reply, fg5010_toggles[i])) cfg->toggles |= 1 << i;
+        else cfg->toggles &= ~(1 << i);
+    }
+    fg5010_fix_config(slot);
+    printf("\nSettings copied\n");
+}
+
+/* Show and optionally switch the output relay; nothing else touches it */
+static void fg5010_output(int address) {
+    int on, rqs;
+
+    if (!fg5010_query(address, "OUT?") || fg5010_field(fg5010_reply, "OUT") == NULL) {
+        printf("No reply to OUT?\n");
+        return;
+    }
+    on = fg5010_on(fg5010_reply, "OUT");
+    printf("Output relay is %s.\n", on ? "ON (closed)" : "OFF (open)");
+    if (on) printf("Open it (OUT OFF)? (Y/N) ");
+    else printf("Close it (OUT ON)? The generator then drives whatever is\nconnected to OUTPUT. (Y/N) ");
+    if (toupper(getch()) != 'Y') {
+        printf("\nNot changed\n");
+        return;
+    }
+    printf("\n");
+    rqs = fg5010_begin(address);
+    gpib_write(address, on ? "OUT OFF" : "OUT ON");
+    GPIB_PACE(20);  /* relay: under 8 ms (Table 1-6, p. 1-9) */
+    fg5010_show_errors(address);
+    fg5010_end(address, rqs);
+    if (fg5010_query(address, "OUT?") && fg5010_field(fg5010_reply, "OUT"))
+        printf("Output relay is now %s\n", fg5010_on(fg5010_reply, "OUT") ? "ON" : "OFF");
+    else
+        printf("No reply to OUT?: check the OUTPUT ON light\n");
+}
+
+/* TEST's run time is not in the manual: allow its reply 30 s */
+static void fg5010_long_timeout(int on) {
+#ifdef GRIDGPIB
+    static int old;
+    if (on) old = gg_timeout(30000u);
+    else if (old > 0) gg_timeout((unsigned)old);
+#else
+    ieee_write(on ? "TIME OUT 30\r\n" : "TIME OUT 10\r\n");
+#endif
+}
+
+/* Binary block reply: "LLSET %<count><data><checksum>;" (p. 3-4, 3-12, 3-18).
+   Only shown: blocks are never sent back, as the drivers' reads end at an LF
+   byte and their writes at NUL/CR/LF, which a block may hold. */
+static void fg5010_dump_block(int address, const char *cmd) {
+    unsigned char *b = (unsigned char *)fg5010_reply;
+    int n, i, start, count, sum;
+
+    if (gpib_write(address, (char *)cmd) != 0) {
+        printf("Not sent\n");
+        return;
+    }
+    GPIB_PACE(50);
+    n = gpib_read(address, fg5010_reply, sizeof(fg5010_reply));
+    if (n <= 0 || b[0] == 0xFF) {
+        printf("No reply\n");
+        return;
+    }
+    for (start = 0; start < n && b[start] != '%'; start++) ;
+    printf("Reply header: %.*s\n", start, fg5010_reply);
+    if (start + 3 > n) {
+        printf("No binary block in the reply\n");
+        return;
+    }
+    /* Count: data bytes + checksum, MSB first; the checksum makes the sum of
+       count, data and checksum bytes 0 modulo 256 */
+    count = (b[start + 1] << 8) | b[start + 2];
+    sum = b[start + 1] + b[start + 2];
+    for (i = 0; i < count && start + 3 + i < n; i++) sum += b[start + 3 + i];
+    printf("%d data bytes", count - 1);
+    if (i < count) printf(", %d received: the read ended at an LF byte in the data\n", i);
+    else printf(", checksum %s\n", (sum & 0xFF) == 0 ? "OK" : "BAD");
+    for (n = 0; n < i; n++) printf("%02X%s", b[start + 3 + n], (n % 16 == 15) ? "\n" : " ");
+    printf("\n");
+}
+
+/* A location 0-9 for STOR/REC/SEND, -1 if none */
+static int fg5010_ask_location(void) {
+    int c;
+    printf("Location (0-9): ");
+    c = getch();
+    printf("%c\n", isprint(c) ? c : ' ');
+    return (c >= '0' && c <= '9') ? c - '0' : -1;
+}
+
+/* ID, self test, error queue, single queries, status, display, INIT, setups */
+static void fg5010_utilities_menu(int address) {
+    static const char* __far disp_args[] = { "FREQ", "AMPL", "OFFS", "NBURST", "PHASE", "SYM" };
+    static const char* __far lock_text[] = { "phase lock mode not selected",
+        "phase lock mode, not locked", "phase lock mode, locked" };
+    static const char* __far trig_text[] = { "trigger status not available",
+        "input below threshold", "input toggling faster than 3 Hz", "input above threshold" };
+    char cmd[16];
+    const char *p;
+    int choice, done = 0, loc, i;
+    float v;
+
     while (!done) {
         clrscr();
-        printf("FG5010 Function Generator Configuration - Slot %d\n", slot);
-        printf("================================================\n\n");
-        
-        printf("Current Settings:\n");
-        printf("  1. Frequency: %.3f Hz\n", cfg->frequency);
-        printf("  2. Amplitude: %.3f Vpp\n", cfg->amplitude);
-        printf("  3. Offset: %.3f V\n", cfg->offset);
-        printf("  4. Waveform: %s\n", cfg->waveform);
-        printf("  5. Output: %s\n", cfg->output_enabled ? "ON" : "OFF");
-        printf("  6. Symmetry: %.1f%% (Square/Pulse: 10-90%%)\n", cfg->duty_cycle);
-        printf("  7. LF Termination: %s\n", cfg->lf_termination ? "LF" : "CRLF");
-        printf("\n");
-        printf("  8. Advanced Configuration\n");
-        printf("  9. Test Communication\n");
-        printf("  0. Return to Main Menu\n\n");
-        
-        printf("Select option (1-9, 0=exit): ");
-        scanf("%d", &choice);
-        
+        printf("FG5010 Utilities - GPIB %d\n", address);
+        printf("==========================\n\n");
+        printf("1. Identify (ID?)\n");
+        printf("2. Self test (TEST) - no output while it runs\n");
+        printf("3. Error and event queue (ERR?)\n");
+        printf("4. Query one setting\n");
+        printf("5. Phase lock and trigger input status (LOCK?, TRIG?)\n");
+        printf("6. Front-panel display (DISP)\n");
+        printf("7. INIT - power-on settings, output relay open\n");
+        printf("8. Store the present settings (STOR 0-9)\n");
+        printf("9. Recall stored settings (REC 0-9) - can switch the output\n");
+        printf("L. Low-level settings block (LLSET?)\n");
+        printf("S. Stored settings block (SEND 0-9)\n");
+        printf("0. Return\n\nSelect option: ");
+        choice = toupper(getch());
+        printf("\n\n");
+
         switch (choice) {
-            case 1:
-                printf("Enter frequency in Hz (0.002 to 20000000): ");
-                scanf("%s", input);
-                cfg->frequency = atof(input);
-                if (cfg->frequency < 0.002) cfg->frequency = 0.002;
-                if (cfg->frequency > 20000000.0) cfg->frequency = 20000000.0;
+            case '1':
+                printf("%s\n", fg5010_query(address, "ID?") ? fg5010_reply : "No reply");
                 break;
-                
-            case 2:
-                printf("Enter load impedance (0=50ohm, 1=open): ");
-                scanf("%d", &temp_choice);
-                if (temp_choice == 0) {
-                    printf("Enter amplitude in Vpp (0.01 to 10.0, 50ohm load): ");
-                    scanf("%s", input);
-                    cfg->amplitude = atof(input);
-                    if (cfg->amplitude < 0.01) cfg->amplitude = 0.01;
-                    if (cfg->amplitude > 10.0) cfg->amplitude = 10.0;
-                } else {
-                    printf("Enter amplitude in Vpp (0.02 to 20.0, open circuit): ");
-                    scanf("%s", input);
-                    cfg->amplitude = atof(input);
-                    if (cfg->amplitude < 0.02) cfg->amplitude = 0.02;
-                    if (cfg->amplitude > 20.0) cfg->amplitude = 20.0;
-                }
+            case '2':
+                printf("Running TEST (ROM, serial I/O and AFC tests, p. 3-23)...\n");
+                fg5010_long_timeout(1);
+                i = fg5010_query_value(address, "TEST", "TEST", &v);
+                fg5010_long_timeout(0);
+                if (!i) printf("No reply\n");
+                else if ((int)v == 0) printf("TEST 0: self test passed\n");
+                else printf("TEST %d: %s\n", (int)v, fg5010_error_text((int)v));
                 break;
-                
-            case 3:
-                printf("Enter DC offset in V (-7.5 to +7.5): ");
-                scanf("%s", input);
-                cfg->offset = atof(input);
-                if (cfg->offset < -7.5) cfg->offset = -7.5;
-                if (cfg->offset > 7.5) cfg->offset = 7.5;
+            case '3':
+                i = fg5010_begin(address);
+                if (fg5010_show_errors(address) == 0) printf("No errors pending\n");
+                fg5010_end(address, i);
                 break;
-                
-            case 4:
-                printf("Select waveform:\n");
-                printf("  1. SINE\n  2. SQUARE\n  3. TRIANGLE\n  4. RAMP\n  5. PULSE\n  6. NOISE\n");
-                printf("Enter choice (1-6): ");
-                scanf("%d", &choice);
-                switch (choice) {
-                    case 1: strcpy(cfg->waveform, "SINE"); break;
-                    case 2: strcpy(cfg->waveform, "SQUARE"); break;
-                    case 3: strcpy(cfg->waveform, "TRIANGLE"); break;
-                    case 4: strcpy(cfg->waveform, "RAMP"); break;
-                    case 5: strcpy(cfg->waveform, "PULSE"); break;
-                    case 6: strcpy(cfg->waveform, "NOISE"); break;
-                    default: printf("Invalid selection\n"); delay(1000); break;
-                }
+            case '4':
+                for (i = 0; i < 20; i++)
+                    printf("%c. %-6s%s", 'A' + i, i < 12 ? fg5010_queries[i] : fg5010_toggles[i - 12],
+                           i % 5 == 4 ? "\n" : "  ");
+                printf("\nQuery: ");
+                i = toupper(getch()) - 'A';
+                printf("\n");
+                if (i < 0 || i >= 20) break;
+                sprintf(cmd, "%s?", i < 12 ? fg5010_queries[i] : fg5010_toggles[i - 12]);
+                printf("%s -> %s\n", cmd, fg5010_query(address, cmd) ? fg5010_reply : "No reply");
                 break;
-                
-            case 5:
-                cfg->output_enabled = !cfg->output_enabled;
-                printf("Output %s\n", cfg->output_enabled ? "ENABLED" : "DISABLED");
-                delay(1000);
+            case '5':
+                if (fg5010_query_value(address, "LOCK?", "LOCK", &v) && v >= -1 && v <= 1)
+                    printf("LOCK %d: %s\n", (int)v, lock_text[(int)v + 1]);
+                else
+                    printf("No reply to LOCK?\n");
+                if (fg5010_query_value(address, "TRIG?", "TRIG", &v) && v >= 0 && v <= 3)
+                    printf("TRIG %d: %s\n", (int)v, trig_text[(int)v]);
+                else
+                    printf("No reply to TRIG?\n");
                 break;
-                
-            case 6:
-                printf("Enter symmetry %% (10.0 to 90.0): ");
-                scanf("%s", input);
-                cfg->duty_cycle = atof(input);
-                if (cfg->duty_cycle < 10.0) cfg->duty_cycle = 10.0;
-                if (cfg->duty_cycle > 90.0) cfg->duty_cycle = 90.0;
+            case '6':
+                printf("1. FREQ  2. AMPL  3. OFFS  4. NBURST  5. PHASE  6. SYM\nShow: ");
+                i = getch() - '1';
+                printf("\n");
+                if (i < 0 || i > 5) break;
+                sprintf(cmd, "DISP %s", disp_args[i]);
+                if (fg5010_send_checked(address, cmd)) printf("Display shows %s\n", disp_args[i]);
                 break;
-                
-            case 7:
-                cfg->lf_termination = !cfg->lf_termination;
-                printf("Line termination set to %s\n", cfg->lf_termination ? "LF" : "CRLF");
-                delay(1000);
+            case '7':
+                printf("INIT returns every setting except the stored setups to its power-on\n");
+                printf("value (p. 3-12, 3-33) and opens the output relay. Continue (Y/N)? ");
+                if (toupper(getch()) != 'Y') break;
+                printf("\n");
+                /* INIT puts RQS back ON (p. 3-33); off again so its errors queue */
+                if (fg5010_send_checked(address, "INIT;RQS OFF"))
+                    printf("FG5010 at its power-on settings. A in the setup menu re-applies TM5000's.\n");
                 break;
-                
-            case 8:
-                configure_fg5010_advanced(slot);
+            case '8':
+                if ((loc = fg5010_ask_location()) < 0) break;
+                printf("Overwrite stored setup %d with the present settings (Y/N)? ", loc);
+                if (toupper(getch()) != 'Y') break;
+                printf("\n");
+                sprintf(cmd, "STOR %d", loc);
+                if (fg5010_send_checked(address, cmd)) printf("Stored in %d (kept until power-off)\n", loc);
                 break;
-                
-            case 9:
-                test_fg5010_comm(g_system->modules[slot].gpib_address);
+            case '9':
+                if ((loc = fg5010_ask_location()) < 0) break;
+                /* A setup holds the OUT state (STOR leaves out only step size, DT, PLI,
+                   RQS and USER, p. 3-21), so recalling can close the relay */
+                printf("Recall setup %d? It includes the output relay state (Y/N) ", loc);
+                if (toupper(getch()) != 'Y') break;
+                printf("\n");
+                sprintf(cmd, "REC %d", loc);
+                fg5010_send_checked(address, cmd);
+                if (fg5010_query(address, "OUT?") && (p = fg5010_field(fg5010_reply, "OUT")) != NULL)
+                    printf("Output relay is now %s\n", fg5010_on(fg5010_reply, "OUT") ? "ON" : "OFF");
+                else
+                    printf("No reply to OUT?: check the OUTPUT ON light\n");
                 break;
-                
-            case 0:
+            case 'L':
+                fg5010_dump_block(address, "LLSET?");
+                break;
+            case 'S':
+                if ((loc = fg5010_ask_location()) < 0) break;
+                sprintf(cmd, "SEND %d", loc);
+                fg5010_dump_block(address, cmd);
+                break;
+            case '0':
+            case 27:
                 done = 1;
                 break;
-                
-            default:
-                printf("Invalid selection\n");
-                delay(1000);
-                break;
+        }
+        if (!done) {
+            printf("\nPress any key...");
+            getch();
         }
     }
 }
 
+/* Prompt for a number; 0 if the entry was not one */
+static int fg5010_ask(const char *prompt, float *v) {
+    char tok[24];
+
+    printf("%s: ", prompt);
+    /* Leading space skips the newline an earlier scanf left behind */
+    if (scanf(" %23s", tok) != 1) return 0;
+    if (sscanf(tok, "%f", v) == 1) return 1;
+    printf("Not a number\n");
+    return 0;
+}
+
+/* Every FG5010 setting, kept in the slot and sent with Apply; the output relay,
+   triggers and setups act at once and ask first where they change the output. */
 void configure_fg5010_advanced(int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
-    char input[50];
-    int choice, done = 0;
-    int temp_choice;
-    
+    int address = g_system->modules[slot].gpib_address;
+    int choice, i, done = 0, pause;
+    float v;
+    char cmd[16];
+    const char *msg;
+
     if (slot < 0 || slot >= 10) return;
-    
+    fg5010_fix_config(slot);
+
     while (!done) {
         clrscr();
-        printf("FG5010 Advanced Configuration - Slot %d\n", slot);
-        printf("=====================================\n\n");
-        
-        printf("Sweep Configuration:\n");
-        printf("  1. Sweep Mode: %s\n", cfg->sweep_enabled ? "ENABLED" : "DISABLED");
-        printf("  2. Start Freq: %.3f Hz\n", cfg->start_freq);
-        printf("  3. Stop Freq: %.3f Hz\n", cfg->stop_freq);
-        printf("  4. Sweep Time: %.3f seconds\n", cfg->sweep_time);
-        printf("  5. Sweep Type: %s\n", cfg->sweep_type ? "LOGARITHMIC" : "LINEAR");
-        printf("\n");
-        
-        printf("Trigger Configuration:\n");
-        printf("  6. Trigger Source: %s\n", cfg->trigger_source);
-        printf("  7. Trigger Slope: %s\n", cfg->trigger_slope);
-        printf("  8. Trigger Level: %.2f V\n", cfg->trigger_level);
-        printf("\n");
-        
-        printf("Modulation Configuration:\n");
-        printf("  9. Modulation: %s\n", cfg->modulation_enabled ? "ENABLED" : "DISABLED");
-        printf(" 10. Mod Type: %s\n", cfg->mod_type);
-        printf(" 11. Mod Freq: %.2f Hz\n", cfg->mod_freq);
-        printf(" 12. Mod Depth: %.1f%%\n", cfg->mod_depth);
-        printf("\n");
-        
-        printf("Other Settings:\n");
-        printf(" 13. Sync Output: %s\n", cfg->sync_enabled ? "ON" : "OFF");
-        printf(" 14. Invert: %s\n", cfg->invert_enabled ? "ON" : "OFF");
-        printf(" 15. Phase: %.1f degrees\n", cfg->phase);
-        printf(" 16. Burst Mode: %s\n", cfg->burst_enabled ? "ENABLED" : "DISABLED");
-        printf("\n");
-        printf("  0. Return to Basic Configuration\n\n");
-        
-        printf("Select option (1-16, 0=exit): ");
-        scanf("%d", &choice);
-        
+        printf("FG5010 Function Generator - Slot %d (GPIB %d)\n", slot, address);
+        printf("=============================================\n\n");
+        printf("1. Function:  %-10s          7. Mode:  %s\n", cfg->waveform, fg5010_modes[cfg->mode]);
+        printf("2. Frequency: %-12.6g Hz       8. Slope: %s\n", cfg->frequency, cfg->trigger_slope);
+        printf("3. Amplitude: %.4g V p-p open circuit (%.4g V p-p into 50 ohm)\n",
+               cfg->amplitude, cfg->amplitude / 2.0);
+        printf("4. Offset:    %+.2f V open circuit\n", cfg->offset);
+        printf("5. Symmetry:  %d %%                  9. Burst count (NBUR): %d\n",
+               (int)cfg->duty_cycle, cfg->burst_count);
+        printf("6. Phase:     %+d deg               D. GET response (DT): %s\n",
+               (int)cfg->phase, fg5010_dts[cfg->dt_mode]);
+        printf("T. On/off:");
+        for (i = 0; i < 8; i++)
+            printf(" %s %s", fg5010_toggles[i], (cfg->toggles & (1 << i)) ? "ON" : "off");
+        printf("\n\nA. Apply settings to the FG5010   R. Read settings back (SET?)\n");
+        printf("O. Output relay ON/OFF (asks)     M. Manual trigger (MTRIG)\n");
+        printf("G. Send GET (needs DT TRIG/GATE)  U. Utilities (ID, test, setups...)\n");
+        printf("C. Communication test             0. Return\n");
+        printf("\nSettings go to the generator only with A; A never switches the relay.\n");
+        printf("\nSelect option: ");
+        choice = toupper(getch());
+        printf("\n\n");
+        pause = 1;
+
         switch (choice) {
-            case 1:
-                cfg->sweep_enabled = !cfg->sweep_enabled;
-                printf("Sweep mode %s\n", cfg->sweep_enabled ? "ENABLED" : "DISABLED");
-                delay(1000);
+            case '1':
+                printf("1. SINE  2. SQUARE  3. TRIANGLE: ");
+                i = getch() - '1';
+                if (i >= 0 && i < 3) strcpy(cfg->waveform, fg5010_funcs[i]);
+                pause = 0;
                 break;
-                
-            case 2:
-                printf("Enter sweep start frequency in Hz: ");
-                scanf("%s", input);
-                cfg->start_freq = atof(input);
-                break;
-                
-            case 3:
-                printf("Enter sweep stop frequency in Hz: ");
-                scanf("%s", input);
-                cfg->stop_freq = atof(input);
-                break;
-                
-            case 4:
-                printf("Enter sweep time in seconds (0.1 to 999): ");
-                scanf("%s", input);
-                cfg->sweep_time = atof(input);
-                if (cfg->sweep_time < 0.1) cfg->sweep_time = 0.1;
-                if (cfg->sweep_time > 999.0) cfg->sweep_time = 999.0;
-                break;
-                
-            case 5:
-                cfg->sweep_type = !cfg->sweep_type;
-                printf("Sweep type set to %s\n", cfg->sweep_type ? "LOGARITHMIC" : "LINEAR");
-                delay(1000);
-                break;
-                
-            case 6:
-                printf("Select trigger source:\n");
-                printf("  1. INTERNAL\n  2. EXTERNAL\n  3. MANUAL\n");
-                printf("Enter choice (1-3): ");
-                scanf("%d", &choice);
-                switch (choice) {
-                    case 1: strcpy(cfg->trigger_source, "INT"); break;
-                    case 2: strcpy(cfg->trigger_source, "EXT"); break;
-                    case 3: strcpy(cfg->trigger_source, "MAN"); break;
-                    default: printf("Invalid selection\n"); delay(1000); break;
+
+            case '2': case '3': case '4': case '5': case '6': case '9':
+                i = choice == '9' ? 5 : choice - '2';
+                if (!fg5010_ask(fg5010_nums[i].prompt, &v)) break;
+                if ((msg = fg5010_num_error(cfg, i, v)) != NULL) {
+                    printf("Not set: %s\n", msg);
+                    break;
                 }
+                fg5010_set_num(cfg, i, v);
+                if (i == 0 && (cfg->toggles & FG5010_HOLD) && v > 200.0)
+                    printf("HOLD is on: the FG5010 refuses over 200 Hz (error 255)\n");
+                else if (i == 4)
+                    printf("PHLOCK: offset from the TRIG/GATE input. TRIG/GATE/BURST: start of\n"
+                           "the first cycle. Above 1 MHz the range narrows (p. 1-6).\n");
+                else pause = 0;
                 break;
-                
-            case 7:
-                if (strcmp(cfg->trigger_slope, "POS") == 0) {
-                    strcpy(cfg->trigger_slope, "NEG");
+
+            case '7':
+                printf("1. CONT  2. TRIG  3. GATE  4. BURST  5. PHLOCK: ");
+                i = getch() - '1';
+                printf("\n");
+                if (i < 0 || i > 4) break;
+                cfg->mode = i;
+                /* Leaving GATE mode turns the gate off (p. 3-10) */
+                if (i != 2) cfg->toggles &= ~FG5010_GATE;
+                if (i == 4 && (cfg->toggles & (FG5010_FM | FG5010_VCF | FG5010_HOLD)))
+                    printf("PHLOCK refuses FM, VCF and HOLD (p. 3-14): turn them off\n");
+                else pause = 0;
+                break;
+
+            case '8':
+                strcpy(cfg->trigger_slope, strcmp(cfg->trigger_slope, "POS") == 0 ? "NEG" : "POS");
+                pause = 0;
+                break;
+
+            case 'D':
+                printf("Response to GET (p. 3-8):\n");
+                printf("0. OFF   ignored\n");
+                printf("1. SET   hold new settings until GET\n");
+                printf("2. TRIG  one cycle (TRIG) or a burst (BURST) per GET\n");
+                printf("3. GATE  toggle the gate (GATE mode)\nSelect: ");
+                i = getch() - '0';
+                if (i >= 0 && i <= 3) cfg->dt_mode = i;
+                pause = 0;
+                break;
+
+            case 'T':
+                for (i = 0; i < 8; i++)
+                    printf("%d. %-4s %-3s %s\n", i + 1, fg5010_toggles[i],
+                           (cfg->toggles & (1 << i)) ? "ON" : "off", fg5010_toggle_help[i]);
+                printf("Toggle: ");
+                i = getch() - '1';
+                printf("\n");
+                if (i < 0 || i > 7) break;
+                cfg->toggles ^= 1 << i;
+                /* FM ON turns VCF off and VCF ON turns FM off (p. 3-9, 3-25) */
+                if ((cfg->toggles & (1 << i)) && i == 2) cfg->toggles &= ~FG5010_VCF;
+                if ((cfg->toggles & (1 << i)) && i == 3) cfg->toggles &= ~FG5010_FM;
+                if (!(cfg->toggles & FG5010_VCF) && cfg->frequency == 0.0) cfg->frequency = 1000.0;
+                if ((cfg->toggles & FG5010_GATE) && cfg->mode != 2) {
+                    cfg->toggles &= ~FG5010_GATE;
+                    printf("GATE ON needs MODE GATE (p. 3-10)\n");
+                } else if ((cfg->toggles & FG5010_HOLD) && (cfg->frequency > 200.0 || cfg->mode == 4)) {
+                    printf("HOLD needs 200 Hz or less and no PHLOCK (p. 3-11)\n");
+                } else if (cfg->mode == 4 && (cfg->toggles & (FG5010_FM | FG5010_VCF))) {
+                    printf("PHLOCK refuses FM and VCF (p. 3-9, 3-25)\n");
                 } else {
-                    strcpy(cfg->trigger_slope, "POS");
+                    pause = 0;
                 }
-                printf("Trigger slope set to %s\n", cfg->trigger_slope);
-                delay(1000);
                 break;
-                
-            case 8:
-                printf("Enter trigger level in V (-5.0 to +5.0): ");
-                scanf("%s", input);
-                cfg->trigger_level = atof(input);
-                if (cfg->trigger_level < -5.0) cfg->trigger_level = -5.0;
-                if (cfg->trigger_level > 5.0) cfg->trigger_level = 5.0;
+
+            case 'A':
+                fg5010_apply(slot);
                 break;
-                
-            case 9:
-                cfg->modulation_enabled = !cfg->modulation_enabled;
-                printf("Modulation %s\n", cfg->modulation_enabled ? "ENABLED" : "DISABLED");
-                delay(1000);
+
+            case 'R':
+                fg5010_read_back(slot);
                 break;
-                
-            case 10:
-                printf("Select modulation type:\n");
-                printf("  1. AM (Amplitude Modulation)\n");
-                printf("  2. FM (Frequency Modulation)\n");
-                printf("  3. VCF (Voltage Controlled Frequency)\n");
-                printf("  4. EXTERNAL\n");
-                printf("Choice: ");
-                scanf("%d", &temp_choice);
-                switch(temp_choice) {
-                    case 1: strcpy(cfg->mod_type, "AM"); break;
-                    case 2: strcpy(cfg->mod_type, "FM"); break;
-                    case 3: strcpy(cfg->mod_type, "VCF"); break;
-                    case 4: strcpy(cfg->mod_type, "EXT"); break;
-                    default: strcpy(cfg->mod_type, "AM"); break;
-                }
-                printf("Modulation type set to %s\n", cfg->mod_type);
-                delay(1000);
+
+            case 'O':
+                fg5010_output(address);
                 break;
-                
-            case 11:
-                printf("Enter modulation frequency in Hz: ");
-                scanf("%s", input);
-                cfg->mod_freq = atof(input);
+
+            case 'M':
+                /* One cycle in TRIG, NBUR cycles in BURST (p. 3-14); MAN is the same command */
+                printf("MTRIG: one cycle in TRIG mode, a burst in BURST mode. Send (Y/N)? ");
+                if (toupper(getch()) != 'Y') break;
+                printf("\n");
+                if (fg5010_send_checked(address, "MTRIG")) printf("Triggered\n");
                 break;
-                
-            case 12:
-                printf("Enter modulation depth in %% (0-100): ");
-                scanf("%s", input);
-                cfg->mod_depth = atof(input);
-                if (cfg->mod_depth < 0.0) cfg->mod_depth = 0.0;
-                if (cfg->mod_depth > 100.0) cfg->mod_depth = 100.0;
+
+            case 'G':
+                printf("GET acts as DT is set on the FG5010 (p. 3-8). Send (Y/N)? ");
+                if (toupper(getch()) != 'Y') break;
+                printf("\n");
+                i = fg5010_begin(address);
+                sprintf(cmd, "TRIGGER %d\r\n", address);
+                ieee_write(cmd);
+                GPIB_PACE(60);
+                if (fg5010_show_errors(address) == 0) printf("GET sent\n");
+                fg5010_end(address, i);
                 break;
-                
-            case 13:
-                cfg->sync_enabled = !cfg->sync_enabled;
-                printf("Sync output %s\n", cfg->sync_enabled ? "ENABLED" : "DISABLED");
-                delay(1000);
+
+            case 'U':
+                fg5010_utilities_menu(address);
+                pause = 0;
                 break;
-                
-            case 14:
-                cfg->invert_enabled = !cfg->invert_enabled;
-                printf("Waveform invert %s\n", cfg->invert_enabled ? "ENABLED" : "DISABLED");
-                delay(1000);
+
+            case 'C':
+                test_fg5010_comm(address);
+                pause = 0;
                 break;
-                
-            case 15:
-                printf("Enter phase offset in degrees (0-360): ");
-                scanf("%s", input);
-                cfg->phase = atof(input);
-                while (cfg->phase < 0.0) cfg->phase += 360.0;
-                while (cfg->phase >= 360.0) cfg->phase -= 360.0;
-                break;
-                
-            case 16:
-                cfg->burst_enabled = !cfg->burst_enabled;
-                if (cfg->burst_enabled) {
-                    printf("Enter burst count (1-99999): ");
-                    scanf("%d", &cfg->burst_count);
-                    printf("Enter burst period in seconds: ");
-                    scanf("%f", &cfg->burst_period);
-                }
-                printf("Burst mode %s\n", cfg->burst_enabled ? "ENABLED" : "DISABLED");
-                delay(1000);
-                break;
-                
-            case 0:
+
+            case '0':
+            case 27:
                 done = 1;
+                pause = 0;
                 break;
-                
+
             default:
-                printf("Invalid selection\n");
-                delay(1000);
+                pause = 0;
                 break;
+        }
+        if (pause) {
+            printf("\nPress any key to continue...");
+            getch();
         }
     }
 }
 
-/* FG5010 GPIB Control Functions */
-void fg5010_set_frequency(int address, float freq) {
-    sprintf(gpib_cmd_buffer, "FREQ %.3f", freq);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_amplitude(int address, float amp) {
-    sprintf(gpib_cmd_buffer, "AMPL %.3f", amp);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_offset(int address, float offset) {
-    sprintf(gpib_cmd_buffer, "OFFS %.3f", offset);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_waveform(int address, char *waveform) {
-    sprintf(gpib_cmd_buffer, "FUNC %s", waveform);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_duty_cycle(int address, float duty) {
-    sprintf(gpib_cmd_buffer, "DCYC %.1f", duty);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_enable_output(int address, int enable) {
-    gpib_write(address, enable ? "OUTP ON" : "OUTP OFF");
-    GPIB_PACE(50);
-}
-
-void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq, float time) {
-    if (enable) {
-        sprintf(gpib_cmd_buffer, "SWE:STAT ON;SWE:STAR %.3f;SWE:STOP %.3f;SWE:TIME %.3f", 
-                start_freq, stop_freq, time);
-    } else {
-        strcpy(gpib_cmd_buffer, "SWE:STAT OFF");
-    }
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_trigger(int address, char *source, char *slope, float level) {
-    sprintf(gpib_cmd_buffer, "TRIG:SOUR %s;TRIG:SLOP %s;TRIG:LEV %.2f", source, slope, level);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_sync(int address, int enable) {
-    gpib_write(address, enable ? "SYNC ON" : "SYNC OFF");
-    GPIB_PACE(50);
-}
-
-void fg5010_set_invert(int address, int enable) {
-    gpib_write(address, enable ? "INV ON" : "INV OFF");
-    GPIB_PACE(50);
-}
-
-void fg5010_set_phase(int address, float phase) {
-    sprintf(gpib_cmd_buffer, "PHAS %.1f", phase);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth) {
-    if (enable) {
-        sprintf(gpib_cmd_buffer, "MOD:STAT ON;MOD:TYP %s;MOD:FREQ %.2f;MOD:DEPT %.1f", 
-                type, freq, depth);
-    } else {
-        strcpy(gpib_cmd_buffer, "MOD:STAT OFF");
-    }
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void fg5010_set_burst(int address, int enable, int count, float period) {
-    if (enable) {
-        sprintf(gpib_cmd_buffer, "BURS:STAT ON;BURS:NCYC %d;BURS:INT:PER %.3f", count, period);
-    } else {
-        strcpy(gpib_cmd_buffer, "BURS:STAT OFF");
-    }
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
+/* ID, settings round trip, output relay and error queue. Asks before INIT and
+   the relay; whatever happens the relay is opened again and checked. */
 int test_fg5010_comm(int address) {
-
-    int test_passed = 1;
+    int failed = 0, rqs, i, k, off_ok, skip;
+    float v;
     void (*old_sigint)(int);
     void (*old_sigbreak)(int);
 
     clrscr();
     printf("FG5010 Function Generator Communication Test\n");
-    printf("==========================================\n\n");
+    printf("============================================\n\n");
     printf("Testing FG5010 at GPIB address %d...\n\n", address);
 
+    printf("Test 1: Identification (ID?)... ");
+    if (!fg5010_query(address, "ID?") || strncmp(fg5010_reply, "ID TEK/FG5010", 13) != 0) {
+        printf("FAILED\n   %s\n", fg5010_reply[0] ? fg5010_reply : "No reply");
+        printf("\nNo FG5010 answered: nothing else was sent.\n");
+        printf("Press any key to continue...");
+        getch();
+        return -1;
+    }
+    printf("PASSED\n   %s\n\n", fg5010_reply);
+
     /* The test overwrites the user's settings and drives whatever is wired to the output */
-    printf("WARNING: this test sets 1 kHz,\n");
-    printf("2 Vpp, SINE and briefly turns the\n");
-    printf("output ON, then leaves it OFF.\n");
-    printf("Current settings will be lost.\n");
+    printf("WARNING: this test sends INIT (all settings return to power-on\n");
+    printf("values), sets 1 kHz SINE at 2 V p-p open circuit (1 V p-p into\n");
+    printf("50 ohm), closes the output relay briefly and opens it again.\n");
     printf("Continue? (y/n): ");
     if (toupper(getch()) != 'Y') {
         printf("\n\nFG5010 test not run.\n");
@@ -1595,123 +1959,79 @@ int test_fg5010_comm(int address) {
     }
     printf("\n\n");
 
-    printf("Test 1: Device Identification... ");
-    gpib_write(address, "*IDN?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("PASSED\n");
-        printf("   %s\n", gpib_response_buffer);
+    rqs = fg5010_begin(address);
+    printf("Test 2: Earlier events (ERR?)...\n");
+    i = fg5010_show_errors(address);
+    if (i < 0) {
+        failed = 1;
     } else {
-        printf("FAILED - No response\n");
-        test_passed = 0;
+        printf("   %s\n", i ? "Earlier errors cleared" : "PASSED");
     }
-    
-    printf("\nTest 2: Set Frequency (1 kHz)... ");
-    gpib_write(address, "FREQ 1000");
+
+    printf("\nTest 3: INIT, then 1 kHz, 2 V p-p, SINE... ");
+    /* INIT puts RQS back ON (p. 3-33); off again in the same message */
+    gpib_write(address, "INIT;RQS OFF");
     GPIB_PACE(100);
-    gpib_write(address, "FREQ?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("PASSED\n");
-        printf("   %s\n", gpib_response_buffer);
-    } else {
-        printf("FAILED\n");
-        test_passed = 0;
-    }
-    
-    printf("\nTest 3: Set Amplitude (2 Vpp)... ");
-    gpib_write(address, "AMPL 2.0");
-    GPIB_PACE(100);
-    gpib_write(address, "AMPL?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("PASSED\n");
-        printf("   %s\n", gpib_response_buffer);
-    } else {
-        printf("FAILED\n");
-        test_passed = 0;
-    }
-    
-    printf("\nTest 4: Set Waveform (SINE)... ");
-    gpib_write(address, "FUNC SINE");
-    GPIB_PACE(100);
-    gpib_write(address, "FUNC?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("PASSED\n");
-        printf("   %s\n", gpib_response_buffer);
-    } else {
-        printf("FAILED\n");
-        test_passed = 0;
-    }
-    
-    printf("\nTest 5: Output Control... ");
+    gpib_write(address, "FREQ 1000;AMPL 2.0;FUNC SINE");
+    GPIB_PACE(60);  /* frequency with range change: under 50 ms (Table 1-6, p. 1-9) */
+    i = fg5010_query_value(address, "FREQ?", "FREQ", &v) && fabs(v - 1000.0) < 1.0;
+    printf("\n   FREQ? %s", fg5010_reply[0] ? fg5010_reply : "no reply");
+    if (!(fg5010_query_value(address, "AMPL?", "AMPL", &v) && fabs(v - 2.0) < 0.01)) i = 0;
+    printf("\n   AMPL? %s", fg5010_reply[0] ? fg5010_reply : "no reply");
+    if (!(fg5010_query(address, "FUNC?") && strncmp(fg5010_reply, "FUNC SINE", 9) == 0)) i = 0;
+    printf("\n   FUNC? %s", fg5010_reply[0] ? fg5010_reply : "no reply");
+    if (!(fg5010_query(address, "OUT?") && strncmp(fg5010_reply, "OUT OFF", 7) == 0)) i = 0;
+    printf("\n   OUT?  %s\n", fg5010_reply[0] ? fg5010_reply : "no reply");
+    printf("   %s\n", i ? "PASSED" : "FAILED");
+
+    /* Settings not confirmed: the relay is not closed on an unknown waveform,
+       but OUT OFF is still sent and checked below */
+    printf("\nTest 4: Output relay (OUT ON, OUT OFF)... ");
+    skip = !i;
     /* Ctrl-C/Ctrl-Break here would exit with the output live */
     old_sigint = signal(SIGINT, SIG_IGN);
     old_sigbreak = signal(SIGBREAK, SIG_IGN);
-    gpib_write(address, "OUTP ON");
-    GPIB_PACE(100);
-    gpib_write(address, "OUTP?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("PASSED\n");
-        printf("   %s\n", gpib_response_buffer);
-    } else {
-        printf("FAILED\n");
-        test_passed = 0;
+    if (!skip) {
+        gpib_write(address, "OUT ON");
+        GPIB_PACE(20);  /* relay: under 8 ms (Table 1-6, p. 1-9) */
+        i = fg5010_query(address, "OUT?") && fg5010_on(fg5010_reply, "OUT");
     }
-    /* A failed read does not mean OUTP ON was ignored */
-    if (gpib_write(address, "OUTP OFF") != 0) {
+    /* Open it whatever OUT? said, and confirm: a failed read does not mean OUT ON
+       was ignored */
+    off_ok = 0;
+    for (k = 0; k < 2 && !off_ok; k++) {
+        gpib_write(address, "OUT OFF");
+        GPIB_PACE(20);
+        off_ok = fg5010_query(address, "OUT?") && strncmp(fg5010_reply, "OUT OFF", 7) == 0;
+    }
+    signal(SIGINT, old_sigint);
+    signal(SIGBREAK, old_sigbreak);
+    printf("%s\n", skip ? "SKIPPED (OUT OFF sent)" : i && off_ok ? "PASSED" : "FAILED");
+    if (!i || !off_ok) failed = 1;
+    if (!off_ok) {
         printf("\n*** OUTPUT MAY STILL BE ON: turn it off at the FG5010 front panel. ***\n");
         printf("Press any key to continue...");
         getch();
-        test_passed = 0;
     }
-    GPIB_PACE(50);
-    signal(SIGINT, old_sigint);
-    signal(SIGBREAK, old_sigbreak);
-    
-    printf("\nTest 6: Error Status Check... ");
-    gpib_write(address, "SYST:ERR?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("PASSED\n");
-        printf("   %s\n", gpib_response_buffer);
-    } else {
-        printf("FAILED\n");
-        test_passed = 0;
-    }
-    
-    printf("\n==========================================\n");
-    if (test_passed) {
+
+    printf("\nTest 5: Errors from this test (ERR?)...\n");
+    i = fg5010_show_errors(address);
+    if (i != 0) failed = 1;
+    else printf("   PASSED\n");
+    fg5010_end(address, rqs);
+
+    printf("\n============================================\n");
+    if (!failed) {
         printf("ALL TESTS PASSED - FG5010 communication OK\n");
     } else {
         printf("SOME TESTS FAILED - Check connections and settings\n");
     }
-    printf("==========================================\n\n");
-    
+    printf("============================================\n\n");
+
     printf("Press any key to continue...");
     getch();
-    
-    return test_passed ? 0 : -1;
-}
 
-float fg5010_read_frequency(int address) {
-    gpib_write(address, "FREQ?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        return atof(gpib_response_buffer);
-    }
-    return 0.0;
-}
-
-int fg5010_read_output_status(int address) {
-    gpib_write(address, "OUTP?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        return (strstr(gpib_response_buffer, "ON") != NULL || strstr(gpib_response_buffer, "1") != NULL) ? 1 : 0;
-    }
-    return 0;
+    return failed ? -1 : 0;
 }
 
 /* True if slot holds a computed (FFT/math) trace: flagged, or MOD_NONE with data.
@@ -4676,7 +4996,16 @@ void single_measurement(void) {
                     g_system->modules[slot].last_reading = value;
                 }
                 break;
-                
+
+            case MOD_FG5010:
+                /* A source: report what it is programmed to */
+                {
+                    char state[60];
+                    fg5010_state_text(g_system->modules[slot].gpib_address, state);
+                    printf("%s\n", state);
+                }
+                break;
+
             default:
                 printf("Unknown module type\n");
                 break;
@@ -5060,7 +5389,23 @@ void continuous_monitor(void) {
                                 }
                             }
                             break;
-                            
+
+                        case MOD_FG5010:
+                            /* A source: show its programmed state, store no sample. SET?
+                               once a second (every 10 s while it doesn't answer), so the
+                               generator doesn't set the pace */
+                            {
+                                static unsigned long fg5010_due[10];
+                                unsigned long now = *((unsigned long far *)0x0040006CL);
+                                if (!mon_last[i][0] || (long)(now - fg5010_due[i]) >= 0) {
+                                    fg5010_due[i] = now + (fg5010_state_text(g_system->modules[i].gpib_address,
+                                                                             mon_last[i]) ? 18 : 182);
+                                }
+                                lp("%s", mon_last[i]);
+                                lp_nl();
+                            }
+                            continue;
+
                         default:
                             value = 0.0;
                             lp("Not implemented       ");
