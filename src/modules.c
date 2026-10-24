@@ -48,6 +48,8 @@ static const dc_func_t __far dc_funcs[] = {
 #define DC_NFUNC ((int)(sizeof(dc_funcs) / sizeof(dc_funcs[0])))
 #define DC_TMAN 7
 #define DC_PROB 8
+#define DC_TOTAPB 9
+#define DC_TOTAMB 10
 #define DC_RISE 11
 #define DC_FALL 12
 #define DC_TEST 13
@@ -174,14 +176,34 @@ static const char *dc_err_text(int code) {
     return "see Table 2-3";
 }
 
+/* TOT/TMAN with OVER ON restart after 2^40 (DC5009) or 2^43 (DC5010) counts.
+   TMAN overflows the B counter (time base), TOT the A counter; TOT A+B and
+   A-B also use B, which adds or subtracts (p. 2-27/2-29, DC5010 p. 2-38). */
+static void dc_ovf_note(dc5009_config *c, int f, int b) {
+    if (!c->overflow_enabled) return;
+    if (f == DC_TMAN) c->overflow_count += b;
+    else if (strcmp(dc_funcs[f].hdr, "TOT") == 0)
+        c->overflow_count += !b ? 1 : f == DC_TOTAPB ? 1 : f == DC_TOTAMB ? -1 : 0;
+}
+
+#define DC_QUIET  1
+#define DC_RQSOFF 2     /* RQS OFF was just sent: read ERR? without serial polls */
+
 /* Print and clear pending events. With RQS OFF, ERR? returns them one at a
-   time, highest priority first, until 0 (p. 2-43/2-45). */
-static int dc_show_errors(int addr, int quiet) {
-    int i, n = 0;
+   time, highest priority first, until 0; with RQS ON each serial poll reports
+   one event and ERR? then explains it (p. 2-22, 2-43/2-45). */
+static int dc_show_errors(int slot, int flags) {
+    dc5009_config *c = dc_cfg(slot);
+    int addr = g_system->modules[slot].gpib_address, i, n = 0, code;
+    int spoll = c->srq_enabled && !(flags & DC_RQSOFF);
+    unsigned char st;
     double v;
     for (i = 0; i < 10; i++) {
+        if (spoll && (ieee_spoll(addr, &st) != 0 || !(st & 64))) break;
         if (!dc_query(addr, "ERR?") || !dc_reply_num(&v) || v == 0.0) break;
-        if (!quiet) printf("  ERR %d: %s\n", (int)v, dc_err_text((int)v));
+        code = (int)v;
+        if (code == 711 || code == 712) dc_ovf_note(c, dc_fn(slot), code == 712);
+        if (!(flags & DC_QUIET)) printf("  ERR %d: %s\n", code, dc_err_text(code));
         n++;
     }
     return n;
@@ -216,6 +238,7 @@ static unsigned long dc_expect_ms(int slot) {
     int f = dc_fn(slot), n = dc_avg(c, dc_is5010(slot));
     double v = c->last_measurement, fa = 0.0, t;
     if (v > 0.0) fa = f == 0 ? v : f == 1 ? 1.0 / v : 0.0;
+    if (c->preset_enabled) fa /= 16.0;    /* A sees the prescaler's f/16 (p. 2-28) */
     if (n < 0) {
         t = 0.3;
         if (fa > 0.0 && 1.0 / fa > t) t = 1.0 / fa;
@@ -227,32 +250,23 @@ static unsigned long dc_expect_ms(int slot) {
     return (unsigned long)(t * 1000.0);
 }
 
-/* Per-byte read timeout for gpib_gg: a reply never takes longer than one result */
+/* Per-byte read timeout for gpib_gg. SEND goes out only after RDY 1, so
+   replies are prompt; the cap keeps a dead counter from stalling the monitor. */
 unsigned dc50xx_timeout_ms(int slot) {
     unsigned long t = dc_expect_ms(slot) + 3000UL;
-    return t > 60000UL ? 60000u : (unsigned)t;
+    return t > 12000UL ? 12000u : (unsigned)t;
 }
 
-/* TOT/TMAN with OVER ON: the count restarts after 2^40 (DC5009) or 2^43
-   (DC5010); TMAN overflows its B counter of 10 ns time-base pulses, TOT its
-   A counter (p. 2-27/2-29). Returns what to add to the reading. */
+/* What the overflows seen so far add to a TOT/TMAN reading: 2^40 or 2^43
+   counts, or as many 10 ns time-base pulses for TMAN (p. 2-27/2-29) */
 static double dc_overflow_ext(int slot, int f) {
     dc5009_config *c = dc_cfg(slot);
-    int addr = g_system->modules[slot].gpib_address, is10 = dc_is5010(slot), i;
-    int tman = f == DC_TMAN;
-    unsigned char st;
-    double v;
+    int is10 = dc_is5010(slot);
 
     if (!c->overflow_enabled || !dc_running_total(f)) return 0.0;
-    if (c->srq_enabled) {
-        /* RQS ON: the event is in the status byte, 193 A / 194 B, +16 busy */
-        if (ieee_spoll(addr, &st) == 0 && (st & ~16) == (tman ? 194 : 193)) c->overflow_count++;
-    } else {
-        for (i = 0; i < 4 && dc_query(addr, "ERR?") && dc_reply_num(&v) && v != 0.0; i++)
-            if ((int)v == (tman ? 712 : 711)) c->overflow_count++;
-    }
-    return c->overflow_count * (tman ? (is10 ? 87960.93022208 : 10995.11627776)
-                                     : (is10 ? 8796093022208.0 : 1099511627776.0));
+    dc_show_errors(slot, DC_QUIET);       /* counts 711/712 via dc_ovf_note */
+    return c->overflow_count * (f == DC_TMAN ? (is10 ? 87960.93022208 : 10995.11627776)
+                                             : (is10 ? 8796093022208.0 : 1099511627776.0));
 }
 
 /* One reading without waiting: 1 = new result in *value, 0 = none ready yet,
@@ -270,29 +284,45 @@ int dc50xx_read(int slot, double *value) {
     return 1;
 }
 
-/* Poll for a result until ms have passed or ESC */
-static int dc_wait(int slot, double *value, unsigned long ms) {
+/* Poll RDY? until 1 (1), ms pass or ESC (0), or no reply (-1) */
+static int dc_wait_rdy(int addr, unsigned long ms) {
     unsigned long t0 = BIOS_TICKS, lim = ms * 182UL / 10000UL + 1;
-    int r;
+    double v;
     for (;;) {
-        r = dc50xx_read(slot, value);
-        if (r) return r;
+        if (!dc_query(addr, "RDY?") || !dc_reply_num(&v)) return -1;
+        if (v >= 1.0) return 1;
         if (BIOS_TICKS - t0 > lim || (kbhit() && getch() == 27)) return 0;
         delay(50);
     }
 }
 
+/* Wait for a result as dc_wait_rdy, then read it */
+static int dc_wait(int slot, double *value, unsigned long ms) {
+    int r = dc_wait_rdy(g_system->modules[slot].gpib_address, ms);
+    return r == 1 ? dc50xx_read(slot, value) : r;
+}
+
+/* A new function: old overflows and the last reading (which sets the
+   expected measurement time) no longer apply, and the trace unit changes */
+static void dc_new_function(int slot, const char *h, const char *a) {
+    dc5009_config *c = dc_cfg(slot);
+    if (strcmp(c->function, h) || strcmp(c->channel, a)) {
+        c->overflow_count = 0;
+        c->last_measurement = 0.0f;
+    }
+    sprintf(c->function, "%.7s", h);
+    sprintf(c->channel, "%.3s", a);
+    g_traces[slot].unit_type = dc50xx_trace_unit(slot);
+}
+
 /* Take the counter's own function (FUNC?, p. 2-24/2-25): front-panel changes
    in local, and the unit the readings carry */
 void dc50xx_sync_function(int slot) {
-    dc5009_config *c = dc_cfg(slot);
     char h[8], a[8];
     a[0] = '\0';
     if (!dc_query(g_system->modules[slot].gpib_address, "FUNC?") ||
         sscanf(dc_reply, " %7[A-Z] %7[^;]", h, a) < 1) return;
-    if (strcmp(c->function, h) || strcmp(c->channel, a)) c->overflow_count = 0;
-    sprintf(c->function, "%.7s", h);
-    sprintf(c->channel, "%.3s", a);
+    dc_new_function(slot, h, a);
 }
 
 /* Single result for single_measurement. Phase 0 arms every counter first:
@@ -375,7 +405,7 @@ static void dc_apply(int slot) {
     printf("Applying settings...\n");
     gpib_remote(addr);
     dc_sendf(addr, "RQS OFF");
-    dc_show_errors(addr, 1);              /* older events: the list below is this Apply's */
+    dc_show_errors(slot, DC_QUIET | DC_RQSOFF);   /* older events: the list below is this Apply's */
     for (ch = 0; ch < 2; ch++) {
         /* RISE/FALL copy channel A's input settings to B (DC5010 p. 2-24, 2-33) */
         if (ch == 1 && rf) break;
@@ -395,14 +425,22 @@ static void dc_apply(int slot) {
     if (!rf && f != DC_PROB) dc_send_levels(addr, c, is10);
     dc_sendf(addr, dc_funcs[f].arg[0] ? "%s %s" : "%s", dc_funcs[f].hdr, dc_funcs[f].arg);
     if (rf || f == DC_PROB) delay(2600);
-    /* NULL stores the current result; a function command resets it (DC5010 p. 2-28) */
-    if (is10) dc_sendf(addr, "NULL %s", dc_on(c->null_enabled));
+    dc_sendf(addr, "CHA A");              /* the power-on selection, for later raw commands */
     dc_sendf(addr, "OVER %s", dc_on(c->overflow_enabled));
     dc_sendf(addr, "OPC %s", dc_on(c->opc_enabled));
     dc_sendf(addr, "USER %s", dc_on(c->user_enabled));
     dc_sendf(addr, "DT %s", dc_dt[c->dt_mode]);
+    /* NULL ON stores the current result, so it needs one first; the function
+       command has already reset the null (DC5010 p. 2-28) */
+    if (is10 && c->null_enabled) {
+        printf("Waiting for a result to null...\n");
+        if (dc_wait_rdy(addr, dc_expect_ms(slot) + 3000UL) == 1) dc_sendf(addr, "NULL ON");
+        else printf("No result, NULL not set\n");
+    } else if (is10) {
+        dc_sendf(addr, "NULL OFF");
+    }
     c->overflow_count = 0;
-    if (dc_show_errors(addr, 0) == 0) printf("Settings applied, no errors.\n");
+    if (dc_show_errors(slot, DC_RQSOFF) == 0) printf("Settings applied, no errors.\n");
     if (c->srq_enabled) dc_sendf(addr, "RQS ON");
 }
 
@@ -419,8 +457,7 @@ static void dc_parse_settings(int slot) {
         a[0] = '\0';
         if (sscanf(t, " %7[A-Z] %7s", h, a) < 1) continue;
         if (first) {                      /* <function>; comes first */
-            sprintf(c->function, "%.7s", h);
-            sprintf(c->channel, "%.3s", a);
+            dc_new_function(slot, h, a);
             first = 0;
             continue;
         }
@@ -452,9 +489,9 @@ static void dc_parse_settings(int slot) {
     }
 }
 
-/* Communication test: queries only, after RQS OFF (unless the slot wants RQS
-   ON) so ERR? queues events. A step passes only if its reply parses and ERR?
-   then reads 0. */
+/* Communication test: queries only, after RQS OFF so ERR? queues events (RQS
+   ON is restored if the slot wants it). A step passes only if its reply
+   parses and ERR? then reads 0. */
 void dc50xx_test(int slot) {
     int addr = g_system->modules[slot].gpib_address, pass = 0, step;
     static const char * __far q[] = { "ID?", "FUNC?", "AVE?", "SET?" };
@@ -462,12 +499,12 @@ void dc50xx_test(int slot) {
 
     printf("\n=== %s communication test, GPIB %d ===\n", dc_is5010(slot) ? "DC5010" : "DC5009", addr);
     dc_sendf(addr, "RQS OFF");
-    if (dc_show_errors(addr, 0)) printf("  (events left from before the test)\n");
+    if (dc_show_errors(slot, DC_RQSOFF)) printf("  (events left from before the test)\n");
     for (step = 0; step < 4; step++) {
         int ok = dc_query(addr, q[step]);
         printf("%d. %-6s %.60s\n", step + 1, q[step], ok ? dc_reply : "no reply");
         if (step == 0 && strstr(dc_reply, "TEK/DC50") == NULL) ok = 0;
-        if (ok && dc_show_errors(addr, 0) == 0) pass++;
+        if (ok && dc_show_errors(slot, DC_RQSOFF) == 0) pass++;
     }
     printf("5. Reading: ");
     dc50xx_sync_function(slot);
@@ -530,10 +567,11 @@ static void dc_autotrig(int slot) {
         for (i = 0; i < 3; i++) printf("  %s", dc_query(addr, q[i]) ? dc_reply : "-");
         printf("\n");
     }
+    dc_sendf(addr, "CHA A");
     c->auto_trigger = 1;
     c->fptrig = 0;
     c->b_level_swap = 0;
-    dc_show_errors(addr, 0);
+    dc_show_errors(slot, 0);
 }
 
 /* Every query in the command list (p. 2-17/2-18, 2-18/2-19) */
@@ -556,7 +594,8 @@ static void dc_show_settings(int slot) {
         }
         printf("\n");
     }
-    dc_show_errors(addr, 0);
+    dc_sendf(addr, "CHA A");
+    dc_show_errors(slot, 0);
 }
 
 /* ID, self test, error queue, INIT */
@@ -589,11 +628,11 @@ static void dc_utilities(int slot) {
                 printf("No result\n");
             f = dc_fn(slot);
             dc_sendf(addr, dc_funcs[f].arg[0] ? "%s %s" : "%s", dc_funcs[f].hdr, dc_funcs[f].arg);
-            dc_show_errors(addr, 0);
+            dc_show_errors(slot, 0);
             break;
         case '3':
             printf("\n\n");
-            if (dc_show_errors(addr, 0) == 0) printf("No errors or events\n");
+            if (dc_show_errors(slot, 0) == 0) printf("No errors or events\n");
             break;
         case '4':
             printf("\n\nINIT sets the power-on state: %s\n",
@@ -675,11 +714,7 @@ static void dc50xx_menu(int slot) {
                 if (!(dc_funcs[i].m & 2) && (is10 || !(dc_funcs[i].m & 1)))
                     printf("%c. %s\n", i < 10 ? '0' + i : 'A' + i - 10, dc_funcs[i].name);
             i = dc_pick("Select: ", is10 ? "0123456789ABC" : "012345678");
-            if (i >= 0) {
-                sprintf(c->function, "%s", dc_funcs[i].hdr);
-                sprintf(c->channel, "%s", dc_funcs[i].arg);
-                c->overflow_count = 0;
-            }
+            if (i >= 0) dc_new_function(slot, dc_funcs[i].hdr, dc_funcs[i].arg);
             wait = 0;
             break;
         case '2':
@@ -751,7 +786,7 @@ static void dc50xx_menu(int slot) {
         case '8':
             if (!is10) { wait = 0; break; }
             c->null_enabled = !c->null_enabled;
-            if (c->null_enabled) printf("On Apply, NULL ON stores the result at that moment and subtracts it\n");
+            if (c->null_enabled) printf("On Apply, NULL ON waits for a result, stores it and subtracts it from later ones\n");
             else wait = 0;
             break;
         case '9':
@@ -792,12 +827,12 @@ static void dc50xx_menu(int slot) {
             dc_sendf(addr, key == 'S' ? "START" : key == 'T' ? "STOP" : "RES");
             if (key == 'E') c->overflow_count = 0;
             printf("Sent %s\n", key == 'S' ? "START" : key == 'T' ? "STOP" : "RES");
-            dc_show_errors(addr, 0);
+            dc_show_errors(slot, 0);
             break;
         case 'G':
             dc_get(addr);
             printf("GET sent (DT %s)\n", dc_dt[c->dt_mode]);
-            dc_show_errors(addr, 0);
+            dc_show_errors(slot, 0);
             break;
         case 'U':
             dc_autotrig(slot);
