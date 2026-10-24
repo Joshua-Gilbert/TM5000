@@ -231,7 +231,10 @@ typedef struct {
     unsigned int min_max_enabled:1;
     unsigned int burst_mode:1;        /* 0=Normal, 1=Burst sampling */
     unsigned int lf_termination:1;    /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    /* 0 = ON, the factory state, so profiles saved before these bits read as ON */
+    unsigned int autocal_off:1;
+    unsigned int intfilt_off:1;
+    unsigned int reserved:7;
 } dm5120_config;
 
 typedef struct {
