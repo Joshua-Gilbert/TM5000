@@ -2166,6 +2166,16 @@ void sync_traces_with_modules(void) {
                             g_traces[i].x_scale = 1.0;  /* Sample-based for counters */
                             g_traces[i].x_offset = 0.0;
                             break;
+                        case MOD_DM5120:
+                            {
+                                const char *u = dm5120_unit(i);
+                                g_traces[i].unit_type = u[0] == 'd' ? UNIT_DB :
+                                                        u[0] == 'o' ? UNIT_RESISTANCE :
+                                                        u[0] == 'A' ? UNIT_CURRENT : UNIT_VOLTAGE;
+                            }
+                            g_traces[i].x_scale = 1.0;
+                            g_traces[i].x_offset = 0.0;
+                            break;
                         default:
                             /* Default to voltage for multimeters and power supplies */
                             g_traces[i].unit_type = UNIT_VOLTAGE;
@@ -2214,6 +2224,9 @@ void init_dm5120_config(int slot) {
     g_dm5120_config[slot].burst_mode = 0;
     g_dm5120_config[slot].sample_rate = 1.0;
     g_dm5120_config[slot].lf_termination = 0;  /* Default to CRLF */
+    g_dm5120_config[slot].autocal_off = 0;
+    g_dm5120_config[slot].intfilt_off = 0;
+    g_dm5120_config[slot].buffer_state = 0;
 }
 void init_dm5120_config_enhanced(int slot) {
     init_dm5120_config(slot);
@@ -2223,6 +2236,23 @@ void init_dm5120_config_enhanced(int slot) {
     g_dm5120_config[slot].burst_mode = 1;
     g_dm5120_config[slot].sample_rate = 10.0;  /* 10 readings/sec */
 }
+/* Settings an older menu could save: DCI/ACI, which the meter rejects, and trigger
+   choices 2 (TALK) / 3 (EXT) stored in the CONT/ONE field. Also drops a fill state
+   a profile captured mid-fill. */
+void dm5120_fix_legacy_config(int slot) {
+    dm5120_config *cfg = &g_dm5120_config[slot];
+
+    if (strcmp(cfg->function, "DCI") == 0) strcpy(cfg->function, "DCA");
+    else if (strcmp(cfg->function, "ACI") == 0) strcpy(cfg->function, "ACA");
+    if (cfg->trigger_mode == 2 || cfg->trigger_mode == 3) {
+        cfg->trigger_source = cfg->trigger_mode - 2;
+        cfg->trigger_mode = 0;
+    } else if (cfg->trigger_mode != 0) {
+        cfg->trigger_mode = 1;
+    }
+    cfg->buffer_state = 0;
+}
+
 void dm5120_set_function(int address, char *function) {
     sprintf(gpib_cmd_buffer, "FUNCT %s", function);
     gpib_write_dm5120(address, gpib_cmd_buffer);
@@ -2238,15 +2268,16 @@ void dm5120_set_range(int address, int range) {
     delay(50);
 }
 void dm5120_set_filter(int address, int enabled, int value) {
-    
+
     if (enabled) {
-        gpib_write_dm5120(address, "FILTER ON");
-        GPIB_PACE(50);
+        /* FILTER only takes ON/OFF; the count is FILTERVAL, stored per function */
         if (value > 0 && value <= 99) {
-            sprintf(gpib_cmd_buffer, "FILTER %d", value);
+            sprintf(gpib_cmd_buffer, "FILTERVAL %d", value);
             gpib_write_dm5120(address, gpib_cmd_buffer);
             GPIB_PACE(50);
         }
+        gpib_write_dm5120(address, "FILTER ON");
+        GPIB_PACE(50);
     } else {
         gpib_write_dm5120(address, "FILTER OFF");
     }
@@ -2276,14 +2307,16 @@ void dm5120_set_trigger(int address, char *source, char *mode) {
 }
 void dm5120_set_digits(int address, int digits) {
     if (digits >= 3 && digits <= 6) {
-        sprintf(gpib_cmd_buffer, "DIGITS %d", digits);
+        /* DIGIT, not DIGITS: the DM5120 accepts no other spelling (error 101) */
+        sprintf(gpib_cmd_buffer, "DIGIT %d", digits);
         gpib_write_dm5120(address, gpib_cmd_buffer);
         GPIB_PACE(50);
     }
 }
 void dm5120_set_null(int address, int enabled, float value) {
     if (enabled) {
-        sprintf(gpib_cmd_buffer, "NULL %.6e", value);
+        /* NULLVAL, then ON: "NULL <value>" with a value of 0 turns null off */
+        sprintf(gpib_cmd_buffer, "NULLVAL %.6e", value);
         gpib_write_dm5120(address, gpib_cmd_buffer);
         GPIB_PACE(50);
         gpib_write_dm5120(address, "NULL ON");
@@ -2296,15 +2329,98 @@ void dm5120_set_data_format(int address, int on) {
     gpib_write_dm5120(address, on ? "DATFOR ON" : "DATFOR OFF");
     GPIB_PACE(50);
 }
-/* DM5120 reading rates (readings/s) from the manual: [3.5..6.5 digits][AutoCal off, on] */
+void dm5120_set_autocal(int address, int on) {
+    gpib_write_dm5120(address, on ? "AUTOCAL ON" : "AUTOCAL OFF");
+    GPIB_PACE(50);
+}
+void dm5120_set_intfilt(int address, int on) {
+    gpib_write_dm5120(address, on ? "INTFILT ON" : "INTFILT OFF");
+    GPIB_PACE(50);
+}
+
+/* Value from a DM5120 reply. Query replies always carry a header ("BUFCNT 45;"),
+   readings start with the number ("+1.234567E+0:NDCV:000;"). */
+int dm5120_parse_value(const char *reply, float *value) {
+    while (*reply && (isalpha((unsigned char)*reply) || isspace((unsigned char)*reply))) reply++;
+    return sscanf(reply, "%f", value) == 1;
+}
+
+/* Send a query and parse the number in its reply; 0 if there was none */
+static int dm5120_query_value(int address, char *query, float *value) {
+    gpib_write_dm5120(address, query);
+    GPIB_PACE(50);
+    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) <= 0) return 0;
+    return dm5120_parse_value(gpib_response_buffer, value);
+}
+
+/* ERROR?/EVENT? codes, manual Table 3-5 */
+static const struct { int code; const char *text; } __far dm5120_errors[] = {
+    {   0, "No error or event" },
+    { 101, "Command header error" },
+    { 102, "Header delimiter error" },
+    { 103, "Command argument error" },
+    { 104, "Argument delimiter error" },
+    { 106, "Missing argument" },
+    { 107, "Invalid message unit delimiter" },
+    { 201, "Not executable in local" },
+    { 202, "Settings lost due to RTL" },
+    { 204, "Settings conflict" },
+    { 205, "Argument out of range" },
+    { 250, "Invalid RANGE argument" },
+    { 251, "Invalid DIGIT argument" },
+    { 252, "Invalid FILTERVAL argument" },
+    { 253, "Invalid ZEROVAL argument" },
+    { 254, "Invalid BUFSZ argument" },
+    { 255, "Invalid STOINT argument" },
+    { 256, "Invalid DELAY argument" },
+    { 257, "TEXT argument too long" },
+    { 258, "Invalid KEY argument" },
+    { 259, "Calibration out of range" },
+    { 260, "CAL locked" },
+    { 401, "Power on" },
+    { 402, "Operation complete" },
+    { 403, "User request (ID key)" },
+    { 450, "Buffer full" },
+    { 451, "Buffer half full" },
+    { 452, "Ready for conversion" },
+    { 453, "EEPROM failure" },
+    { 454, "Overflow" },
+    { 551, "STOINT shorter than conversion time" },
+    { 650, "Trigger during a conversion" }
+};
+
+const char *dm5120_error_text(int code) {
+    int i;
+    for (i = 0; i < sizeof(dm5120_errors) / sizeof(dm5120_errors[0]); i++)
+        if (dm5120_errors[i].code == code) return dm5120_errors[i].text;
+    return "Unknown code";
+}
+
+/* ERROR? code, or -1 if the meter did not answer */
+int dm5120_query_error(int address) {
+    float v;
+    return dm5120_query_value(address, "ERROR?", &v) ? (int)v : -1;
+}
+
+/* Unit of the slot's function, for display */
+const char *dm5120_unit(int slot) {
+    const char *f = g_dm5120_config[slot].function;
+    if (strstr(f, "DB")) return "dB";
+    if (strstr(f, "OHMS")) return "ohm";
+    if (f[2] == 'A') return "A";   /* DCA, ACA */
+    return "V";
+}
+/* DM5120 reading rates (readings/s), manual p. 1-9: [3.5..6.5 digits][AutoCal off, on].
+   5.5/6.5 digits use the 50 Hz figures: the line frequency (PROGRAM 32) can't be
+   queried and they are the slower. 6.5 digits is listed with AutoCal on only. */
 
 /* DCV, DCA, ACV, ACA rates - Continuous Into Internal Buffer */
 static const float __far dm5120_voltage_current_rates[4][2] = {
     /* AutoCal OFF, AutoCal ON */
     {1000.0, 1000.0},  /* 3.5 digit */
     {333.0, 333.0},    /* 4.5 digit */
-    {35.0, 8.2},       /* 5.5 digit */
-    {0.0, 8.2}         /* 6.5 digit (AutoCal ON only) */
+    {29.0, 7.5},       /* 5.5 digit */
+    {7.5, 7.5}         /* 6.5 digit */
 };
 
 /* OHMS rates - Continuous Into Internal Buffer */
@@ -2312,49 +2428,64 @@ static const float __far dm5120_ohms_rates[4][2] = {
     /* AutoCal OFF, AutoCal ON */
     {40.0, 24.0},      /* 3.5 digit */
     {38.0, 18.0},      /* 4.5 digit */
-    {16.0, 9.5},       /* 5.5 digit */
-    {0.0, 9.0}         /* 6.5 digit (AutoCal ON only) */
+    {13.0, 7.5},       /* 5.5 digit */
+    {7.5, 7.5}         /* 6.5 digit */
 };
 
 /* IEEE-488 Bus triggered rates (slower) */
 static const float __far dm5120_bus_voltage_current_rates[4][2] = {
     {72.0, 45.0},      /* 3.5 digit */
     {63.0, 41.0},      /* 4.5 digit */
-    {29.0, 8.2},       /* 5.5 digit */
-    {0.0, 0.25}        /* 6.5 digit */
+    {26.0, 7.5},       /* 5.5 digit */
+    {0.2, 0.2}         /* 6.5 digit */
 };
 
 static const float __far dm5120_bus_ohms_rates[4][2] = {
     {32.0, 19.0},      /* 3.5 digit */
     {29.0, 16.0},      /* 4.5 digit */
-    {13.0, 9.0},       /* 5.5 digit */
-    {0.0, 0.3}         /* 6.5 digit */
+    {12.5, 7.5},       /* 5.5 digit */
+    {0.25, 0.25}       /* 6.5 digit */
 };
+
+/* Digits the meter actually converts at (manual Table 3-1): dB, OHMSCOMP and the
+   top ohms ranges never go below 5.5. Rounded up where the table is unclear. */
+static int dm5120_effective_digits(dm5120_config *cfg) {
+    int d = (cfg->digits >= 3 && cfg->digits <= 6) ? cfg->digits : 4;
+    if (d < 5) {
+        if (strstr(cfg->function, "DB") || strstr(cfg->function, "OHMSCOMP")) d = 5;
+        else if (strstr(cfg->function, "OHMS") && (cfg->range_mode == 0 || cfg->range_mode >= 5)) d = 5;
+    }
+    return d;
+}
+
+static float dm5120_table_rate(dm5120_config *cfg, int use_bus_rates) {
+    int digit_index = dm5120_effective_digits(cfg) - 3;
+    int autocal_index = cfg->autocal_off ? 0 : 1;
+    int is_ohms_function = (strstr(cfg->function, "OHMS") != NULL);
+    float rate;
+
+    if (use_bus_rates) {
+        rate = is_ohms_function ? dm5120_bus_ohms_rates[digit_index][autocal_index]
+                                : dm5120_bus_voltage_current_rates[digit_index][autocal_index];
+    } else {
+        rate = is_ohms_function ? dm5120_ohms_rates[digit_index][autocal_index]
+                                : dm5120_voltage_current_rates[digit_index][autocal_index];
+    }
+    if (strstr(cfg->function, "OHMSCOMP") != NULL) {
+        rate *= 0.5; /* Offset compensated ohms is 0.5x normal rate */
+    }
+    if (rate < 0.1) rate = 0.1;  /* callers divide by rate */
+    return rate;
+}
 
 /* Readings/s for the slot's DM5120 config; trigger_mode 2 forces bus-triggered rates */
 float dm5120_get_measurement_rate(int slot, int trigger_mode) {
     dm5120_config *cfg = &g_dm5120_config[slot];
-    int digit_index, autocal_index;
-    float rate;
-    int is_ohms_function;
     int use_bus_rates;
-
-    switch (cfg->digits) {
-        case 3: digit_index = 0; break;
-        case 4: digit_index = 1; break;
-        case 5: digit_index = 2; break;
-        case 6: digit_index = 3; break;
-        default: digit_index = 1; break; /* Default to 4.5 digit */
-    }
-    
-    /* AutoCal state isn't queried; assume ON at 5+ digits */
-    autocal_index = (cfg->digits >= 5) ? 1 : 0;
-
-    is_ohms_function = (strstr(cfg->function, "OHMS") != NULL);
 
     /* Bus-triggered vs continuous rates, per DM5120 manual:
      * - EXT,CONT with buffer enabled requires external trigger (bus rates)
-     * - EXT,ONE always requires external trigger (bus rates)  
+     * - EXT,ONE always requires external trigger (bus rates)
      * - TALK mode always uses bus rates (triggered by GPIB addressing)
      * - EXT,CONT with buffer disabled uses continuous rates (auto-trigger)
      */
@@ -2362,28 +2493,23 @@ float dm5120_get_measurement_rate(int slot, int trigger_mode) {
                     (cfg->trigger_source == 1 && (cfg->trigger_mode == 1 || cfg->buffer_enabled)) || /* EXT,ONE or EXT,CONT with buffer */
                     (cfg->trigger_source == 0); /* TALK mode always uses bus rates */
 
-    if (use_bus_rates) { /* IEEE-488 bus triggered */
-        if (is_ohms_function) {
-            rate = dm5120_bus_ohms_rates[digit_index][autocal_index];
-        } else {
-            rate = dm5120_bus_voltage_current_rates[digit_index][autocal_index];
-        }
-    } else { /* Continuous into internal buffer */
-        if (is_ohms_function) {
-            rate = dm5120_ohms_rates[digit_index][autocal_index];
-        } else {
-            rate = dm5120_voltage_current_rates[digit_index][autocal_index];
-        }
-    }
-    
-    if (strstr(cfg->function, "OHMSCOMP") != NULL) {
-        rate *= 0.5; /* Offset compensated ohms is 0.5x normal rate */
-    }
+    return dm5120_table_rate(cfg, use_bus_rates);
+}
 
-    /* Floor: tables hold 0.0 for unsupported combos and callers divide by rate */
-    if (rate < 0.1) rate = 0.1;
-    
-    return rate;
+/* Shortest STOINT (ms) the slot's settings allow. Below one conversion into the
+   buffer the meter stops with error 551 (SHORT TIME); +30% because the rates are
+   nominal (6.5 digits with AutoCal gives 174 ms, near the factory STOINT 175).
+   1-14 ms and 1-2 ms are the manual's settings conflicts (error 204). */
+int dm5120_min_stoint_ms(int slot) {
+    dm5120_config *cfg = &g_dm5120_config[slot];
+    int ms = (int)(1300.0 / dm5120_table_rate(cfg, 0)) + 1;
+
+    if (ms <= 14 && (strstr(cfg->function, "OHMS") || strstr(cfg->function, "DB") ||
+                     cfg->range_mode == 0 || cfg->buffer_size == 0 || cfg->digits >= 5)) {
+        ms = 15;
+    }
+    if (ms <= 2 && cfg->digits >= 4) ms = 3;
+    return ms;
 }
 
 /* Delay in ms for a DM5120 operation, derived from the reading rate */
@@ -2444,7 +2570,8 @@ void dm5120_enable_buffering(int address, int slot, int buffer_size) {
 }
 
 /* Check a STOINT interval against the manual's listed conflicts; 0 = OK, -1..-5 = conflict
-   code, DM5120_STOINT_BAD_SLOT = slot out of range */
+   code, DM5120_STOINT_BAD_SLOT = slot out of range, DM5120_STOINT_TOO_SHORT = shorter
+   than a conversion (error 551) */
 int dm5120_validate_stoint_settings(int slot, int interval_ms) {
     dm5120_config *cfg;
 
@@ -2475,51 +2602,57 @@ int dm5120_validate_stoint_settings(int slot, int interval_ms) {
     if ((interval_ms == 1 || interval_ms == 2) && cfg->digits >= 4) {
         return -5; /* STOINT 1-2ms conflicts with 4+ digit resolution */
     }
-    
+
+    if (interval_ms > 0 && interval_ms < dm5120_min_stoint_ms(slot)) {
+        return DM5120_STOINT_TOO_SHORT;
+    }
+
     return 0; /* No conflicts */
 }
 
-/* STOINT interval for cfg->sample_rate (readings/s); 100 ms if the rate is unusable */
-static int dm5120_stoint_from_rate(dm5120_config *cfg) {
-    if (cfg->sample_rate >= 0.05 && cfg->sample_rate <= 1000.0) {
-        return (int)(1000.0 / cfg->sample_rate + 0.5);
+/* Storage interval for the slot: the burst rate if burst mode is on, else 100 ms,
+   raised to the shortest the settings allow */
+int dm5120_stoint_for_slot(int slot) {
+    dm5120_config *cfg = &g_dm5120_config[slot];
+    int ms = 100;
+    int min_ms = dm5120_min_stoint_ms(slot);
+
+    if (cfg->burst_mode && cfg->sample_rate >= 0.05 && cfg->sample_rate <= 1000.0) {
+        ms = (int)(1000.0 / cfg->sample_rate + 0.5);
     }
-    return 100;
+    return ms < min_ms ? min_ms : ms;
 }
 
-/* STOINT <ms>, or STOINT ONE for 0; warns (but still sends) on a conflict, sends nothing
-   for a bad slot. Returns 0 if sent, -1 if not. */
+/* STOINT <ms>, or STOINT ONE for 0. An interval shorter than the settings allow is
+   raised to dm5120_min_stoint_ms (the meter would stop with error 551 or 204); no
+   message, since the monitor calls this. Returns the interval sent, -1 if none. */
 int dm5120_set_storage_interval(int address, int slot, int interval_ms) {
-    int validation_result;
     int status;
+    int min_ms;
 
-    validation_result = dm5120_validate_stoint_settings(slot, interval_ms);
-    if (validation_result == DM5120_STOINT_BAD_SLOT) {
+    if (slot < 0 || slot >= 10) {
         printf("ERROR: invalid DM5120 slot %d (valid: 0-9), STOINT not sent\n", slot);
         return -1;
     }
-    if (validation_result != 0) {
-        printf("WARNING: STOINT %d conflicts with current settings (code %d)\n", 
-               interval_ms, validation_result);
-        printf("This may cause measurement errors or timeouts.\n");
-    }
-    
+
     if (interval_ms == 0) {
         /* One shot mode - store one reading per trigger */
         status = gpib_write_dm5120(address, "STOINT ONE");
     } else {
+        min_ms = dm5120_min_stoint_ms(slot);
+        if (interval_ms < min_ms) interval_ms = min_ms;
         sprintf(gpib_cmd_buffer, "STOINT %d", interval_ms);
         status = gpib_write_dm5120(address, gpib_cmd_buffer);
     }
     if (status != 0) return -1;
 
     delay(dm5120_calculate_measurement_time(slot, 3, 1));
-    return 0;
+    return interval_ms;
 }
 
 int dm5120_query_storage_interval(int address) {
-    
-    int interval = 0;
+
+    long interval = 0;
     
     gpib_write_dm5120(address, "STOINT?");
     GPIB_PACE(50);
@@ -2528,11 +2661,12 @@ int dm5120_query_storage_interval(int address) {
         if (strstr(gpib_response_buffer, "ONE")) {
             return 0; /* One shot mode */
         }
-        if (sscanf(gpib_response_buffer, "STOINT %d", &interval) == 1) {
-            return interval;
+        /* long: STOINT runs to 999999 ms */
+        if (sscanf(gpib_response_buffer, "STOINT %ld", &interval) == 1) {
+            return interval > 32767L ? 32767 : (int)interval;
         }
     }
-    
+
     return -1; /* Error */
 }
 
@@ -2591,25 +2725,22 @@ void dm5120_configure_srq_events_smart(int address, int buffer_size, int is_circ
 int dm5120_check_buffer_status(int address) {
     
     int status = 0;
+    float code;
 
-    gpib_write_dm5120(address, "EVENT?");
-    GPIB_PACE(50);
-    
-    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        int event_code;
-        if (sscanf(gpib_response_buffer, "EVENT %d", &event_code) == 1) {
-            switch (event_code) {
-                case 0:  status = 0; break;        /* No events */
-                case 1:  status = 0x01; break;     /* FULL buffer */
-                case 2:  status = 0x02; break;     /* HALF buffer */
-                case 4:  status = 0x04; break;     /* RDY ready */
-                case 8:  status = 0x08; break;     /* OPC operation complete */
-                case 16: status = 0x10; break;     /* OVER overrange */
-                default: status = 0x80; break;     /* Unknown event */
-            }
+    /* EVENT? replies with a Table 3-5 code, e.g. "EVENT 450;" */
+    if (dm5120_query_value(address, "EVENT?", &code)) {
+        switch ((int)code) {
+            case 0:   status = 0; break;        /* No events */
+            case 450: status = 0x01; break;     /* FULL buffer */
+            case 451: status = 0x02; break;     /* HALF buffer */
+            case 452: status = 0x04; break;     /* RDY ready */
+            case 402: status = 0x08; break;     /* OPC operation complete */
+            case 454: status = 0x10; break;     /* OVER overrange */
+            case 551: status = 0x20; break;     /* STOINT shorter than a conversion */
+            default:  status = 0x80; break;     /* Any other error or event */
         }
     }
-    
+
     return status;
 }
 
@@ -2650,8 +2781,8 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
     if (use_cont_mode) {
         /* <=1 s per reading: CONT mode, STOINT fills the buffer */
         dm5120_set_trigger(address, "TALK", "CONT");
-        dm5120_set_storage_interval(address, slot, measurement_interval_ms);
-        printf("Buffer Strategy: CONT mode, %d ms intervals, %.1f r/s\n", 
+        measurement_interval_ms = dm5120_set_storage_interval(address, slot, measurement_interval_ms);
+        printf("Buffer Strategy: CONT mode, %d ms intervals, %.1f r/s\n",
                measurement_interval_ms, measurement_rate);
     } else {
         /* >1 s per reading: trigger each one with SEND */
@@ -2674,6 +2805,11 @@ int dm5120_get_buffer_data_enhanced(int address, int slot, float far *buffer, in
             
             if (status & 0x01) { /* FULL buffer event */
                 printf("FULL event received - buffer complete\n");
+                break;
+            }
+
+            if (status & 0x20) {
+                printf("ERROR 551: STOINT shorter than the conversion time\n");
                 break;
             }
             
@@ -2813,30 +2949,27 @@ int dm5120_validate_configuration(int slot) {
     optimal_delay = dm5120_calculate_measurement_time(slot, 0, 1);
     printf("Optimal Sample Interval: %d ms\n", optimal_delay);
 
-    if (cfg->buffer_enabled && cfg->buffer_size > 0) {
-        buffer_fill_time = dm5120_calculate_measurement_time(slot, 2, cfg->buffer_size);
-        printf("Buffer Fill Time (%d samples): %d ms\n", cfg->buffer_size, buffer_fill_time);
+    if (cfg->buffer_enabled) {
+        int stoint_ms = dm5120_stoint_for_slot(slot);
+        int min_ms = dm5120_min_stoint_ms(slot);
 
-        if (buffer_fill_time > 30000) { /* 30 s */
-            printf("WARNING: Buffer fill time exceeds 30 seconds!\n");
-            printf("Consider reducing buffer size or using faster settings.\n");
+        printf("Storage Interval: %d ms (shortest for these settings: %d ms)\n", stoint_ms, min_ms);
+        if (cfg->burst_mode && cfg->sample_rate > 0.0 && 1000.0 / cfg->sample_rate < min_ms) {
+            printf("WARNING: burst rate %.1f/s is faster than the meter converts;\n", cfg->sample_rate);
+            printf("  STOINT is raised to %d ms (%.1f/s)\n", min_ms, 1000.0 / min_ms);
             warnings++;
         }
-    }
 
-    if (cfg->buffer_enabled) {
-        int stoint_result = dm5120_validate_stoint_settings(slot, dm5120_stoint_from_rate(cfg));
-        if (stoint_result != 0) {
-            printf("WARNING: STOINT timing conflicts detected (code %d)\n", stoint_result);
-            switch (stoint_result) {
-                case -1: printf("  - OHMS function conflicts with fast intervals\n"); break;
-                case -2: printf("  - AUTO range conflicts with fast intervals\n"); break;
-                case -3: printf("  - CIRCULAR buffer conflicts with fast intervals\n"); break;
-                case -4: printf("  - High resolution (5-6 digits) conflicts\n"); break;
-                case -5: printf("  - Very fast intervals conflict with resolution\n"); break;
-                case DM5120_STOINT_BAD_SLOT: printf("  - Invalid slot\n"); break;
+        if (cfg->buffer_size > 0) {
+            buffer_fill_time = (int)(((long)cfg->buffer_size * stoint_ms > 32767L) ? 32767L
+                                     : (long)cfg->buffer_size * stoint_ms);
+            printf("Buffer Fill Time (%d samples): %ld ms\n", cfg->buffer_size,
+                   (long)cfg->buffer_size * stoint_ms);
+            if (buffer_fill_time > 30000) { /* 30 s */
+                printf("WARNING: Buffer fill time exceeds 30 seconds!\n");
+                printf("Consider reducing buffer size or using faster settings.\n");
+                warnings++;
             }
-            warnings++;
         }
     }
 
@@ -2891,23 +3024,24 @@ void dm5120_timing_diagnostics(int slot) {
     printf("Status Query: %d ms\n", dm5120_calculate_measurement_time(slot, 4, 1));
     printf("\n");
     
-    printf("Buffer Fill Times:\n");
+    printf("Buffer Fill Times (STOINT %d ms, shortest %d ms):\n",
+           dm5120_stoint_for_slot(slot), dm5120_min_stoint_ms(slot));
     for (i = 10; i <= 500; i += 100) {
-        int fill_time = dm5120_calculate_measurement_time(slot, 2, i);
-        printf("%3d samples: %5d ms (%3.1f sec)\n", i, fill_time, fill_time / 1000.0);
+        long fill_time = (long)i * dm5120_stoint_for_slot(slot);
+        printf("%3d samples: %6ld ms (%5.1f sec)\n", i, fill_time, fill_time / 1000.0);
     }
     printf("\n");
-    
+
     printf("Resolution vs. Speed Trade-offs:\n");
     printf("3.5 digits: Very fast, ~1000 r/s (voltage)\n");
     printf("4.5 digits: Fast, ~333 r/s (voltage)\n");
-    printf("5.5 digits: Medium, ~8-35 r/s depending on AutoCal\n");
-    printf("6.5 digits: Slow, ~8 r/s (AutoCal required)\n");
+    printf("5.5 digits: Medium, ~7.5-35 r/s depending on AutoCal and 50/60 Hz\n");
+    printf("6.5 digits: Slow, ~7.5-8.2 r/s\n");
     printf("\n");
-    
+
     printf("Function Speed Comparison (5.5 digits):\n");
-    printf("DCV/ACV: ~8-35 r/s\n");
-    printf("OHMS: ~9-16 r/s\n");
+    printf("DCV/ACV: ~7.5-35 r/s\n");
+    printf("OHMS: ~7.5-16 r/s\n");
     printf("OHMSCOMP: ~4-8 r/s (50%% of normal OHMS)\n");
 }
 
@@ -2960,9 +3094,12 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
 
     dm5120_enable_buffering(address, slot, buffer_size);
 
-    dm5120_set_storage_interval(address, slot, dm5120_stoint_from_rate(cfg));
-
-    total_wait_time = dm5120_calculate_delay(slot, 2, buffer_size);
+    total_wait_time = dm5120_set_storage_interval(address, slot, dm5120_stoint_for_slot(slot));
+    if (total_wait_time < 0) return 0;
+    {
+        long fill = (long)total_wait_time * buffer_size + 500;
+        total_wait_time = fill > 32767L ? 32767 : (int)fill;
+    }
     printf("Collecting %d samples at %d digits - estimated time: %dms\n",
            buffer_size, cfg->digits, total_wait_time);
     delay(total_wait_time);
@@ -2976,7 +3113,8 @@ int dm5120_fill_buffer_complete(int address, int slot, float far *buffer, int bu
 }
 
 /* DM5120 non-blocking buffer fill, polled from the measurement loop.
-   buffer_state: 0 idle, 1 filling, 2 half, 3 full */
+   buffer_state: 0 idle, 1 filling, 2 half, 3 full, 4 meter reported error 551,
+   5 timed out */
 void dm5120_start_buffer_async(int address, int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
 
@@ -2985,11 +3123,8 @@ void dm5120_start_buffer_async(int address, int slot) {
     }
 
     /* TALK,CONT unless the user chose EXT; EXT,CONT without a trigger source
-       leaves the buffer empty until the 30 s timeout. (FINDINGS #3) */
+       leaves the buffer empty until the timeout. (FINDINGS #3) */
     dm5120_set_trigger(address, cfg->trigger_source ? "EXT" : "TALK", "CONT");
-    GPIB_PACE(50);
-
-    dm5120_set_storage_interval(address, slot, 100); /* 100ms intervals */
     GPIB_PACE(50);
 
     gpib_write_dm5120(address, "HALF ON");
@@ -2999,13 +3134,15 @@ void dm5120_start_buffer_async(int address, int slot) {
     gpib_write_dm5120(address, "RQS ON");
     GPIB_PACE(50);
 
-    gpib_write_dm5120(address, "BUFCLR");
-    GPIB_PACE(50);
-
+    /* BUFSZ clears the buffer (there is no BUFCLR). STOINT goes last: any later
+       measurement setting would end the data store. */
     if (cfg->buffer_size > 0 && cfg->buffer_size <= DM5120_MAX_BUFFER_SIZE) {
         dm5120_set_buffer_size(address, cfg->buffer_size);
         GPIB_PACE(50);
     }
+
+    dm5120_set_storage_interval(address, slot, dm5120_stoint_for_slot(slot));
+    GPIB_PACE(50);
 
     cfg->buffer_state = 1; /* filling */
     cfg->buffer_start_time = *((unsigned long far *)0x0040006CL); /* BIOS tick count, 18.2 Hz */
@@ -3014,35 +3151,35 @@ void dm5120_start_buffer_async(int address, int slot) {
 
 int dm5120_check_buffer_async(int address, int slot) {
     dm5120_config *cfg = &g_dm5120_config[slot];
-    char response[128];
-    int event_found = 0;
+    float code;
+    int count;
 
-    if (cfg->buffer_state == 0) {
-        return 0;  /* Not active */
+    if (cfg->buffer_state < 1 || cfg->buffer_state > 2) {
+        return cfg->buffer_state;  /* idle, or finished and waiting to be read */
     }
 
-    gpib_write_dm5120(address, "EVENT?");
-    GPIB_PACE(50);
-
-    if (gpib_read_dm5120(address, response, sizeof(response)) > 0) {
-        if (strstr(response, "HALF")) {
-            cfg->buffer_state = 2; /* half full */
-            cfg->samples_ready = cfg->buffer_size / 2;
-            event_found = 1;
-        }
-        else if (strstr(response, "FULL")) {
-            cfg->buffer_state = 3; /* full */
-            cfg->samples_ready = cfg->buffer_size;
-            event_found = 1;
+    /* Codes are numbers ("EVENT 450;"); others (power-on 401, 204, 1xx) are not
+       buffer progress, so polling carries on */
+    if (dm5120_query_value(address, "EVENT?", &code)) {
+        switch ((int)code) {
+            case 450:
+                cfg->buffer_state = 3;
+                cfg->samples_ready = cfg->buffer_size;
+                break;
+            case 451:
+                cfg->buffer_state = 2;
+                cfg->samples_ready = cfg->buffer_size / 2;
+                break;
+            case 551:
+                cfg->buffer_state = 4;
+                return cfg->buffer_state;
         }
     }
-    
-    /* No event: fall back to polling BUFCNT? */
-    if (!event_found && cfg->buffer_state == 1) {
-        int count = dm5120_get_buffer_count(address);
+
+    if (cfg->buffer_state != 3) {
+        count = dm5120_get_buffer_count(address);
         if (count > 0) {
             cfg->samples_ready = count;
-
             if (count >= cfg->buffer_size) {
                 cfg->buffer_state = 3; /* full */
             } else if (count >= cfg->buffer_size / 2) {
@@ -3051,15 +3188,17 @@ int dm5120_check_buffer_async(int address, int slot) {
         }
     }
 
-    if (cfg->buffer_state == 1) {
-        unsigned long current_ticks = *((unsigned long far *)0x0040006CL);
-        unsigned long elapsed_ticks = current_ticks - cfg->buffer_start_time;
-        if (elapsed_ticks > (30L * 182L / 10L)) { /* 30 seconds in ticks */
-            /* Timeout - read whatever is available */
-            cfg->buffer_state = 3; /* Force full state to trigger read */
+    if (cfg->buffer_state == 1 || cfg->buffer_state == 2) {
+        /* Expected fill time x1.5 + 10 s, in ~55 ms BIOS ticks */
+        unsigned long limit_ms = (unsigned long)cfg->buffer_size * dm5120_stoint_for_slot(slot);
+        unsigned long limit_ticks = (limit_ms + limit_ms / 2 + 10000UL) / 55UL;
+        unsigned long elapsed_ticks = *((unsigned long far *)0x0040006CL) - cfg->buffer_start_time;
+        if (elapsed_ticks > limit_ticks) {
+            /* Not state 3: BUFAVE? on a part-filled buffer holds the bus until it fills */
+            cfg->buffer_state = 5;
         }
     }
-    
+
     return cfg->buffer_state;
 }
 
@@ -3074,75 +3213,25 @@ void dm5120_reset_buffer_async(int slot) {
 /* DM5120 Buffer Query Functions */
 float dm5120_get_buffer_average(int address) {
     
-    float value = 0.0;
-    
-    gpib_write_dm5120(address, "BUFAVE?");
-    GPIB_PACE(100);
-    
-    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
-            return value;
-        }
-        if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
-            return value;
-        }
-    }
-    
-    return 0.0;
+    float value;
+
+    /* Holds the bus off until the buffer is full: call only once it is */
+    return dm5120_query_value(address, "BUFAVE?", &value) ? value : 0.0;
 }
 
 int dm5120_get_buffer_count(int address) {
-    
-    int count = 0;
-    
-    gpib_write_dm5120(address, "BUFCNT?");
-    GPIB_PACE(50);
-    
-    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%d", &count) == 1) {
-            return count;
-        }
-    }
-    
-    return 0;
+    float count;
+    return dm5120_query_value(address, "BUFCNT?", &count) ? (int)count : 0;
 }
 
 float dm5120_get_buffer_min(int address) {
-    
-    float value = 0.0;
-    
-    gpib_write_dm5120(address, "BUFMIN?");
-    GPIB_PACE(100);
-    
-    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
-            return value;
-        }
-        if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
-            return value;
-        }
-    }
-    
-    return 0.0;
+    float value;
+    return dm5120_query_value(address, "BUFMIN?", &value) ? value : 0.0;
 }
 
 float dm5120_get_buffer_max(int address) {
-    
-    float value = 0.0;
-    
-    gpib_write_dm5120(address, "BUFMAX?");
-    GPIB_PACE(100);
-    
-    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%f", &value) == 1) {
-            return value;
-        }
-        if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
-            return value;
-        }
-    }
-    
-    return 0.0;
+    float value;
+    return dm5120_query_value(address, "BUFMAX?", &value) ? value : 0.0;
 }
 
 void dm5120_set_buffer_size(int address, int size) {
@@ -3165,14 +3254,14 @@ int dm5120_query_buffer_size(int address) {
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         if (strstr(gpib_response_buffer, "CIRCULAR")) {
-            return 500;  /* Full circular buffer size */
+            return 0;  /* same code BUFSZ takes for it */
         }
         if (sscanf(gpib_response_buffer, "BUFSZ %d", &size) == 1) {
             return size;
         }
     }
-    
-    return 0;
+
+    return -1;
 }
 
 /* DM5120 stored-reading reads (READ ONESTORE / READ ALLSTORE) */
@@ -3317,13 +3406,9 @@ float read_dm5120_enhanced(int address, int slot) {
         }
     }
     
-    if (cfg->trigger_mode == 0) {  /* CONT mode */
-        gpib_write_dm5120(address, "X");
-        delay(dm5120_calculate_delay(slot, 0, 1));
-    } else {
-        gpib_write_dm5120(address, "SEND");
-        delay(dm5120_calculate_delay(slot, 0, 1) + 50);
-    }
+    /* SEND triggers one reading whatever the trigger setting (there is no X command) */
+    gpib_write_dm5120(address, "SEND");
+    delay(dm5120_calculate_delay(slot, 0, 1) + 50);
     
     if (gpib_read_float_dm5120(address, &value)) {
         if (cfg->min_max_enabled) {
@@ -3335,9 +3420,7 @@ float read_dm5120_enhanced(int address, int slot) {
     }
     
     for (retry = 0; retry < 3; retry++) {
-        
-        
-        gpib_write_dm5120(address, "X");
+        gpib_write_dm5120(address, "SEND");
         GPIB_PACE(300);
         
         if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
@@ -3442,7 +3525,7 @@ void test_dm5120_comm(int address) {
     
     printf("\nAttempting measurement reads:\n");
     
-    printf("\n1. Using voltage? command:\n");
+    printf("\n1. READ ADC:\n");
     gpib_write_dm5120(address, "READ ADC");
     GPIB_PACE(300);
     
@@ -3455,8 +3538,8 @@ void test_dm5120_comm(int address) {
         printf("   No response\n");
     }
     
-    printf("\n2. Simple execute (X command):\n");
-    gpib_write_dm5120(address, "X");
+    printf("\n2. SEND (one triggered reading):\n");
+    gpib_write_dm5120(address, "SEND");
     GPIB_PACE(300);
     
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
@@ -3479,7 +3562,13 @@ void test_dm5120_comm(int address) {
     }
     
     printf("\nQuerying current settings:\n");
-    
+
+    gpib_write_dm5120(address, "ID?");
+    GPIB_PACE(50);
+    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
+        printf("   %s\n", gpib_response_buffer);
+    }
+
     gpib_write_dm5120(address, "FUNCT?");
     GPIB_PACE(50);
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
@@ -3523,13 +3612,12 @@ void test_dm5120_comm(int address) {
     if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
         printf("   %s\n", gpib_response_buffer);
     }
-    
-    gpib_write_dm5120(address, "ERROR?");
-    GPIB_PACE(50);
-    if (gpib_read_dm5120(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
+
+    i = dm5120_query_error(address);
+    if (i >= 0) {
+        printf("   ERROR %d: %s\n", i, dm5120_error_text(i));
     }
-    
+
     printf("\nTest complete. Press any key to continue...");
     getch();
 }
@@ -4887,7 +4975,7 @@ void continuous_monitor(void) {
                                                     value = dm5120_read_one_stored(address);
                                                 }
                                             }
-                                            lp("%12.6f V [Avg%3d]", value, cfg->buffer_size);
+                                            lp("%12.6f %-3s[Avg%3d]", value, dm5120_unit(i), cfg->buffer_size);
 
                                             if (cfg->min_max_enabled && value != 0.0) {
                                                 if (value < cfg->min_value) cfg->min_value = value;
@@ -4897,7 +4985,19 @@ void continuous_monitor(void) {
 
                                             dm5120_reset_buffer_async(i);
                                             break;
-                                            
+
+                                        case 4: /* Meter reported 551; the next pass restarts the fill */
+                                            lp("[ERR 551 SHORT TIME] ");
+                                            value = g_system->modules[i].last_reading;
+                                            dm5120_reset_buffer_async(i);
+                                            break;
+
+                                        case 5: /* Timed out part-filled */
+                                            lp("[Timeout at %3d smp] ", cfg->samples_ready);
+                                            value = g_system->modules[i].last_reading;
+                                            dm5120_reset_buffer_async(i);
+                                            break;
+
                                         default:
                                             lp("[Buffer idle]         ");
                                             value = g_system->modules[i].last_reading;
@@ -4910,7 +5010,7 @@ void continuous_monitor(void) {
                                         value = read_dm5120_voltage(address);
                                     }
                                     
-                                    lp("%12.6f V (%4.1f r/s)", value, measurement_rate);
+                                    lp("%12.6f %-3s(%4.1f r/s)", value, dm5120_unit(i), measurement_rate);
                                     
                                     /* [FAST]: sample period shorter than the meter can deliver */
                                     optimal_delay = dm5120_calculate_measurement_time(i, 0, 1);
@@ -5000,6 +5100,8 @@ void continuous_monitor(void) {
                                     case 1: lp("[Filling %3d]       ", g_dm5120_config[i].samples_ready); break;
                                     case 2: lp("[50%% Full]         "); break;
                                     case 3: lp("[Ready to read]    "); break;
+                                    case 4: lp("[ERR 551 SHORT TIME]"); break;
+                                    case 5: lp("[Fill timed out]   "); break;
                                     default: lp("%12.6f       ", g_system->modules[i].last_reading); break;
                                 }
                             } else if (mon_last[i][0]) {

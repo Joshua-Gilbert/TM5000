@@ -20,6 +20,7 @@ void forget_trace_slot(int slot);
 void init_dm5120_config(int slot);
 void init_dm5120_config_enhanced(int slot);
 void configure_dm5120_advanced(int slot);
+void dm5120_fix_legacy_config(int slot);
 void dm5120_set_function(int address, char *function);
 void dm5120_set_range(int address, int range);
 void dm5120_set_filter(int address, int enabled, int value);
@@ -27,7 +28,13 @@ void dm5120_set_trigger(int address, char *source, char *mode);
 void dm5120_set_digits(int address, int digits);
 void dm5120_set_null(int address, int enabled, float value);
 void dm5120_set_data_format(int address, int on);
+void dm5120_set_autocal(int address, int on);
+void dm5120_set_intfilt(int address, int on);
 int dm5120_calculate_delay(int slot, int operation_type, int sample_count);
+int dm5120_parse_value(const char *reply, float *value);
+const char *dm5120_error_text(int code);
+int dm5120_query_error(int address);
+const char *dm5120_unit(int slot);
 
 void dm5120_enable_buffering(int address, int slot, int buffer_size);
 
@@ -42,7 +49,10 @@ int dm5120_query_buffer_size(int address);
 float dm5120_get_measurement_rate(int slot, int trigger_mode);
 int dm5120_calculate_measurement_time(int slot, int operation_type, int sample_count);
 #define DM5120_STOINT_BAD_SLOT (-6)
+#define DM5120_STOINT_TOO_SHORT (-7)
 int dm5120_validate_stoint_settings(int slot, int interval_ms);
+int dm5120_min_stoint_ms(int slot);
+int dm5120_stoint_for_slot(int slot);
 int dm5120_set_storage_interval(int address, int slot, int interval_ms);
 
 /* DM5120 SRQ events */

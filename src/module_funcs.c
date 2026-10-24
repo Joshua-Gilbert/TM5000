@@ -151,119 +151,235 @@ void send_custom_command(void) {
     }
 }
 
+/* DM5120 FUNCT arguments, manual p. 3-15 */
+static const char* __far dm5120_functs[] = {
+    "DCV", "ACV", "OHMS", "DCA", "ACA", "ACVDB", "ACADB", "OHMSCOMP"
+};
+
+/* Full scale of RANGE 1-7 for a function, manual Table 3-3 */
+static const char *dm5120_range_label(const char *funct, int range) {
+    static const char* __far volts[] = { "300 mV", "3 V", "30 V", "300 V" };
+    static const char* __far ohms[] = { "300 ohm", "3 kohm", "30 kohm", "300 kohm", "3 Mohm", "30 Mohm", "300 Mohm" };
+    static const char* __far amps[] = { "300 uA", "3 mA", "30 mA", "300 mA", "3 A" };
+
+    if (range <= 0 || range > 7 || strstr(funct, "DB")) return "AUTO";
+    if (strstr(funct, "OHMSCOMP")) return ohms[range > 3 ? 2 : range - 1];
+    if (strstr(funct, "OHMS")) return ohms[range - 1];
+    if (funct[2] == 'A') return amps[range > 5 ? 4 : range - 1];
+    return volts[range > 4 ? 3 : range - 1];
+}
+
+/* Print and drain ERROR? until it reports 0; returns how many errors were shown */
+static int dm5120_show_errors(int address) {
+    int i, code, shown = 0;
+    for (i = 0; i < 8; i++) {
+        code = dm5120_query_error(address);
+        if (code <= 0) break;
+        printf("  ERROR %d: %s\n", code, dm5120_error_text(code));
+        shown++;
+    }
+    return shown;
+}
+
+static int dm5120_confirm(const char *what) {
+    printf("\n%s - are you sure (Y/N)? ", what);
+    return toupper(getch()) == 'Y';
+}
+
+/* ID, self test, error queue, front-panel text, INIT/RESET/PONSAVE */
+static void dm5120_utilities_menu(int address) {
+    static char __far reply[128];
+    char text[16];
+    int choice, done = 0;
+
+    while (!done) {
+        clrscr();
+        printf("DM5120 Utilities - GPIB %d\n", address);
+        printf("==========================\n\n");
+        printf("1. Identify (ID?)\n");
+        printf("2. Self test (TEST?)\n");
+        printf("3. Read error/event queue (ERROR?)\n");
+        printf("4. Show text on the display (TEXT)\n");
+        printf("5. Clear display text\n");
+        printf("6. INIT - return to the power-on settings\n");
+        printf("7. RESET - factory default settings\n");
+        printf("8. PONSAVE - save current settings as power-on\n");
+        printf("9. Firmware help (HELP?)\n");
+        printf("0. Return\n\nSelect option: ");
+        choice = getch();
+        printf("\n\n");
+
+        switch (choice) {
+            case '1':
+            case '2':
+            case '9':
+                gpib_write_dm5120(address, choice == '1' ? "ID?" : choice == '2' ? "TEST?" : "HELP?");
+                GPIB_PACE(100);
+                if (gpib_read_dm5120(address, reply, sizeof(reply)) > 0) {
+                    printf("%s\n", reply);
+                    if (choice == '2') printf("%s\n", strstr(reply, "TEST 0") ? "Self test passed" : "Self test FAILED");
+                } else {
+                    printf("No reply\n");
+                }
+                break;
+            case '3':
+                if (dm5120_show_errors(address) == 0) printf("No errors or events\n");
+                break;
+            case '4':
+                printf("Text (up to 10 characters, no quotes): ");
+                /* Leading space skips the newline an earlier scanf left behind */
+                if (scanf(" %15[^\n]", text) != 1) break;
+                drain_console_line();
+                if (strlen(text) > 10 || strchr(text, '"')) {
+                    printf("Up to 10 characters, no quotes\n");
+                    break;
+                }
+                sprintf(reply, "TEXT \"%s\"", text);
+                gpib_write_dm5120(address, reply);
+                printf("Sent. Option 5 clears it.\n");
+                break;
+            case '5':
+                gpib_write_dm5120(address, "TEXT \"\"");
+                printf("Display text cleared\n");
+                break;
+            case '6':
+                gpib_write_dm5120(address, "INIT");
+                GPIB_PACE(300);
+                printf("Meter at its power-on settings. D in the setup menu re-applies TM5000's.\n");
+                break;
+            case '7':
+                if (dm5120_confirm("Factory defaults (address and terminator are kept)")) {
+                    gpib_write_dm5120(address, "RESET");
+                    GPIB_PACE(300);
+                    printf("\nMeter reset. D in the setup menu re-applies TM5000's settings.\n");
+                }
+                break;
+            case '8':
+                if (dm5120_confirm("Write the current settings to the meter's EEPROM")) {
+                    gpib_write_dm5120(address, "PONSAVE");
+                    GPIB_PACE(300);
+                    printf("\nSaved as the power-on settings\n");
+                }
+                break;
+            case '0':
+            case 27:
+                done = 1;
+                break;
+        }
+        if (!done) {
+            printf("\nPress any key...");
+            getch();
+        }
+    }
+}
+
 void configure_dm5120_advanced(int slot) {
     int choice, done = 0;
     int address = g_system->modules[slot].gpib_address;
     dm5120_config *cfg = &g_dm5120_config[slot];
-    char buffer[80];
+    static char __far settings[400];
     int temp_int;
     float temp_float;
-    
+
+    dm5120_fix_legacy_config(slot);
+
     while (!done) {
         clrscr();
         printf("DM5120 Advanced Configuration - Slot %d\n", slot);
         printf("================================\n\n");
-        
+
         printf("1. Function: %s\n", cfg->function);
-        printf("2. Range: %s\n", cfg->range_mode == 0 ? "AUTO" : "Manual");
-        printf("3. Filter: %s (Value: %d)\n", 
+        printf("2. Range: %s", dm5120_range_label(cfg->function, cfg->range_mode));
+        if (cfg->range_mode) printf(" (RANGE %d)", cfg->range_mode);
+        printf("\n");
+        printf("3. Filter: %s (Value: %d)\n",
                cfg->filter_enabled ? "ON" : "OFF", cfg->filter_value);
-        printf("4. Trigger: ");
-        switch(cfg->trigger_mode) {
-            case 0: printf("CONT\n"); break;
-            case 1: printf("ONE\n"); break;
-            case 2: printf("TALK\n"); break;
-            case 3: printf("EXT\n"); break;
-        }
+        printf("4. Trigger: %s,%s\n", cfg->trigger_source ? "EXT" : "TALK",
+               cfg->trigger_mode ? "ONE" : "CONT");
         printf("5. Digits: %d\n", cfg->digits);
-        printf("6. NULL: %s (Value: %.6f)\n", 
+        printf("6. NULL: %s (Value: %.6f)\n",
                cfg->null_enabled ? "ON" : "OFF", cfg->nullval);
-        printf("7. Data Format: %s\n", cfg->data_format ? "Scientific" : "NR3");
-        
-        printf("8. Buffering: %s (Size: %d)\n", 
+        printf("7. Data Format: %s\n", cfg->data_format ? "ON (value:function:location)" : "OFF (value only)");
+        printf("8. Buffering: %s (Size: %d)\n",
                cfg->buffer_enabled ? "ON" : "OFF", cfg->buffer_size);
         printf("9. Min/Max Tracking: %s", cfg->min_max_enabled ? "ON" : "OFF");
         if (cfg->min_max_enabled && cfg->sample_count > 0) {
-            printf(" (Min: %.6f, Max: %.6f, Samples: %d)", 
+            printf(" (Min: %.6f, Max: %.6f, Samples: %d)",
                    cfg->min_value, cfg->max_value, cfg->sample_count);
         }
         printf("\n");
-        printf("A. Burst Mode: %s (Rate: %.1f samples/sec)\n", 
-               cfg->burst_mode ? "ON" : "OFF", cfg->sample_rate);
-        printf("B. LF Termination: %s\n", 
+        printf("A. Burst Mode: %s (Rate: %.1f/s, STOINT %d ms)\n",
+               cfg->burst_mode ? "ON" : "OFF", cfg->sample_rate, dm5120_stoint_for_slot(slot));
+        printf("B. LF Termination: %s\n",
                cfg->lf_termination ? "ON (LF only)" : "OFF (CRLF)");
-        
-        printf("\nC. Query Current Status\n");
-        printf("D. Apply Settings to DM5120\n");
-        printf("E. Test Measurement\n");
-        printf("F. Run Communication Test\n");
-        printf("G. Clear Min/Max Statistics\n");
-        printf("H. Buffer Query Commands\n");
-        printf("I. Storage Interval (STOINT)\n");
-        printf("J. SRQ Event Configuration\n");
-        printf("K. Timing Diagnostics\n");
-        printf("L. Configuration Validation\n");
-        printf("0. Return to Module Config\n");
-        
+        printf("M. AutoCal: %-3s              N. Internal Filter: %s\n",
+               cfg->autocal_off ? "OFF" : "ON", cfg->intfilt_off ? "OFF" : "ON");
+
+        printf("\nC. Query Status (SET?)        D. Apply Settings to DM5120\n");
+        printf("E. Test Measurement           F. Communication Test\n");
+        printf("G. Clear Min/Max Statistics   H. Buffer Query Commands\n");
+        printf("I. Storage Interval (STOINT)  J. SRQ Event Configuration\n");
+        printf("K. Timing Diagnostics         L. Configuration Validation\n");
+        printf("P. Utilities (ID, self test, errors, reset)   0. Return\n");
+
         printf("\nSelect option: ");
         choice = toupper(getch());
-        
+
         switch(choice) {
             case '1':  /* Function */
                 printf("\n\nAvailable functions:\n");
-                printf("0. DCV (DC Voltage)\n");
-                printf("1. ACV (AC Voltage)\n");
-                printf("2. DCI (DC Current)\n");
-                printf("3. ACI (AC Current)\n");
-                printf("4. OHMS (Resistance)\n");
+                printf("0. DCV (DC Voltage)      4. OHMS (Resistance)\n");
+                printf("1. ACV (AC Voltage)      5. ACVDB (AC Voltage, dB)\n");
+                printf("2. DCA (DC Current)      6. ACADB (AC Current, dB)\n");
+                printf("3. ACA (AC Current)      7. OHMSCOMP (Offset-compensated ohms)\n");
                 printf("Select: ");
+                temp_int = -1;
                 scanf("%d", &temp_int);
-                
-                switch(temp_int) {
-                    case 0: strcpy(cfg->function, "DCV"); break;
-                    case 1: strcpy(cfg->function, "ACV"); break;
-                    case 2: strcpy(cfg->function, "DCI"); break;
-                    case 3: strcpy(cfg->function, "ACI"); break;
-                    case 4: strcpy(cfg->function, "OHMS"); break;
-                    default: printf("Invalid selection\n");
-                }
-                break;
-                
-            case '2':  /* Range mode */
-                cfg->range_mode = !cfg->range_mode;
-                if (cfg->range_mode) {
-                    printf("\n\nManual range mode enabled. Use DM5120 front panel to set range.\n");
+                if (temp_int >= 0 && temp_int <= 7) {
+                    strcpy(cfg->function, dm5120_functs[temp_int]);
                 } else {
-                    printf("\n\nAuto range mode enabled.\n");
+                    printf("Invalid selection\n");
                 }
-                printf("Press any key to continue...");
-                getch();
                 break;
-                
+
+            case '2':  /* Range */
+                printf("\n\nRanges for %s:\n", cfg->function);
+                printf("0. AUTO\n");
+                for (temp_int = 1; temp_int <= 7; temp_int++) {
+                    printf("%d. %s\n", temp_int, dm5120_range_label(cfg->function, temp_int));
+                }
+                printf("Select: ");
+                temp_int = -1;
+                scanf("%d", &temp_int);
+                if (temp_int >= 0 && temp_int <= 7) {
+                    cfg->range_mode = temp_int;
+                }
+                break;
+
             case '3':  /* Filter */
                 cfg->filter_enabled = !cfg->filter_enabled;
                 if (cfg->filter_enabled) {
-                    printf("\n\nEnter filter value (1-100): ");
+                    printf("\n\nEnter filter value (1-99 readings per time constant): ");
                     scanf("%d", &temp_int);
-                    if (temp_int >= 1 && temp_int <= 100) {
+                    if (temp_int >= 1 && temp_int <= 99) {
                         cfg->filter_value = temp_int;
                     }
                 }
                 break;
-                
-            case '4':  /* Trigger mode */
-                printf("\n\nTrigger modes:\n");
-                printf("0. CONT (Continuous)\n");
-                printf("1. ONE (Single shot)\n");
-                printf("2. TALK (Talk trigger)\n");
-                printf("3. EXT (External trigger)\n");
+
+            case '4':  /* Trigger source and mode */
+                printf("\n\nTrigger source: 0. TALK (each read)  1. EXT (rear input / ENTER key)\n");
                 printf("Select: ");
+                temp_int = -1;
                 scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 3) {
-                    cfg->trigger_mode = temp_int;
-                }
+                if (temp_int == 0 || temp_int == 1) cfg->trigger_source = temp_int;
+                printf("Trigger mode: 0. CONT (continuous)  1. ONE (one reading per trigger)\n");
+                printf("Select: ");
+                temp_int = -1;
+                scanf("%d", &temp_int);
+                if (temp_int == 0 || temp_int == 1) cfg->trigger_mode = temp_int;
                 break;
-                
+
             case '5':  /* Digits */
                 printf("\n\nNumber of digits (3-6): ");
                 scanf("%d", &temp_int);
@@ -271,7 +387,7 @@ void configure_dm5120_advanced(int slot) {
                     cfg->digits = temp_int;
                 }
                 break;
-                
+
             case '6':  /* NULL */
                 cfg->null_enabled = !cfg->null_enabled;
                 if (cfg->null_enabled) {
@@ -280,15 +396,14 @@ void configure_dm5120_advanced(int slot) {
                     cfg->nullval = temp_float;
                 }
                 break;
-                
+
             case '7':  /* Data format */
                 cfg->data_format = !cfg->data_format;
-                printf("\n\nData format set to %s.\n", 
-                       cfg->data_format ? "Scientific" : "NR3");
+                printf("\n\nDATFOR %s.\n", cfg->data_format ? "ON" : "OFF");
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
             case '8':  /* Buffering */
                 cfg->buffer_enabled = !cfg->buffer_enabled;
                 if (cfg->buffer_enabled) {
@@ -296,7 +411,7 @@ void configure_dm5120_advanced(int slot) {
                     scanf("%d", &temp_int);
                     if (temp_int >= DM5120_MIN_BUFFER_SIZE && temp_int <= DM5120_MAX_BUFFER_SIZE) {
                         cfg->buffer_size = temp_int;
-                        printf("Buffer size set to %d samples (DM5120 hardware limit: %d)\n", 
+                        printf("Buffer size set to %d samples (DM5120 hardware limit: %d)\n",
                                temp_int, DM5120_MAX_BUFFER_SIZE);
                     } else {
                         printf("Invalid size. DM5120 hardware supports %d-%d samples only.\n",
@@ -306,7 +421,7 @@ void configure_dm5120_advanced(int slot) {
                     getch();
                 }
                 break;
-                
+
             case '9':  /* Min/Max tracking */
                 cfg->min_max_enabled = !cfg->min_max_enabled;
                 if (cfg->min_max_enabled) {
@@ -316,7 +431,7 @@ void configure_dm5120_advanced(int slot) {
                     getch();
                 }
                 break;
-                
+
             case 'A':  /* Burst mode */
                 cfg->burst_mode = !cfg->burst_mode;
                 if (cfg->burst_mode) {
@@ -325,83 +440,101 @@ void configure_dm5120_advanced(int slot) {
                     if (temp_float >= 1.0 && temp_float <= 100.0) {
                         cfg->sample_rate = temp_float;
                     }
+                    temp_int = dm5120_min_stoint_ms(slot);
+                    if (1000.0 / cfg->sample_rate < temp_int) {
+                        printf("The meter needs %d ms per reading at these settings,\n", temp_int);
+                        printf("so the buffer fills at %.1f/s.\n", 1000.0 / temp_int);
+                        printf("Press any key to continue...");
+                        getch();
+                    }
                 }
                 break;
-                
+
             case 'B':  /* LF termination */
                 cfg->lf_termination = !cfg->lf_termination;
-                printf("\n\nLF termination %s.\n", 
+                printf("\n\nLF termination %s.\n",
                        cfg->lf_termination ? "enabled (LF only)" : "disabled (CRLF)");
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
+            case 'M':  /* AutoCal: off gives up to 4x the reading rate, less accuracy */
+                cfg->autocal_off = !cfg->autocal_off;
+                break;
+
+            case 'N':  /* Internal filter: needed for full accuracy at 5.5/6.5 digits */
+                cfg->intfilt_off = !cfg->intfilt_off;
+                break;
+
             case 'C':  /* Query status */
-                printf("\n\nQuerying DM5120 status...\n");
-                
-                gpib_write(address, "FUNCT?");
+                printf("\n\nQuerying DM5120 settings (SET?)...\n\n");
+                gpib_write_dm5120(address, "SET?");
                 GPIB_PACE(100);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("Function: %s\n", buffer);
+                if (gpib_read_dm5120(address, settings, sizeof(settings)) > 0) {
+                    /* One query response per ';', three to a line */
+                    char *item = strtok(settings, ";");
+                    int col = 0;
+                    while (item) {
+                        while (*item == ' ' || *item == '\r' || *item == '\n') item++;
+                        if (*item) {
+                            printf("%-26.26s", item);
+                            if (++col % 3 == 0) printf("\n");
+                        }
+                        item = strtok(NULL, ";");
+                    }
+                    if (col % 3) printf("\n");
+                } else {
+                    printf("No reply\n");
                 }
-                
-                gpib_write(address, "RANGE?");
-                GPIB_PACE(50);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("Range: %s\n", buffer);
-                }
-                
-                gpib_write(address, "FILTER?");
-                GPIB_PACE(50);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("Filter: %s\n", buffer);
-                }
-                
-                gpib_write(address, "TRIGGER?");
-                GPIB_PACE(50);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("Trigger: %s\n", buffer);
-                }
-                
-                gpib_write(address, "ERROR?");
-                GPIB_PACE(50);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("Error status: %s\n", buffer);
-                }
-                
+                printf("\n");
+                if (dm5120_show_errors(address) == 0) printf("No errors pending\n");
+
                 printf("\nPress any key to continue...");
                 getch();
                 break;
-                
+
             case 'D':  /* Apply settings */
                 printf("\n\nApplying settings to DM5120...\n");
-                
+
                 gpib_remote(address);
                 GPIB_PACE(200);
-                
+
+                /* With RQS ON each write's serial poll drops the error queued before it;
+                   with RQS OFF errors stack until ERROR? (manual p. 3-12) */
+                gpib_write_dm5120(address, "RQS OFF");
+                GPIB_PACE(50);
+
                 dm5120_set_function(address, cfg->function);
                 dm5120_set_range(address, cfg->range_mode);
+                dm5120_set_autocal(address, !cfg->autocal_off);
+                dm5120_set_intfilt(address, !cfg->intfilt_off);
                 dm5120_set_filter(address, cfg->filter_enabled, cfg->filter_value);
                 dm5120_set_trigger(address, cfg->trigger_source ? "EXT" : "TALK", cfg->trigger_mode ? "ONE" : "CONT");
                 dm5120_set_digits(address, cfg->digits);
                 dm5120_set_null(address, cfg->null_enabled, cfg->nullval);
                 dm5120_set_data_format(address, cfg->data_format);
-                
+
                 if (cfg->buffer_enabled) {
                     dm5120_enable_buffering(address, slot, cfg->buffer_size);
                 }
-                
-                printf("Settings applied!\n");
+
+                if (dm5120_show_errors(address) == 0) {
+                    printf("Settings applied\n");
+                } else {
+                    printf("The meter reported the errors above\n");
+                }
+                gpib_write_dm5120(address, "RQS ON");
+                GPIB_PACE(50);
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
             case 'E':  /* Test measurement */
                 printf("\n\nTesting measurement...\n");
-                
+
                 temp_float = read_dm5120_enhanced(address, slot);
-                printf("Reading: %.6f\n", temp_float);
-                
+                printf("Reading: %.6f %s\n", temp_float, dm5120_unit(slot));
+
                 if (cfg->min_max_enabled) {
                     if (temp_float < cfg->min_value || cfg->sample_count == 0) {
                         cfg->min_value = temp_float;
@@ -411,41 +544,41 @@ void configure_dm5120_advanced(int slot) {
                     }
                     cfg->sample_count++;
                 }
-                
+
                 printf("\nPress any key to continue...");
                 getch();
                 break;
-                
+
             case 'F':  /* Run communication test */
                 test_dm5120_comm(address);
                 break;
-                
+
             case 'G':  /* Clear statistics */
                 dm5120_clear_statistics(slot);
                 printf("\n\nMin/Max statistics cleared.\n");
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
             case 'H':  /* Buffer Query Commands */
                 dm5120_buffer_query_menu(address);
                 break;
-                
+
             case 'I':  /* Storage Interval (STOINT) */
                 dm5120_stoint_menu(address, slot);
                 break;
-                
+
             case 'J':  /* SRQ Event Configuration */
                 dm5120_srq_menu(address, slot);
                 break;
-                
+
             case 'K':  /* Timing Diagnostics */
                 printf("\n\n");
                 dm5120_timing_diagnostics(slot);
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
             case 'L':  /* Configuration Validation */
                 printf("\n\n");
                 {
@@ -455,7 +588,11 @@ void configure_dm5120_advanced(int slot) {
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
+            case 'P':
+                dm5120_utilities_menu(address);
+                break;
+
             case '0':
                 done = 1;
                 break;
@@ -1039,8 +1176,9 @@ void dm5120_buffer_query_menu(int address) {
         buffer_size = dm5120_query_buffer_size(address);
         count = dm5120_get_buffer_count(address);
         
-        printf("Size: %s, Count: %d\n\n", 
-               buffer_size == 0 ? "CIRCULAR" : "LINEAR", count);
+        if (buffer_size == 0) printf("Size: CIRCULAR (500), Count: %d\n\n", count);
+        else if (buffer_size > 0) printf("Size: %d (LINEAR), Count: %d\n\n", buffer_size, count);
+        else printf("Size: no reply, Count: %d\n\n", count);
         
         for (i = 0; i < 9; i++) {
             printf("%d.%s ", i+1, buffer_opts[i]);
@@ -1068,7 +1206,9 @@ void dm5120_buffer_query_menu(int address) {
                 break;
             case '5':
                 buffer_size = dm5120_query_buffer_size(address);
-                printf("\nSize: %s\n", buffer_size == 0 ? "CIRCULAR" : "LINEAR");
+                if (buffer_size == 0) printf("\nSize: CIRCULAR\n");
+                else if (buffer_size > 0) printf("\nSize: %d\n", buffer_size);
+                else printf("\nNo reply\n");
                 break;
             case '6':
                 gpib_write_dm5120(address, "READ ONESTORE");
@@ -1079,6 +1219,11 @@ void dm5120_buffer_query_menu(int address) {
                 break;
             case '7':
                 count = dm5120_get_buffer_count(address);
+                buffer_size = dm5120_query_buffer_size(address);
+                /* ALLSTORE (like BUFAVE/BUFMIN/BUFMAX) holds the bus until a linear buffer fills */
+                if (buffer_size > 0 && count < buffer_size) {
+                    printf("\nBuffer holds %d of %d; the meter answers when it is full\n", count, buffer_size);
+                }
                 printf("\nReading %d values...\n", count);
                 gpib_write_dm5120(address, "READ ALLSTORE");
                 GPIB_PACE(200);
@@ -1095,9 +1240,14 @@ void dm5120_buffer_query_menu(int address) {
                 }
                 break;
             case '9':
+                /* Resending the size clears the buffer */
                 buffer_size = dm5120_query_buffer_size(address);
-                dm5120_set_buffer_size(address, buffer_size);
-                printf("\nBuffer cleared\n");
+                if (buffer_size >= 0) {
+                    dm5120_set_buffer_size(address, buffer_size);
+                    printf("\nBuffer cleared\n");
+                } else {
+                    printf("\nNo reply to BUFSZ?, not cleared\n");
+                }
                 break;
             case '0':
                 done = 1;
@@ -1113,11 +1263,19 @@ void dm5120_buffer_query_menu(int address) {
 static const char* __far stoint_opts[] = {
     "Set ONE", "Set ms", "Query", "Validate", "Common", "Exit"
 };
-static const int __far test_intervals[] = {1, 5, 10, 20, 100};
+static const int __far test_intervals[] = {1, 5, 10, 20, 100, 175, 350};
+#define N_TEST_INTERVALS (sizeof(test_intervals) / sizeof(test_intervals[0]))
 static const char* __far conflict_msgs[] = {
-    "OHMS conflict", "AUTO range conflict", "CIRCULAR conflict", 
-    "5-6 digit conflict", "4+ digit conflict", "invalid slot"   /* -1..-5, DM5120_STOINT_BAD_SLOT */
+    "OHMS/dB conflict", "AUTO range conflict", "CIRCULAR conflict",
+    "5-6 digit conflict", "4+ digit conflict", "invalid slot",
+    "shorter than a conversion (error 551)"   /* -1..-5, BAD_SLOT, TOO_SHORT */
 };
+
+static void print_stoint(int interval) {
+    if (interval > 0) printf("%d ms\n", interval);
+    else if (interval == 0) printf("ONE\n");
+    else printf("no reply\n");
+}
 
 void dm5120_stoint_menu(int address, int slot) {
     char choice;
@@ -1133,11 +1291,14 @@ void dm5120_stoint_menu(int address, int slot) {
         printf("============================\n");
         
         current_interval = dm5120_query_storage_interval(address);
-        printf("Current: %s\n", current_interval == -1 ? "ONE" : "Continuous");
-        printf("Function: %s, Digits: %d\n", cfg->function, cfg->digits);
-        printf("Range: %s, Buffer: %s\n\n", 
+        printf("Current: ");
+        print_stoint(current_interval);
+        printf("Function: %s, Digits: %d, AutoCal: %s\n", cfg->function, cfg->digits,
+               cfg->autocal_off ? "OFF" : "ON");
+        printf("Range: %s, Buffer: %s\n",
                cfg->range_mode == 0 ? "AUTO" : "MANUAL",
                cfg->buffer_enabled ? "ON" : "OFF");
+        printf("Shortest interval for these settings: %d ms\n\n", dm5120_min_stoint_ms(slot));
         
         for (i = 0; i < 5; i++) {
             printf("%d.%s ", i+1, stoint_opts[i]);
@@ -1159,12 +1320,14 @@ void dm5120_stoint_menu(int address, int slot) {
                 entered = 0;
                 scanf("%ld", &entered);
                 if (entered >= 1 && entered <= 32767) {
+                    int sent;
                     interval = (int)entered;
-                    if (dm5120_set_storage_interval(address, slot, interval) == 0) {
-                        printf("Set to %d ms\n", interval);
-                        validation_result = dm5120_validate_stoint_settings(slot, interval);
-                        if (validation_result < 0) {
-                            printf("WARNING: %s\n", conflict_msgs[-validation_result-1]);
+                    validation_result = dm5120_validate_stoint_settings(slot, interval);
+                    sent = dm5120_set_storage_interval(address, slot, interval);
+                    if (sent >= 0) {
+                        printf("Set to %d ms\n", sent);
+                        if (sent != interval && validation_result < 0) {
+                            printf("Raised from %d ms: %s\n", interval, conflict_msgs[-validation_result-1]);
                         }
                     } else {
                         printf("STOINT not set\n");
@@ -1175,20 +1338,21 @@ void dm5120_stoint_menu(int address, int slot) {
                 break;
             case '3':
                 current_interval = dm5120_query_storage_interval(address);
-                printf("\nSTOINT: %s\n", 
-                       current_interval == -1 ? "ONE" : "Continuous");
+                printf("\nSTOINT: ");
+                print_stoint(current_interval);
                 break;
             case '4':
                 printf("\nValidating...\n");
-                for (i = 0; i < 5; i++) {
+                for (i = 0; i < N_TEST_INTERVALS; i++) {
                     validation_result = dm5120_validate_stoint_settings(slot, test_intervals[i]);
-                    printf("%dms: %s\n", test_intervals[i], 
-                           validation_result == 0 ? "OK" : "CONFLICT");
+                    printf("%4dms: %s\n", test_intervals[i],
+                           validation_result == 0 ? "OK" : conflict_msgs[-validation_result-1]);
                 }
                 break;
             case '5':
                 printf("\nCommon values:\n1ms=1000r/s, 5ms=200r/s\n");
                 printf("10ms=100r/s, 20ms=50r/s, 100ms=10r/s\n");
+                printf("175ms (factory default) suits 6.5 digits with AutoCal\n");
                 break;
             case '0':
                 done = 1;
@@ -1264,7 +1428,11 @@ void dm5120_srq_menu(int address, int slot) {
                 gpib_write_dm5120(address, "EVENT?");
                 GPIB_PACE(100);
                 if (gpib_read_dm5120(address, response, 64) > 0) {
-                    printf("\nEVENT: %s\n", response);
+                    float code;
+                    printf("\n%s\n", response);
+                    if (dm5120_parse_value(response, &code)) {
+                        printf("%s\n", dm5120_error_text((int)code));
+                    }
                 }
                 break;
             case '7':

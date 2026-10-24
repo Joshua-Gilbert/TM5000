@@ -114,6 +114,53 @@ hardware.
 - Custom GPIB commands starting with `F` (e.g. `FUNCT DCV`) triggered a read and a
   SEQUENCE error. Only queries (`?`) read now.
 
+### Fixed — DM5120 (checked against manual 070-7240-00 and the FV1.0 firmware's command table)
+- **Error 551 in continuous monitoring:** the async buffer fill always sent `STOINT 100`,
+  shorter than one conversion at 5½/6½ digits (about 133 ms at 50 Hz with AutoCal) and
+  OHMSCOMP, so the meter stopped with 551 (SHORT TIME). Every `STOINT` is now raised to
+  the conversion time for the slot's function, digits, range and AutoCal setting from the
+  continuous-into-buffer rates (50 Hz figures, +30%), and to the 1–14 ms conflict
+  floor: 174 ms at 6½ digits with AutoCal, next to the factory `STOINT 175`. The fill
+  uses the burst rate when burst mode is on, else 100 ms, before that floor. The STOINT
+  menu and configuration check report "shorter than a conversion" as its own code.
+- The async fill gave up after a fixed 30 s, but 500 readings at 174 ms take 87 s. The
+  limit now follows the buffer size × interval. A timed-out fill is reset instead of
+  read: `BUFAVE?` holds the bus until a linear buffer is full.
+- `EVENT?` replies with a number (`EVENT 450;` full, `451` half, `551` short time), but
+  the fill looked for the words HALF/FULL and the status check for codes 1/2/4/8/16, so
+  no event was ever seen. A 551 now shows on the monitor line.
+- Every query reply carries a header (`BUFCNT 45;`), which the `BUFCNT?`, `BUFAVE?`,
+  `BUFMIN?` and `BUFMAX?` parsers didn't skip: the count was always 0 and the buffer
+  average always fell back to one stored reading.
+- Commands the meter rejects (it accepts no abbreviations or variants): `DIGITS` is
+  `DIGIT`, the filter count is `FILTERVAL` (not `FILTER <n>`), `BUFCLR` doesn't exist
+  (`BUFSZ` clears the buffer), `X` is `SEND`, and the function menu's `DCI`/`ACI` are
+  `DCA`/`ACA` (saved profiles holding the old names are corrected on Apply). Null is
+  sent as `NULLVAL` then `NULL ON`, since `NULL 0` turns null off.
+- The trigger menu stored TALK/EXT in the CONT/ONE field, so choosing EXT sent
+  `TRIGGER TALK,ONE`. Source and mode are now asked separately, and a profile holding
+  the old values is converted when it loads.
+- "Manual" range sent `RANGE 1` (300 mV). The range menu lists RANGE 0–7 with each
+  function's full scale (Table 3-3).
+- `BUFSZ?` reported CIRCULAR as 500, which the buffer menu showed as LINEAR and its
+  Clear turned into a 500-reading linear buffer.
+- The STOINT menu showed "Continuous" for any interval and "ONE" when the query failed.
+- Query Status ignored the LF-termination setting.
+
+### Added — DM5120
+- Functions ACVDB, ACADB and OHMSCOMP. Monitor lines and trace axes show V, A, ohm or
+  dB to match the function.
+- AutoCal and internal filter on/off (sent on Apply; AutoCal feeds the timing). They use
+  two spare bits in the slot config, both 0 = factory ON, so `PROFILES.DAT` keeps its
+  layout and version and older profiles load as ON.
+- Query Status reads the whole setup with `SET?`. Apply sends its commands with RQS
+  off, so errors stack, then prints each one with the manual's text (Table 3-5) instead
+  of an unconditional "Settings applied!". Query Status prints whatever is still queued.
+- Utilities menu: `ID?`, self test (`TEST?`), error/event queue, front-panel `TEXT`,
+  `INIT`, `RESET` and `PONSAVE` (both confirmed first), and the firmware's `HELP?`.
+- The reading-rate tables use the 50 Hz figures where they are slower, and the 6½-digit
+  bus-triggered rate is 0.2/s (was 0.25).
+
 ### Build
 - Makefile dependencies list each file's direct includes, including the GRIDGPIB
   objects, and `clean` also removes `.err` and `.map`.

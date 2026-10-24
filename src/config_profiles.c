@@ -415,6 +415,7 @@ int apply_config_profile(config_profile *profile) {
     }
     
     memcpy(g_dm5120_config, profile->dm5120_configs, sizeof(g_dm5120_config));
+    for (i = 0; i < 10; i++) dm5120_fix_legacy_config(i);
     memcpy(g_dm5010_config, profile->dm5010_configs, sizeof(g_dm5010_config));
     memcpy(g_ps5004_config, profile->ps5004_configs, sizeof(g_ps5004_config));
     memcpy(g_ps5010_config, profile->ps5010_configs, sizeof(g_ps5010_config));
