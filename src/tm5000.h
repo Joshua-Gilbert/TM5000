@@ -364,36 +364,35 @@ typedef struct {
 typedef dc5009_config dc5010_config;
 unsigned dc50xx_timeout_ms(int slot);   /* modules.c; gpib_gg.c's counter read timeout */
 
+/* FG5010 settings, manual 070-3467-01 section 3. PROFILES.DAT stores this raw:
+   fields the FG5010 has no use for (it has no sweep, trigger source/level,
+   modulation depth or burst period) are kept so the size does not change. */
+#define FG5010_LAYOUT 5010      /* in 'layout': fields hold the meanings below */
 typedef struct {
-    char waveform[12];
-    char trigger_source[10];    /* INT, EXT, MAN */
-    char trigger_slope[4];      /* POS, NEG */
-    char mod_type[4];           /* AM, FM */
-    float frequency;            /* Hz (0.1 Hz to 15 MHz) */
-    float amplitude;            /* Vpp (0.01 to 20 Vpp) */
-    float offset;               /* DC offset, V (-10 to +10) */
-    float duty_cycle;           /* square/pulse, % (1 to 99) */
-    float start_freq;           /* Sweep start frequency */
-    float stop_freq;            /* Sweep stop frequency */
-    float sweep_time;           /* s (0.1 to 999) */
-    float trigger_level;        /* External trigger level, V (-5 to +5) */
-    float phase;                /* degrees (0-360) */
-    float mod_freq;             /* Modulation frequency */
-    float mod_depth;            /* Modulation depth (%) */
-    float burst_period;         /* Burst repetition period */
-    int burst_count;            /* cycles per burst */
-    int sweep_type;             /* 0=Linear, 1=Log */
-    int units_freq;             /* 0=Hz, 1=kHz, 2=MHz */
-    int units_time;             /* 0=s, 1=ms, 2=us */
+    char waveform[12];          /* FUNC: SINE, SQUARE, TRIANGLE */
+    char trigger_source[10];    /* unused */
+    char trigger_slope[4];      /* SLOPE: POS, NEG */
+    char mod_type[4];           /* unused */
+    float frequency;            /* FREQ, Hz: 0.002 to 20 MHz, 0 with VCF */
+    float amplitude;            /* AMPL, V p-p open circuit: 0 or 0.02 to 20 */
+    float offset;               /* OFFS, V open circuit: -7.5 to +7.5 */
+    float duty_cycle;           /* SYM, %: 10 to 90 */
+    float start_freq;           /* unused */
+    float stop_freq;            /* unused */
+    float sweep_time;           /* unused */
+    float trigger_level;        /* unused */
+    float phase;                /* PHAS, degrees: -90 to +90 */
+    float mod_freq;             /* unused */
+    float mod_depth;            /* unused */
+    float burst_period;         /* unused */
+    int burst_count;            /* NBUR: 1 to 9999 */
+    int mode;                   /* MODE: 0 CONT, 1 TRIG, 2 GATE, 3 BURST, 4 PHLOCK */
+    int layout;                 /* FG5010_LAYOUT; older profiles hold 0-2 here */
+    int units_time;             /* unused */
 
-    unsigned int output_enabled:1;
-    unsigned int sweep_enabled:1;
-    unsigned int sync_enabled:1;       /* Sync output */
-    unsigned int invert_enabled:1;
-    unsigned int modulation_enabled:1; /* AM/FM modulation */
-    unsigned int burst_enabled:1;
-    unsigned int lf_termination:1;     /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int toggles:8;     /* ON/OFF settings, bit n = fg5010_toggles[n] */
+    unsigned int dt_mode:2;     /* DT: 0 OFF, 1 SET, 2 TRIG, 3 GATE */
+    unsigned int reserved:6;
 } fg5010_config;
 
 extern measurement_system *g_system;

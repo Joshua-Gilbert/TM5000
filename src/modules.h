@@ -133,27 +133,10 @@ int dc50xx_trace_unit(int slot);
 
 /* FG5010 functions */
 void init_fg5010_config(int slot);
-void configure_fg5010(int slot);
+void fg5010_fix_config(int slot);
 void configure_fg5010_advanced(int slot);
-void fg5010_set_frequency(int address, float freq);
-void fg5010_set_amplitude(int address, float amp);
-void fg5010_set_offset(int address, float offset);
-void fg5010_set_waveform(int address, char *waveform);
-void fg5010_set_duty_cycle(int address, float duty);
-void fg5010_enable_output(int address, int enable);
-void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq, float time);
-void fg5010_set_trigger(int address, char *source, char *slope, float level);
-void fg5010_set_sync(int address, int enable);
-void fg5010_set_invert(int address, int enable);
-void fg5010_set_phase(int address, float phase);
-void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth);
-void fg5010_set_burst(int address, int enable, int count, float period);
 int test_fg5010_comm(int address);  /* 0 = pass, -1 = fail, 1 = declined (not run) */
-float fg5010_read_frequency(int address);
-int fg5010_read_output_status(int address);
-
-/* FG5010 programs */
-void fg5010_pulse_program_menu(int slot);
+int fg5010_state_text(int address, char *out);  /* monitor line; no printf */
 
 /* Measurement functions */
 void single_measurement(void);

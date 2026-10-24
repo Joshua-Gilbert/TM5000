@@ -815,16 +815,6 @@ void sample_rate_menu(void) {
     }
 }
 
-/* Stub: pulse programming not implemented. */
-void fg5010_pulse_program_menu(int slot) {
-    clrscr();
-    printf("FG5010 Pulse Program Menu - Slot %d\n", slot);
-    printf("===================================\n\n");
-    printf("This feature is not yet implemented.\n\n");
-    printf("Press any key to return...");
-    getch();
-}
-
 
 void math_functions_menu(void) {
     int choice;
@@ -1284,18 +1274,7 @@ void module_settings_menu(void) {
                 if (slot >= 0 && slot < 10 && 
                     g_system->modules[slot].enabled &&
                     g_system->modules[slot].module_type == MOD_FG5010) {
-                    
-                    printf("\nFG5010 Configuration Options:\n");
-                    printf("1. Advanced Configuration\n");
-                    printf("2. Pulse Program Menu\n");
-                    printf("Choice: ");
-                    scanf("%d", &choice);
-                    
-                    if (choice == 1) {
-                        configure_fg5010_advanced(slot);
-                    } else if (choice == 2) {
-                        fg5010_pulse_program_menu(slot);
-                    }
+                    configure_fg5010_advanced(slot);
                 } else {
                     printf("Invalid slot or not a FG5010.\n");
                     printf("\nPress any key to continue...");

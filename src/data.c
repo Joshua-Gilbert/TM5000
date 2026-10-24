@@ -1012,22 +1012,12 @@ void save_fg5010_config(FILE *fp, int slot) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     
     fprintf(fp, "Slot%d:FG5010\n", slot);
-    fprintf(fp, "frequency=%.6f|amplitude=%.6f|offset=%.6f|waveform=%s|\n",
+    fprintf(fp, "frequency=%.6g|amplitude=%.6f|offset=%.6f|waveform=%s|\n",
             cfg->frequency, cfg->amplitude, cfg->offset, cfg->waveform);
-    fprintf(fp, "output_enabled=%d|duty_cycle=%.6f|sweep_enabled=%d|\n",
-            cfg->output_enabled, cfg->duty_cycle, cfg->sweep_enabled);
-    fprintf(fp, "start_freq=%.6f|stop_freq=%.6f|sweep_time=%.6f|sweep_type=%d|\n",
-            cfg->start_freq, cfg->stop_freq, cfg->sweep_time, cfg->sweep_type);
-    fprintf(fp, "trigger_source=%s|trigger_slope=%s|trigger_level=%.6f|\n",
-            cfg->trigger_source, cfg->trigger_slope, cfg->trigger_level);
-    fprintf(fp, "sync_enabled=%d|invert_enabled=%d|phase=%.6f|\n",
-            cfg->sync_enabled, cfg->invert_enabled, cfg->phase);
-    fprintf(fp, "modulation_enabled=%d|mod_type=%s|mod_freq=%.6f|mod_depth=%.6f|\n",
-            cfg->modulation_enabled, cfg->mod_type, cfg->mod_freq, cfg->mod_depth);
-    fprintf(fp, "burst_enabled=%d|burst_count=%d|burst_period=%.6f|\n",
-            cfg->burst_enabled, cfg->burst_count, cfg->burst_period);
-    fprintf(fp, "units_freq=%d|units_time=%d|lf_termination=%d\n",
-            cfg->units_freq, cfg->units_time, cfg->lf_termination);
+    fprintf(fp, "duty_cycle=%.0f|phase=%.0f|burst_count=%d|trigger_slope=%s|\n",
+            cfg->duty_cycle, cfg->phase, cfg->burst_count, cfg->trigger_slope);
+    fprintf(fp, "mode=%d|toggles=%u|dt_mode=%u\n",
+            cfg->mode, (unsigned)cfg->toggles, (unsigned)cfg->dt_mode);
 }
 
 /* The load_*_config readers read into the caller's line buffer and stop at the
@@ -1261,10 +1251,12 @@ int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
     fg5010_config *cfg = &g_fg5010_config[slot];
     char key[64], value[64];
     char *token;
+    int header = 0;
 
     while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            header = 1;
+            break;
         }
         
         token = strtok(line, "|");
@@ -1273,33 +1265,27 @@ int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
                 if (strcmp(key, "frequency") == 0) cfg->frequency = (float)atof(value);
                 else if (strcmp(key, "amplitude") == 0) cfg->amplitude = (float)atof(value);
                 else if (strcmp(key, "offset") == 0) cfg->offset = (float)atof(value);
-                else if (strcmp(key, "waveform") == 0) strcpy(cfg->waveform, value);
-                else if (strcmp(key, "output_enabled") == 0) cfg->output_enabled = atoi(value);
+                else if (strcmp(key, "waveform") == 0) {
+                    strncpy(cfg->waveform, value, sizeof(cfg->waveform) - 1);
+                    cfg->waveform[sizeof(cfg->waveform) - 1] = '\0';
+                }
                 else if (strcmp(key, "duty_cycle") == 0) cfg->duty_cycle = (float)atof(value);
-                else if (strcmp(key, "sweep_enabled") == 0) cfg->sweep_enabled = atoi(value);
-                else if (strcmp(key, "start_freq") == 0) cfg->start_freq = (float)atof(value);
-                else if (strcmp(key, "stop_freq") == 0) cfg->stop_freq = (float)atof(value);
-                else if (strcmp(key, "sweep_time") == 0) cfg->sweep_time = (float)atof(value);
-                else if (strcmp(key, "sweep_type") == 0) cfg->sweep_type = atoi(value);
-                else if (strcmp(key, "trigger_source") == 0) strcpy(cfg->trigger_source, value);
-                else if (strcmp(key, "trigger_slope") == 0) strcpy(cfg->trigger_slope, value);
-                else if (strcmp(key, "trigger_level") == 0) cfg->trigger_level = (float)atof(value);
-                else if (strcmp(key, "sync_enabled") == 0) cfg->sync_enabled = atoi(value);
-                else if (strcmp(key, "invert_enabled") == 0) cfg->invert_enabled = atoi(value);
                 else if (strcmp(key, "phase") == 0) cfg->phase = (float)atof(value);
-                else if (strcmp(key, "modulation_enabled") == 0) cfg->modulation_enabled = atoi(value);
-                else if (strcmp(key, "mod_type") == 0) strcpy(cfg->mod_type, value);
-                else if (strcmp(key, "mod_freq") == 0) cfg->mod_freq = (float)atof(value);
-                else if (strcmp(key, "mod_depth") == 0) cfg->mod_depth = (float)atof(value);
-                else if (strcmp(key, "burst_enabled") == 0) cfg->burst_enabled = atoi(value);
                 else if (strcmp(key, "burst_count") == 0) cfg->burst_count = atoi(value);
-                else if (strcmp(key, "burst_period") == 0) cfg->burst_period = (float)atof(value);
-                else if (strcmp(key, "units_freq") == 0) cfg->units_freq = atoi(value);
-                else if (strcmp(key, "units_time") == 0) cfg->units_time = atoi(value);
-                else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = atoi(value);
+                else if (strcmp(key, "trigger_slope") == 0) {
+                    strncpy(cfg->trigger_slope, value, sizeof(cfg->trigger_slope) - 1);
+                    cfg->trigger_slope[sizeof(cfg->trigger_slope) - 1] = '\0';
+                }
+                else if (strcmp(key, "mode") == 0) cfg->mode = atoi(value);
+                else if (strcmp(key, "toggles") == 0) cfg->toggles = atoi(value);
+                else if (strcmp(key, "dt_mode") == 0) cfg->dt_mode = atoi(value);
+                /* Older files: the invert flag is COMP; their sweep, trigger and
+                   modulation keys have no FG5010 command and are skipped */
+                else if (strcmp(key, "invert_enabled") == 0 && atoi(value)) cfg->toggles |= 1;
             }
             token = strtok(NULL, "|");
         }
     }
-    return 0;
+    fg5010_fix_config(slot);
+    return header;
 }
