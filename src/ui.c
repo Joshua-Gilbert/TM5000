@@ -1135,6 +1135,7 @@ void module_settings_menu(void) {
         printf("2. PS5004 Advanced Configuration\n\n");
         printf("3. PS5010 Advanced Configuration\n\n");
         printf("4. FG5010 Advanced Configuration\n\n");
+        printf("5. DM5010 Advanced Configuration\n\n");
         printf("0. Return to Module Functions Menu\n");
         
         printf("\nEnter choice: ");
@@ -1299,7 +1300,44 @@ void module_settings_menu(void) {
                     getch();
                 }
                 break;
-                
+
+            case '5':
+                found = 0;
+                clrscr();
+                printf("DM5010 Multimeter Modules:\n");
+                printf("==========================\n\n");
+
+                for (i = 0; i < 10; i++) {
+                    if (g_system->modules[i].enabled &&
+                        g_system->modules[i].module_type == MOD_DM5010) {
+                        printf("Slot %d: DM5010 (GPIB %d)\n",
+                               i, g_system->modules[i].gpib_address);
+                        found = 1;
+                    }
+                }
+
+                if (!found) {
+                    printf("No DM5010 modules configured.\n");
+                    printf("\nPress any key to continue...");
+                    getch();
+                    break;
+                }
+
+                printf("\nEnter slot number: ");
+                slot = -1;
+                scanf("%d", &slot);
+
+                if (slot >= 0 && slot < 10 &&
+                    g_system->modules[slot].enabled &&
+                    g_system->modules[slot].module_type == MOD_DM5010) {
+                    configure_dm5010_advanced(slot);
+                } else {
+                    printf("Invalid slot or not a DM5010.\n");
+                    printf("\nPress any key to continue...");
+                    getch();
+                }
+                break;
+
             case '0':
             case 27:  /* ESC */
                 done = 1;

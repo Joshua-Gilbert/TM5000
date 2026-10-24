@@ -388,37 +388,27 @@ int gpib_write_dm5010(int address, char *command) {
 int gpib_read_dm5010(int address, char *buffer, int maxlen) {
     char cmd_buffer[80];
     int bytes_read;
-    
+    /* A reading with AVE or LFR can outlast Driver488's 10 s TIME OUT */
+    unsigned t = (dm5010_timeout_ms(address) + 999u) / 1000u;
+
+    if (t > 10) {
+        sprintf(cmd_buffer, "TIME OUT %u\r\n", t);
+        ieee_write(cmd_buffer);
+    }
     sprintf(cmd_buffer, "enter %2d\r\n", address);
     ieee_write(cmd_buffer);
-    
+
     delay(100);
-    
+
     bytes_read = ieee_read(buffer, maxlen);   /* ieee_read already keeps one byte for the NUL */
     if (bytes_read > 0) {
         buffer[bytes_read] = '\0';
     } else {
         buffer[0] = '\0';
     }
-    
-    return bytes_read;
-}
+    if (t > 10) ieee_write("TIME OUT 10\r\n");
 
-int gpib_read_float_dm5010(int address, float *value) {
-    char buffer[GPIB_BUFFER_SIZE];
-    char cmd_buffer[80];
-    
-    sprintf(cmd_buffer, "enter %2d\r\n", address);
-    ieee_write(cmd_buffer);
-    
-    delay(100);
-    
-    if (ieee_read(buffer, sizeof(buffer)) > 0) {
-        if (sscanf(buffer, "%e", value) == 1) return 1;
-        if (sscanf(buffer, "%f", value) == 1) return 1;
-    }
-    
-    return 0;
+    return bytes_read;
 }
 
 int command_has_response(const char *cmd) {

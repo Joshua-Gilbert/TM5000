@@ -2176,6 +2176,15 @@ void sync_traces_with_modules(void) {
                             g_traces[i].x_scale = 1.0;
                             g_traces[i].x_offset = 0.0;
                             break;
+                        case MOD_DM5010:
+                            {
+                                const char *u = dm5010_unit(i);
+                                g_traces[i].unit_type = u[0] == 'd' ? UNIT_DB :
+                                                        u[0] == 'o' ? UNIT_RESISTANCE : UNIT_VOLTAGE;
+                            }
+                            g_traces[i].x_scale = 1.0;
+                            g_traces[i].x_offset = 0.0;
+                            break;
                         default:
                             /* Default to voltage for multimeters and power supplies */
                             g_traces[i].unit_type = UNIT_VOLTAGE;
@@ -3679,460 +3688,838 @@ void test_dm5120_comm_debug(int address) {
     getch();
 }
 
-/* DM5010 multimeter */
+/* DM5010 multimeter: Tek Codes & Formats, manual 070-2994-01 section 3 */
+
+static const char * __far dm5010_functs[] = { "DCV", "ACV", "ACDC", "OHMS", "DIODE" };
+
+/* Full scale of each range, manual pp. 3-5, 3-9, 3-15. An argument above the top
+   range is a command error; the meter rounds others up to the next range. */
+static const float __far dm5010_dcv_fs[] = { 0.2f, 2.0f, 20.0f, 200.0f, 1000.0f };
+static const float __far dm5010_acv_fs[] = { 0.2f, 2.0f, 20.0f, 200.0f, 700.0f };
+static const float __far dm5010_ohm_fs[] = { 200.0f, 2e3f, 2e4f, 2e5f, 2e6f, 2e7f };
+
+/* Two-state settings: header, argument when set, argument when clear (pp. 3-3/3-4) */
+static const struct { const char *hdr, *on, *off; } __far d10_flags[] = {
+    { "DIGIT", "3.5", "4.5" }, { "LFR", "ON", "OFF" },     { "SOURCE", "REAR", "FRONT" },
+    { "MODE", "TRIG", "RUN" }, { "DT", "TRIG", "OFF" },    { "MONITOR", "ON", "OFF" },
+    { "OPC", "ON", "OFF" },    { "OVER", "ON", "OFF" },    { "USER", "ON", "OFF" },
+    { "RQS", "ON", "OFF" }
+};
+#define D10_RQS 9
+
+/* ERR? codes, manual Table 3-1 p. 3-25 */
+static const struct { int code; const char *text; } __far dm5010_errors[] = {
+    {   0, "No errors or events" },          { 101, "Invalid command header" },
+    { 102, "Header delimiter error" },       { 103, "Argument error" },
+    { 104, "Argument delimiter error" },     { 106, "Missing argument" },
+    { 107, "Invalid message unit delimiter" },
+    { 201, "Not executable in local mode" }, { 202, "Settings lost due to rtl" },
+    { 203, "Input and output buffers full" }, { 205, "Argument out of range" },
+    { 206, "Group Execute Trigger ignored" }, { 231, "Not in calibrate mode" },
+    { 232, "Beyond calibration or null capability" },
+    { 301, "Interrupt fault" },              { 302, "System error" },
+    { 303, "Math pack error" },              { 311, "Converter time-out" },
+    { 317, "Front panel time-out" },         { 318, "Bad ohms calibration constant" },
+    { 351, "Calibration checksum error" },   { 401, "Power on" },
+    { 402, "Operation complete" },           { 403, "ID user request" },
+    { 601, "Over-range" },                   { 701, "Below limits" },
+    { 703, "Above limits" }
+};
+
+/* Calculations in effect, from CALC? or the slot's settings */
+#define D10_AVE   1
+#define D10_CMPR  2
+#define D10_DBM   4
+#define D10_DBR   8
+#define D10_RATIO 16
+
+/* Function and calculations the meter reported with its last reading; the unit
+   label follows these, so a front-panel change shows up */
+static struct { char funct[6]; unsigned char calc; } __far dm5010_live[10];
+static float __far dm5010_min[10], dm5010_max[10];
+static char __far dm5010_reply[256];     /* SET? replies run to 225 characters (p. 3-19) */
+
+/* Ranges of a function; 0 for DIODE, which takes no argument (p. 3-10) */
+static int dm5010_ranges(const char *f, const float **fs) {
+    if (f[0] == 'D' && f[1] == 'I') return 0;
+    if (f[0] == 'O') { *fs = dm5010_ohm_fs; return 6; }
+    *fs = (f[0] == 'D') ? dm5010_dcv_fs : dm5010_acv_fs;
+    return 5;
+}
+
+/* Index of the function header that starts s ("OHMS -2.E+6"), -1 if none */
+static int dm5010_funct_index(const char *s) {
+    int i, n;
+    for (i = 0; i < 5; i++) {
+        n = strlen(dm5010_functs[i]);
+        if (strncmp(s, dm5010_functs[i], n) == 0 && (s[n] == ' ' || s[n] == ';' || s[n] == '\0')) return i;
+    }
+    return -1;
+}
+
+static unsigned char dm5010_calc_bits(const char *s) {
+    unsigned char b = 0;
+    if (strstr(s, "AVE") || strstr(s, "AVG")) b |= D10_AVE;
+    if (strstr(s, "CMPR") || strstr(s, "COMP")) b |= D10_CMPR;
+    if (strstr(s, "DBM")) b |= D10_DBM;
+    if (strstr(s, "DBR")) b |= D10_DBR;
+    if (strstr(s, "RATIO")) b |= D10_RATIO;
+    return b;
+}
+
+static unsigned char dm5010_cfg_calc(dm5010_config *cfg) {
+    return (cfg->filter_enabled ? D10_AVE : 0) | (cfg->cmpr_on ? D10_CMPR : 0) |
+           (cfg->ratio_on ? D10_RATIO : 0) |
+           (cfg->calculation_mode == 3 ? D10_DBM : cfg->calculation_mode == 4 ? D10_DBR : 0);
+}
+
+static int d10_flag(dm5010_config *cfg, int k) {
+    switch (k) {
+        case 0: return cfg->high_speed_mode;
+        case 1: return cfg->lfr_on;
+        case 2: return !cfg->source_front;
+        case 3: return cfg->trigger_mode != 0;
+        case 4: return cfg->dt_trig;
+        case 5: return cfg->monitor_on;
+        case 6: return cfg->opc_on;
+        case 7: return cfg->over_on;
+        case 8: return cfg->user_on;
+        default: return cfg->rqs_on;
+    }
+}
+
+static void d10_set_flag(dm5010_config *cfg, int k, int on) {
+    switch (k) {
+        case 0: cfg->high_speed_mode = on; break;
+        case 1: cfg->lfr_on = on; break;
+        case 2: cfg->source_front = !on; break;
+        case 3: cfg->trigger_mode = on; break;
+        case 4: cfg->dt_trig = on; break;
+        case 5: cfg->monitor_on = on; break;
+        case 6: cfg->opc_on = on; break;
+        case 7: cfg->over_on = on; break;
+        case 8: cfg->user_on = on; break;
+        default: cfg->rqs_on = on; break;
+    }
+}
+
+static const char *d10_arg(dm5010_config *cfg, int k) {
+    return d10_flag(cfg, k) ? d10_flags[k].on : d10_flags[k].off;
+}
+
+static void dm5010_stats_clear(int slot) {
+    dm5010_min[slot] = 1e30;
+    dm5010_max[slot] = -1e30;
+}
+
+/* Power-on settings, manual Table 3-3 p. 3-26 */
 void init_dm5010_config(int slot) {
-    strcpy(g_dm5010_config[slot].function, "DCV");
-    g_dm5010_config[slot].range_mode = 0;  /* AUTO */
-    g_dm5010_config[slot].filter_enabled = 0;
-    g_dm5010_config[slot].filter_count = 1;
-    g_dm5010_config[slot].trigger_mode = 0;  /* FREE */
-    g_dm5010_config[slot].digits = 5;  /* 4.5 digits */
-    g_dm5010_config[slot].nullval = 0.0;
-    g_dm5010_config[slot].null_enabled = 0;
-    g_dm5010_config[slot].data_format = 1;  /* Scientific notation */
-    g_dm5010_config[slot].auto_zero = 1;  /* ON */
-    g_dm5010_config[slot].calculation_mode = 0;  /* NONE */
-    g_dm5010_config[slot].scale_factor = 1.0;
-    g_dm5010_config[slot].scale_offset = 0.0;
-    g_dm5010_config[slot].avg_count = 10;
-    g_dm5010_config[slot].dbm_reference = 600.0;  /* 600 ohm */
-    g_dm5010_config[slot].dbr_reference = 0.0;
-    g_dm5010_config[slot].beeper_enabled = 1;
-    g_dm5010_config[slot].front_panel_lock = 0;
-    g_dm5010_config[slot].high_speed_mode = 0;
-    g_dm5010_config[slot].min_value = 1e30;
-    g_dm5010_config[slot].max_value = -1e30;
-    g_dm5010_config[slot].statistics_enabled = 0;
-    g_dm5010_config[slot].lf_termination = 0;  /* Default to CRLF */
-}
-void configure_dm5010_advanced(int slot) {
-    int choice, done = 0;
-    int address = g_system->modules[slot].gpib_address;
     dm5010_config *cfg = &g_dm5010_config[slot];
-    char input[50];
-    float temp_float;
-    int temp_int;
-    
-    while (!done) {
-        clrscr();
-        printf("DM5010 Advanced Configuration - Slot %d\n", slot);
-        printf("======================================\n\n");
-        
-        printf("Current Configuration:\n");
-        printf("  Function: %s\n", cfg->function);
-        printf("  Range: %s\n", cfg->range_mode == 0 ? "AUTO" : "MANUAL");
-        printf("  Filter: %s (count: %d)\n", cfg->filter_enabled ? "ON" : "OFF", cfg->filter_count);
-        printf("  Trigger: %s\n", cfg->trigger_mode == 0 ? "FREE" : (cfg->trigger_mode == 1 ? "SINGLE" : "EXT"));
-        printf("  Digits: %d\n", cfg->digits);
-        printf("  NULL/REL: %s (value: %.6e)\n", cfg->null_enabled ? "ON" : "OFF", cfg->nullval);
-        printf("  Auto Zero: %s\n", cfg->auto_zero ? "ON" : "OFF");
-        printf("  Calculation: ");
-        switch(cfg->calculation_mode) {
-            case 0: printf("NONE\n"); break;
-            case 1: printf("AVERAGE (count: %d)\n", cfg->avg_count); break;
-            case 2: printf("SCALE (factor: %.3f, offset: %.3f)\n", cfg->scale_factor, cfg->scale_offset); break;
-            case 3: printf("dBm (ref: %.0f ohm)\n", cfg->dbm_reference); break;
-            case 4: printf("dBr (ref: %.6e)\n", cfg->dbr_reference); break;
-        }
-        printf("  Beeper: %s\n", cfg->beeper_enabled ? "ON" : "OFF");
-        printf("  Front Panel: %s\n", cfg->front_panel_lock ? "LOCKED" : "UNLOCKED");
-        printf("  Statistics: %s\n", cfg->statistics_enabled ? "ON" : "OFF");
-        if (cfg->statistics_enabled) {
-            printf("    Min: %.6e, Max: %.6e\n", cfg->min_value, cfg->max_value);
-        }
-        
-        printf("\nOptions:\n");
-        printf("1. Set Function\n");
-        printf("2. Set Range Mode\n");
-        printf("3. Configure Filter\n");
-        printf("4. Set Trigger Mode\n");
-        printf("5. Set Display Digits\n");
-        printf("6. Configure NULL/REL\n");
-        printf("7. Auto Zero Control\n");
-        printf("8. Calculation Mode\n");
-        printf("9. Beeper Control\n");
-        printf("A. Front Panel Lock\n");
-        printf("B. Statistics Control\n");
-        printf("C. Apply Settings to DM5010\n");
-        printf("D. Test Communication\n");
-        printf("E. Reset to Defaults\n");
-        printf("0. Exit\n\n");
-        
-        printf("Choice: ");
-        choice = toupper(getch());
-        
-        switch(choice) {
-            case '1':
-                printf("\n\nAvailable functions:\n");
-                printf("VOLT:DC, VOLT:AC, CURR:DC, CURR:AC, RES, DIOD\n");
-                printf("Enter function: ");
-                scanf("%s", input);
-                strcpy(cfg->function, input);
-                break;
-                
-            case '2':
-                printf("\n\nRange modes:\n");
-                printf("0=AUTO, 1-7=Manual ranges\n");
-                printf("Enter range mode: ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 7) {
-                    cfg->range_mode = temp_int;
-                }
-                break;
-                
-            case '3':
-                printf("\n\nFilter configuration:\n");
-                printf("Enable filter? (1/0): ");
-                scanf("%d", &temp_int);
-                cfg->filter_enabled = temp_int;
-                if (cfg->filter_enabled) {
-                    printf("Filter count (1-100): ");
-                    scanf("%d", &temp_int);
-                    if (temp_int >= 1 && temp_int <= 100) {
-                        cfg->filter_count = temp_int;
-                    }
-                }
-                break;
-                
-            case '4':
-                printf("\n\nTrigger modes:\n");
-                printf("0=FREE, 1=SINGLE, 2=EXT\n");
-                printf("Enter trigger mode: ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 2) {
-                    cfg->trigger_mode = temp_int;
-                }
-                break;
-                
-            case '5':
-                printf("\n\nNumber of digits (4-5): ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 4 && temp_int <= 5) {
-                    cfg->digits = temp_int;
-                }
-                break;
-                
-            case '6':
-                printf("\n\nNULL/REL configuration:\n");
-                printf("Enable NULL/REL? (1/0): ");
-                scanf("%d", &temp_int);
-                cfg->null_enabled = temp_int;
-                if (cfg->null_enabled) {
-                    printf("NULL value: ");
-                    scanf("%e", &temp_float);
-                    cfg->nullval = temp_float;
-                }
-                break;
-                
-            case '7':
-                cfg->auto_zero = !cfg->auto_zero;
-                printf("\n\nAuto Zero: %s\n", cfg->auto_zero ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case '8':
-                printf("\n\nCalculation modes:\n");
-                printf("0=NONE, 1=AVERAGE, 2=SCALE, 3=dBm, 4=dBr\n");
-                printf("Enter mode: ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 4) {
-                    cfg->calculation_mode = temp_int;
-                    switch(temp_int) {
-                        case 1:
-                            printf("Average count: ");
-                            scanf("%d", &cfg->avg_count);
-                            break;
-                        case 2:
-                            printf("Scale factor: ");
-                            scanf("%f", &cfg->scale_factor);
-                            printf("Scale offset: ");
-                            scanf("%f", &cfg->scale_offset);
-                            break;
-                        case 3:
-                            printf("dBm reference resistance (ohms): ");
-                            scanf("%f", &cfg->dbm_reference);
-                            break;
-                        case 4:
-                            printf("dBr reference value: ");
-                            scanf("%e", &cfg->dbr_reference);
-                            break;
-                    }
-                }
-                break;
-                
-            case '9':
-                cfg->beeper_enabled = !cfg->beeper_enabled;
-                printf("\n\nBeeper: %s\n", cfg->beeper_enabled ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case 'A':
-                cfg->front_panel_lock = !cfg->front_panel_lock;
-                printf("\n\nFront Panel: %s\n", cfg->front_panel_lock ? "LOCKED" : "UNLOCKED");
-                getch();
-                break;
-                
-            case 'B':
-                cfg->statistics_enabled = !cfg->statistics_enabled;
-                printf("\n\nStatistics: %s\n", cfg->statistics_enabled ? "ENABLED" : "DISABLED");
-                if (!cfg->statistics_enabled) {
-                    cfg->min_value = 1e30;
-                    cfg->max_value = -1e30;
-                }
-                getch();
-                break;
-                
-            case 'C':
-                printf("\n\nApplying settings to DM5010...\n");
-                gpib_remote(address);
-                GPIB_PACE(200);
-                
-                dm5010_set_function(address, cfg->function);
-                dm5010_set_filter(address, cfg->filter_enabled, cfg->filter_count);
-                dm5010_set_trigger(address, cfg->trigger_mode == 0 ? "IMM" : (cfg->trigger_mode == 1 ? "EXT" : "BUS"));
-                dm5010_set_autozero(address, cfg->auto_zero);
-                dm5010_set_null(address, cfg->null_enabled, cfg->nullval);
-                dm5010_set_calculation(address, cfg->calculation_mode, 
-                                     cfg->calculation_mode == 2 ? cfg->scale_factor : 
-                                     (cfg->calculation_mode == 3 ? cfg->dbm_reference : cfg->dbr_reference),
-                                     cfg->scale_offset);
-                dm5010_beeper(address, cfg->beeper_enabled);
-                dm5010_lock_front_panel(address, cfg->front_panel_lock);
-                
-                printf("Settings applied!\n");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'D':
-                test_dm5010_comm(address);
-                break;
-                
-            case 'E':
-                init_dm5010_config(slot);
-                printf("\n\nConfiguration reset to defaults.\n");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case '0':
-                done = 1;
-                break;
-        }
+
+    memset(cfg, 0, sizeof(*cfg));
+    strcpy(cfg->function, "DCV");
+    cfg->avg_count = 2;
+    cfg->scale_factor = 1.0;
+    cfg->dbr_reference = 1.0;
+    cfg->source_front = 1;
+    cfg->rqs_on = 1;
+    dm5010_live[slot].funct[0] = '\0';
+    dm5010_stats_clear(slot);
+}
+
+/* Values the v3.7 SCPI menu or its defaults leave in a profile or settings file */
+void dm5010_fix_legacy_config(int slot) {
+    dm5010_config *cfg = &g_dm5010_config[slot];
+    const float *fs;
+
+    cfg->function[sizeof(cfg->function) - 1] = '\0';
+    if (dm5010_funct_index(cfg->function) < 0) strcpy(cfg->function, "DCV");
+    if (cfg->range_mode > dm5010_ranges(cfg->function, &fs)) cfg->range_mode = 0;
+    if (cfg->trigger_mode > 1) cfg->trigger_mode = 1;
+    if (cfg->calculation_mode == 1) cfg->filter_enabled = 1;      /* old AVG */
+    else if (cfg->calculation_mode == 2) cfg->ratio_on = 1;       /* old SCALE */
+    if (cfg->calculation_mode != 3 && cfg->calculation_mode != 4) cfg->calculation_mode = 0;
+    if (cfg->avg_count == 0) cfg->avg_count = 2;
+    if (cfg->scale_factor == 0.0) cfg->scale_factor = 1.0;       /* RATIO A can't be 0 (p. 3-17) */
+    if (cfg->dbr_reference == 0.0) cfg->dbr_reference = 1.0;     /* nor DBR (p. 3-8) */
+    /* v3.7 kept min/max statistics, starting at +-1e30, where the limits are */
+    if (fabs(cfg->limit_hi) > 1e20 || fabs(cfg->limit_lo) > 1e20) cfg->limit_hi = cfg->limit_lo = 0.0;
+    if (cfg->nullval == 0.0) cfg->null_enabled = 0;               /* NULL 0 is off (p. 3-15) */
+}
+
+/* One result in ms: conversion time (DIGIT, p. 3-9; DIODE taken as ohms), x4 with
+   LFR on ACV/ACDC (p. 3-13), xN with CALC AVE (p. 3-7) */
+static long dm5010_result_ms(int slot) {
+    dm5010_config *cfg = &g_dm5010_config[slot];
+    const char *f = dm5010_live[slot].funct[0] ? dm5010_live[slot].funct : cfg->function;
+    int ohms = (f[0] == 'O' || f[1] == 'I');
+    long ms = cfg->high_speed_mode ? (ohms ? 130 : 35) : (ohms ? 620 : 310);
+
+    if (cfg->lfr_on && f[0] == 'A') ms *= 4;
+    if (cfg->filter_enabled) ms *= cfg->avg_count;
+    return ms;
+}
+
+/* Read timeout for the DM5010 at this address: two results plus autorange settling
+   (1.24 s ohms step response, p. 1-7), at least 5 s, within the drivers' 16 bits */
+unsigned dm5010_timeout_ms(int address) {
+    int i;
+    long ms;
+
+    if (!g_system) return 5000u;
+    for (i = 0; i < 10; i++) {
+        if (g_system->modules[i].enabled && g_system->modules[i].module_type == MOD_DM5010 &&
+            g_system->modules[i].gpib_address == address) break;
     }
+    if (i == 10) return 5000u;
+    ms = 2 * dm5010_result_ms(i) + 2000;
+    if (ms < 5000) ms = 5000;
+    if (ms > 65000L) ms = 65000L;
+    return (unsigned)ms;
 }
-void dm5010_set_function(int address, char *function) {
-    sprintf(gpib_cmd_buffer, "CONF:%s", function);
-    gpib_write_dm5010(address, gpib_cmd_buffer);
+
+static const char *dm5010_error_text(int code) {
+    int i;
+    for (i = 0; i < sizeof(dm5010_errors) / sizeof(dm5010_errors[0]); i++)
+        if (dm5010_errors[i].code == code) return dm5010_errors[i].text;
+    return "Unknown code";
 }
-void dm5010_set_range(int address, char *function, float range) {
-    if (range == 0.0) {
-        sprintf(gpib_cmd_buffer, "CONF:%s AUTO", function);
-    } else {
-        sprintf(gpib_cmd_buffer, "CONF:%s %e", function, range);
-    }
-    gpib_write_dm5010(address, gpib_cmd_buffer);
-}
-void dm5010_set_filter(int address, int enabled, int count) {
-    if (enabled) {
-        sprintf(gpib_cmd_buffer, "AVER:STAT ON");
-        gpib_write_dm5010(address, gpib_cmd_buffer);
-        sprintf(gpib_cmd_buffer, "AVER:COUN %d", count);
-        gpib_write_dm5010(address, gpib_cmd_buffer);
-    } else {
-        sprintf(gpib_cmd_buffer, "AVER:STAT OFF");
-        gpib_write_dm5010(address, gpib_cmd_buffer);
-    }
-}
-void dm5010_set_trigger(int address, char *mode) {
-    sprintf(gpib_cmd_buffer, "TRIG:SOUR %s", mode);
-    gpib_write_dm5010(address, gpib_cmd_buffer);
-}
-void dm5010_set_autozero(int address, int enabled) {
-    sprintf(gpib_cmd_buffer, "ZERO:AUTO %s", enabled ? "ON" : "OFF");
-    gpib_write_dm5010(address, gpib_cmd_buffer);
-}
-void dm5010_set_null(int address, int enabled, float value) {
-    if (enabled) {
-        sprintf(gpib_cmd_buffer, "CALC:NULL:OFFS %e", value);
-        gpib_write_dm5010(address, gpib_cmd_buffer);
-        sprintf(gpib_cmd_buffer, "CALC:NULL:STAT ON");
-        gpib_write_dm5010(address, gpib_cmd_buffer);
-    } else {
-        sprintf(gpib_cmd_buffer, "CALC:NULL:STAT OFF");
-        gpib_write_dm5010(address, gpib_cmd_buffer);
-    }
-}
-void dm5010_set_calculation(int address, int mode, float factor, float offset) {
-    switch(mode) {
-        case 1: /* Average */
-            sprintf(gpib_cmd_buffer, "CALC:AVER:STAT ON");
-            break;
-        case 2: /* Scale */
-            sprintf(gpib_cmd_buffer, "CALC:SCAL:GAIN %e", factor);
-            gpib_write_dm5010(address, gpib_cmd_buffer);
-            sprintf(gpib_cmd_buffer, "CALC:SCAL:OFFS %e", offset);
-            gpib_write_dm5010(address, gpib_cmd_buffer);
-            sprintf(gpib_cmd_buffer, "CALC:SCAL:STAT ON");
-            break;
-        case 3: /* dBm */
-            sprintf(gpib_cmd_buffer, "CALC:DBM:REF %e", factor);
-            gpib_write_dm5010(address, gpib_cmd_buffer);
-            sprintf(gpib_cmd_buffer, "CALC:DBM:STAT ON");
-            break;
-        case 4: /* dBr */
-            sprintf(gpib_cmd_buffer, "CALC:DB:REF %e", factor);
-            gpib_write_dm5010(address, gpib_cmd_buffer);
-            sprintf(gpib_cmd_buffer, "CALC:DB:STAT ON");
-            break;
-        default:
-            sprintf(gpib_cmd_buffer, "CALC:STAT OFF");
-            break;
-    }
-    gpib_write_dm5010(address, gpib_cmd_buffer);
-}
-void dm5010_beeper(int address, int enabled) {
-    sprintf(gpib_cmd_buffer, "SYST:BEEP:STAT %s", enabled ? "ON" : "OFF");
-    gpib_write_dm5010(address, gpib_cmd_buffer);
-}
-void dm5010_lock_front_panel(int address, int locked) {
-    sprintf(gpib_cmd_buffer, "SYST:LOCK %s", locked ? "ON" : "OFF");
-    gpib_write_dm5010(address, gpib_cmd_buffer);
-}
-float read_dm5010_enhanced(int address, int slot) {
-    
-    float value = 0.0;
-    int attempts = 0;
-    int success = 0;
-    
-    gpib_check_srq(address);
+
+/* Send a query; its reply, line ends removed, is left in dm5010_reply */
+static int dm5010_query(int address, char *query) {
+    dm5010_reply[0] = '\0';
+    if (gpib_write_dm5010(address, query) < 0) return 0;
     GPIB_PACE(50);
-    
-    while (attempts < 3 && !success) {
-        attempts++;
-        
-        gpib_write_dm5010(address, "VAL?");
-        GPIB_PACE(100);
-        
-        if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-            if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
-                success = 1;
-                break;
-            }
+    if (gpib_read_dm5010(address, dm5010_reply, sizeof(dm5010_reply)) <= 0) {
+        dm5010_reply[0] = '\0';
+        return 0;
+    }
+    dm5010_reply[strcspn(dm5010_reply, "\r\n")] = '\0';
+    return 1;
+}
+
+/* First number after a reply's header: "ERR  401;" -> 401, "NULL 0.;" -> 0 */
+static int dm5010_reply_number(const char *s, double *v) {
+    while (*s && (isalpha((unsigned char)*s) || *s == ' ')) s++;
+    return sscanf(s, "%lf", v) == 1;
+}
+
+/* ERR? code, or -1 if the meter did not answer */
+static int dm5010_query_error(int address) {
+    double v;
+    if (!dm5010_query(address, "ERR?") || !strstr(dm5010_reply, "ERR") ||
+        !dm5010_reply_number(dm5010_reply, &v)) return -1;
+    return (int)v;
+}
+
+/* Print and drain ERR? until it reports 0; returns how many were shown */
+static int dm5010_show_errors(int address) {
+    int i, code, shown = 0;
+    for (i = 0; i < 10; i++) {
+        code = dm5010_query_error(address);
+        if (code <= 0) break;
+        printf("  ERR %d: %s\n", code, dm5010_error_text(code));
+        shown++;
+    }
+    return shown;
+}
+
+/* Parse the output of "FUNCT?;CALC?;SEND", e.g. "OHMS -2.E+4;CALC OFF;+1.234E+3;"
+   (pp. 3-7, 3-11, 3-18): function and calculations for the unit, then the reading,
+   which has no header. +-1.E+99 is over-range; it does not fit a float. */
+static int dm5010_parse_reading(int slot, char *reply, double *value) {
+    char *tok;
+    int n, r = DM5010_READ_NONE;
+
+    for (tok = strtok(reply, ";"); tok; tok = strtok(NULL, ";")) {
+        while (*tok == ' ' || *tok == '\r' || *tok == '\n') tok++;
+        if (strncmp(tok, "CALC", 4) == 0) {
+            dm5010_live[slot].calc = dm5010_calc_bits(tok + 4);
+        } else if (isalpha((unsigned char)*tok)) {
+            n = strcspn(tok, " ");
+            if (n > 5) n = 5;
+            memcpy(dm5010_live[slot].funct, tok, n);
+            dm5010_live[slot].funct[n] = '\0';
+        } else if (strstr(tok, "E+99")) {
+            r = DM5010_READ_OVER;
+        } else if (sscanf(tok, "%lf", value) == 1) {
+            r = DM5010_READ_OK;
         }
-        
-        if (!success) {
-            gpib_write_dm5010(address, "READ?");
-            GPIB_PACE(150);
-            
-            if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-                if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
-                    success = 1;
+    }
+    return r;
+}
+
+/* One reading. SEND returns the latest reading or triggers one and waits (p. 3-30),
+   in MODE TRIG as well, so no INIT or trigger is needed first. No printf: the
+   monitor calls this. */
+int dm5010_read(int address, int slot, double *value) {
+    int r = DM5010_READ_NONE;
+
+    if (gpib_write_dm5010(address, "FUNCT?;CALC?;SEND") == 0 &&
+        gpib_read_dm5010(address, dm5010_reply, sizeof(dm5010_reply)) > 0) {
+        r = dm5010_parse_reading(slot, dm5010_reply, value);
+    }
+    if (r == DM5010_READ_OK) {
+        store_module_data(slot, *value);
+        if (g_dm5010_config[slot].statistics_enabled) {
+            if (*value < dm5010_min[slot]) dm5010_min[slot] = (float)*value;
+            if (*value > dm5010_max[slot]) dm5010_max[slot] = (float)*value;
+        }
+    }
+    return r;
+}
+
+/* Unit of the slot's readings: the meter's last report, else the slot's settings */
+const char *dm5010_unit(int slot) {
+    dm5010_config *cfg = &g_dm5010_config[slot];
+    int live = dm5010_live[slot].funct[0] != '\0';
+    const char *f = live ? dm5010_live[slot].funct : cfg->function;
+    unsigned char c = live ? dm5010_live[slot].calc : dm5010_cfg_calc(cfg);
+
+    if (c & D10_CMPR) return "cmp";
+    if (c & D10_DBM) return "dBm";
+    if (c & D10_DBR) return "dB";
+    return f[0] == 'O' ? "ohm" : "V";
+}
+
+/* A dm5010_read result as text (no printf: the monitor uses it). With CALC CMPR the
+   reading is 1/2/3 for below/between/above the limits (p. 3-18). */
+void dm5010_format(int slot, int r, double v, char *out) {
+    if (r == DM5010_READ_OVER) strcpy(out, "   OVERRANGE");
+    else if (r != DM5010_READ_OK) strcpy(out, "  No reading");
+    else if (dm5010_unit(slot)[0] == 'c') strcpy(out, v < 1.5 ? "  LO (limits)" : v < 2.5 ? "  PASS" : "  HI (limits)");
+    else sprintf(out, "%12.6g %s", v, dm5010_unit(slot));
+}
+
+static int dm5010_confirm(const char *what) {
+    printf("\n%s - are you sure (Y/N)? ", what);
+    return toupper(getch()) == 'Y';
+}
+
+static void dm5010_cmd(int address, char *cmd) {
+    gpib_write_dm5010(address, cmd);
+    GPIB_PACE(50);
+}
+
+/* Send the slot's settings, one command per message so an error drops only that
+   one (p. 3-22). Function first, since it clears NULL (p. 3-15); CALC turns off
+   whatever it doesn't list (p. 3-7). RQS OFF keeps errors queued for ERR?, not
+   cleared by the serial polls (p. 3-25). Returns how many errors were reported. */
+static int dm5010_apply(int slot) {
+    dm5010_config *cfg = &g_dm5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    unsigned char c = dm5010_cfg_calc(cfg);
+    const float *fs;
+    int k, errors;
+
+    gpib_remote(address);
+    GPIB_PACE(100);
+    dm5010_cmd(address, "RQS OFF");
+    if (dm5010_ranges(cfg->function, &fs) == 0) strcpy(gpib_cmd_buffer, "DIODE");
+    else sprintf(gpib_cmd_buffer, "%s %g", cfg->function,      /* 0 = autorange */
+                 cfg->range_mode ? fs[cfg->range_mode - 1] : 0.0f);
+    dm5010_cmd(address, gpib_cmd_buffer);
+    for (k = 0; k < D10_RQS; k++) {
+        if (k == 1 && cfg->function[0] != 'A') continue;     /* LFR is for ACV/ACDC (p. 3-13) */
+        /* Asked again here: a loaded profile can hold REAR (caution, p. 3-19) */
+        if (k == 2 && !cfg->source_front && dm5010_query(address, "SOURCE?") &&
+            strstr(dm5010_reply, "FRONT")) {
+            printf("CAUTION: switching to the rear input with over 500 V peak on the front\n");
+            printf("input can damage the meter (p. 3-19).\n");
+            if (!dm5010_confirm("Switch to SOURCE REAR")) {
+                printf("\nInput left on FRONT\n");
+                continue;
+            }
+            printf("\n");
+        }
+        sprintf(gpib_cmd_buffer, "%s %s", d10_flags[k].hdr, d10_arg(cfg, k));
+        dm5010_cmd(address, gpib_cmd_buffer);
+    }
+    sprintf(gpib_cmd_buffer, "AVE %d", cfg->avg_count);
+    dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "RATIO %g,%g", cfg->scale_factor, cfg->scale_offset);
+    dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "DBR %g", cfg->dbr_reference);
+    dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "LIMITS %g,%g", cfg->limit_hi, cfg->limit_lo);
+    dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "NULL %g", cfg->null_enabled ? cfg->nullval : 0.0f);
+    dm5010_cmd(address, gpib_cmd_buffer);
+    sprintf(gpib_cmd_buffer, "CALC %s%s%s%s%s", c & D10_AVE ? "AVE," : "", c & D10_CMPR ? "CMPR," : "",
+            c & D10_DBM ? "DBM," : "", c & D10_DBR ? "DBR," : "", c & D10_RATIO ? "RATIO," : "");
+    if (c) gpib_cmd_buffer[strlen(gpib_cmd_buffer) - 1] = '\0';
+    else strcat(gpib_cmd_buffer, "OFF");
+    dm5010_cmd(address, gpib_cmd_buffer);
+
+    errors = dm5010_show_errors(address);
+    if (cfg->rqs_on) dm5010_cmd(address, "RQS ON");
+    dm5010_live[slot].funct[0] = '\0';
+    return errors;
+}
+
+/* Settings from a SET? reply (example p. 3-19) into the slot */
+static void dm5010_load_settings(int slot, char *s) {
+    dm5010_config *cfg = &g_dm5010_config[slot];
+    const float *fs;
+    char *tok;
+    double a, b;
+    int i, k, n;
+
+    for (tok = strtok(s, ";"); tok; tok = strtok(NULL, ";")) {
+        while (*tok == ' ') tok++;
+        a = b = 0.0;
+        dm5010_reply_number(tok, &a);
+        if ((i = dm5010_funct_index(tok)) >= 0) {       /* "OHMS -2.E+6": negative = autorange */
+            strcpy(cfg->function, dm5010_functs[i]);
+            cfg->range_mode = 0;
+            n = dm5010_ranges(cfg->function, &fs);
+            for (k = 0; a > 0.0 && k < n; k++) {
+                if (fs[k] >= a * 0.999) { cfg->range_mode = k + 1; break; }
+            }
+        } else if (strncmp(tok, "AVE ", 4) == 0) {
+            if (a > 255.0) printf("AVE %.0f is above this menu's 255; set to 255\n", a);
+            cfg->avg_count = a > 255.0 ? 255 : a < 1.0 ? 1 : (unsigned char)a;
+        } else if (strncmp(tok, "RATIO ", 6) == 0 || strncmp(tok, "LIMITS ", 7) == 0) {
+            sscanf(strchr(tok, ' '), "%lf%*[, ]%lf", &a, &b);
+            if (tok[0] == 'R') {
+                cfg->scale_factor = (float)a;
+                cfg->scale_offset = (float)b;
+            } else {
+                cfg->limit_hi = (float)a;
+                cfg->limit_lo = (float)b;
+            }
+        } else if (strncmp(tok, "DBR ", 4) == 0) {
+            cfg->dbr_reference = (float)a;
+        } else if (strncmp(tok, "NULL ", 5) == 0) {
+            cfg->nullval = (float)a;
+            cfg->null_enabled = (a != 0.0);
+        } else if (strncmp(tok, "CALC ", 5) == 0) {
+            k = dm5010_calc_bits(tok + 5);
+            cfg->filter_enabled = (k & D10_AVE) != 0;
+            cfg->cmpr_on = (k & D10_CMPR) != 0;
+            cfg->ratio_on = (k & D10_RATIO) != 0;
+            cfg->calculation_mode = (k & D10_DBM) ? 3 : (k & D10_DBR) ? 4 : 0;
+        } else {
+            for (k = 0; k <= D10_RQS; k++) {
+                n = strlen(d10_flags[k].hdr);
+                if (strncmp(tok, d10_flags[k].hdr, n) == 0 && tok[n] == ' ') {
+                    d10_set_flag(cfg, k, strncmp(tok + n + 1, d10_flags[k].on, strlen(d10_flags[k].on)) == 0);
                     break;
                 }
             }
         }
-        
-        if (!success) {
-            delay(200);
-        }
     }
-    
-    if (success && slot >= 0 && slot < 10) {
-        store_module_data(slot, value);
-        
-        if (g_dm5010_config[slot].statistics_enabled) {
-            if (value < g_dm5010_config[slot].min_value) {
-                g_dm5010_config[slot].min_value = value;
-            }
-            if (value > g_dm5010_config[slot].max_value) {
-                g_dm5010_config[slot].max_value = value;
-            }
-        }
-    }
-    
-    return value;
+    dm5010_fix_legacy_config(slot);
 }
+
+static void dm5010_fs_text(const char *f, float fs, char *out) {
+    if (f[0] != 'O') sprintf(out, fs < 1.0f ? "%g mV" : "%g V", fs < 1.0f ? fs * 1000.0f : fs);
+    else if (fs >= 1e6f) sprintf(out, "%g Mohm", fs / 1e6f);
+    else if (fs >= 1e3f) sprintf(out, "%g kohm", fs / 1e3f);
+    else sprintf(out, "%g ohm", fs);
+}
+
+/* Number from the console; 0 if the entry is not a number */
+static int dm5010_ask(const char *prompt, float *v) {
+    char line[32];
+    char extra;
+    int c;
+
+    printf("%s", prompt);
+    /* Leading space skips the newline an earlier scanf left behind */
+    if (scanf(" %31[^\n]", line) != 1) return 0;
+    while ((c = getchar()) != '\n' && c != EOF) ;
+    if (sscanf(line, "%f %c", v, &extra) != 1) {
+        printf("Not a number\n");
+        return 0;
+    }
+    return 1;
+}
+
+/* Each setting by its own query, plus ID?, RDY?, TEST and DATA */
+static const char * __far dm5010_queries[] = {
+    "ID?", "FUNCT?", "DIGIT?", "LFR?", "SOURCE?", "MODE?", "DT?", "RDY?", "NULL?", "AVE?",
+    "CALC?", "RATIO?", "DBR?", "LIMITS?", "MONITOR?", "OPC?", "OVER?", "RQS?", "USER?"
+};
+
+static void dm5010_utilities_menu(int address) {
+    double v;
+    int i, choice, done = 0;
+
+    while (!done) {
+        clrscr();
+        printf("DM5010 Utilities - GPIB %d\n", address);
+        printf("==========================\n\n");
+        printf("1. Identify (ID?)\n");
+        printf("2. Calibration checksum (TEST)\n");
+        printf("3. Read error/event queue (ERR?)\n");
+        printf("4. Reading ready? (RDY?)\n");
+        printf("5. Reading that caused the MONITOR SRQ, or the latest one (DATA)\n");
+        printf("6. Trigger with GET and read (needs MODE TRIG, DT TRIG applied)\n");
+        printf("7. Read every setting by its own query\n");
+        printf("8. INIT - return to the power-on settings\n");
+        printf("0. Return\n\nSelect option: ");
+        choice = getch();
+        printf("\n\n");
+
+        switch (choice) {
+            case '1':
+            case '4':
+                if (dm5010_query(address, choice == '1' ? "ID?" : "RDY?")) {
+                    printf("%s\n", dm5010_reply);
+                    if (choice == '4' && dm5010_reply_number(dm5010_reply, &v))
+                        printf("%s\n", v != 0.0 ? "A reading is available" : "Measuring or waiting for a trigger");
+                } else {
+                    printf("No reply\n");
+                }
+                break;
+            case '2':
+                /* TEST only reports the stored checksum (p. 3-20) */
+                if (dm5010_query(address, "TEST") && dm5010_reply_number(dm5010_reply, &v)) {
+                    printf("%s\n%s\n", dm5010_reply, v == 0.0 ? "Calibration checksum correct"
+                                                             : "Calibration checksum ERROR (351)");
+                } else {
+                    printf("No reply\n");
+                }
+                break;
+            case '3':
+                if (dm5010_show_errors(address) == 0) printf("No errors or events\n");
+                break;
+            case '5':
+                /* DATA neither triggers nor waits (p. 3-8) */
+                if (dm5010_query(address, "DATA")) {
+                    printf("%s\n", dm5010_reply);
+                    if (strstr(dm5010_reply, "E+99")) printf("Over-range\n");
+                } else {
+                    printf("No reply\n");
+                }
+                break;
+            case '6':
+                sprintf(gpib_cmd_buffer, "trigger %2d\r\n", address);
+                ieee_write(gpib_cmd_buffer);
+                GPIB_PACE(50);
+                /* Talk-addressed with no query, the meter returns the pending reading (p. 3-30) */
+                if (gpib_read_dm5010(address, dm5010_reply, sizeof(dm5010_reply)) > 0) {
+                    dm5010_reply[strcspn(dm5010_reply, "\r\n")] = '\0';
+                    printf("%s\n", dm5010_reply);
+                } else {
+                    printf("No reading\n");
+                }
+                if (dm5010_show_errors(address)) printf("(206 = GET ignored: DT is OFF or the meter was busy)\n");
+                break;
+            case '7':
+                for (i = 0; i < sizeof(dm5010_queries) / sizeof(dm5010_queries[0]); i++) {
+                    printf("%-9s %s\n", dm5010_queries[i],
+                           dm5010_query(address, (char *)dm5010_queries[i]) ? dm5010_reply : "(no reply)");
+                }
+                break;
+            case '8':
+                if (dm5010_confirm("Reset the meter's function, range, calculations and SRQs")) {
+                    gpib_write_dm5010(address, "INIT");
+                    GPIB_PACE(300);
+                    printf("\nMeter at its power-on settings (DCV autorange). D in the setup menu re-applies TM5000's.\n");
+                }
+                break;
+            case '0':
+            case 27:
+                done = 1;
+                break;
+        }
+        if (!done) {
+            printf("\nPress any key...");
+            getch();
+        }
+    }
+}
+
+void configure_dm5010_advanced(int slot) {
+    dm5010_config *cfg = &g_dm5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    int choice, i, n, pause, done = 0;
+    const float *fs;
+    char txt[32];
+    double v;
+    float a, b;
+
+    dm5010_fix_legacy_config(slot);
+
+    while (!done) {
+        clrscr();
+        printf("DM5010 Configuration - Slot %d, GPIB %d\n", slot, address);
+        printf("========================================\n\n");
+        n = dm5010_ranges(cfg->function, &fs);
+        if (cfg->range_mode && n) dm5010_fs_text(cfg->function, fs[cfg->range_mode - 1], txt);
+        else strcpy(txt, n ? "AUTO" : "-");
+        printf("1. Function: %-6s           2. Range: %s\n", cfg->function, txt);
+        printf("3. DIGIT %s (%ld ms/result)   4. Low freq response: LFR %s\n",
+               d10_arg(cfg, 0), dm5010_result_ms(slot), d10_arg(cfg, 1));
+        printf("5. Input: SOURCE %-5s        6. Trigger: MODE %s, DT %s\n",
+               d10_arg(cfg, 2), d10_arg(cfg, 3), d10_arg(cfg, 4));
+        printf("7. Null: %s", cfg->null_enabled ? "ON" : "OFF");
+        if (cfg->null_enabled) printf(" (%g)", cfg->nullval);
+        printf("\n8. Average: %s (AVE %d)\n", cfg->filter_enabled ? "ON" : "OFF", cfg->avg_count);
+        printf("9. Ratio X-B/A: %s (A %g, B %g)\n", cfg->ratio_on ? "ON" : "OFF",
+               cfg->scale_factor, cfg->scale_offset);
+        printf("A. dB: %s (DBR reference %g)\n", cfg->calculation_mode == 3 ? "DBM" :
+               cfg->calculation_mode == 4 ? "DBR" : "OFF", cfg->dbr_reference);
+        printf("B. Compare: %s (LIMITS %g, %g)\n", cfg->cmpr_on ? "ON" : "OFF",
+               cfg->limit_hi, cfg->limit_lo);
+        printf("C. SRQs: RQS %s, OPC %s, OVER %s, USER %s, MONITOR %s\n", d10_arg(cfg, 9),
+               d10_arg(cfg, 6), d10_arg(cfg, 7), d10_arg(cfg, 8), d10_arg(cfg, 5));
+        printf("\nD. Apply Settings to DM5010      E. Read Settings from DM5010 (SET?)\n");
+        printf("F. Test Measurement (SEND)       G. Communication Test\n");
+        printf("H. Min/Max Statistics: %-3s       I. Utilities (ID, TEST, ERR?, DATA, GET, INIT)\n",
+               cfg->statistics_enabled ? "ON" : "OFF");
+        printf("0. Return\n\nSelect option: ");
+        choice = toupper(getch());
+        printf("\n\n");
+        pause = 1;
+
+        switch (choice) {
+            case '1':
+                for (i = 0; i < 5; i++) printf("%d. %s\n", i, dm5010_functs[i]);
+                printf("\nFunction: ");
+                i = getch() - '0';
+                if (i >= 0 && i < 5 && strcmp(cfg->function, dm5010_functs[i]) != 0) {
+                    strcpy(cfg->function, dm5010_functs[i]);
+                    cfg->range_mode = 0;
+                    cfg->null_enabled = 0;   /* a function change turns NULL off (p. 3-15) */
+                }
+                pause = 0;
+                break;
+            case '2':
+                if (n == 0) {
+                    printf("DIODE has no range\n");
+                    break;
+                }
+                printf("0. AUTO\n");
+                for (i = 0; i < n; i++) {
+                    dm5010_fs_text(cfg->function, fs[i], txt);
+                    printf("%d. %s\n", i + 1, txt);
+                }
+                printf("\nRange: ");
+                i = getch() - '0';
+                if (i >= 0 && i <= n) cfg->range_mode = i;
+                pause = 0;
+                break;
+            case '3':
+            case '4':
+                /* LFR averages four conversions; it applies to ACV and ACDC (p. 3-13) */
+                d10_set_flag(cfg, choice - '3', !d10_flag(cfg, choice - '3'));
+                pause = 0;
+                break;
+            case '5':
+                if (cfg->source_front) {
+                    printf("CAUTION (p. 3-19): do not switch to the rear input while over 500 V\n");
+                    printf("peak is applied to the front panel input; it can damage the meter.\n");
+                    if (!dm5010_confirm("Use the rear interface input")) break;
+                }
+                cfg->source_front = !cfg->source_front;
+                pause = 0;
+                break;
+            case '6':
+                printf("MODE: 0 = RUN (free-run), 1 = TRIG (SEND, GET or talk triggers a reading): ");
+                i = getch() - '0';
+                if (i == 0 || i == 1) cfg->trigger_mode = i;
+                printf("\nDT TRIG: a GET triggers a reading (Y/N)? ");
+                cfg->dt_trig = (toupper(getch()) == 'Y');
+                pause = 0;
+                break;
+            case '7':
+                /* Up to 100% of the range (p. 3-15); 0 turns NULL off */
+                if (dm5010_ask("NULL offset in V or ohms (0 = off): ", &a)) {
+                    b = n ? fs[cfg->range_mode ? cfg->range_mode - 1 : n - 1] : 2.0f;
+                    if (fabs(a) > b) {
+                        printf("Beyond the %s range (%g)\n", cfg->range_mode ? "selected" : "top", b);
+                    } else {
+                        cfg->nullval = a;
+                        cfg->null_enabled = (a != 0.0f);
+                        pause = 0;
+                    }
+                }
+                break;
+            case '8':
+                if (dm5010_ask("Readings per average, AVE N (1-255, 0 = averaging off): ", &a)) {
+                    if (a < 0.0f || a > 255.0f) {
+                        printf("N runs 1-255 here\n");
+                        break;
+                    }
+                    cfg->filter_enabled = (a >= 1.0f);
+                    if (a >= 1.0f) cfg->avg_count = (unsigned char)a;   /* the meter truncates too (p. 3-6) */
+                    if (dm5010_result_ms(slot) > 60000L)
+                        printf("One result now takes %ld s; reads time out at 65 s\n", dm5010_result_ms(slot) / 1000L);
+                    else
+                        pause = 0;
+                }
+                break;
+            case '9':
+                if (dm5010_ask("Scale factor A (0 = ratio off): ", &a)) {
+                    cfg->ratio_on = (a != 0.0f);
+                    if (a != 0.0f) {
+                        cfg->scale_factor = a;
+                        if (dm5010_ask("Offset B: ", &b)) cfg->scale_offset = b;
+                    }
+                    pause = 0;
+                }
+                break;
+            case 'A':
+                printf("0. OFF\n1. DBM (1 mW in 600 ohm, .7746 V; p. 3-7)\n2. DBR (relative to a reference)\n\ndB: ");
+                i = getch() - '0';
+                printf("\n");
+                if (i == 0 || i == 1) cfg->calculation_mode = i ? 3 : 0;
+                if (i == 2) {
+                    if (!dm5010_ask("DBR reference (any number but 0): ", &a)) break;
+                    if (a == 0.0f) {
+                        printf("The reference can't be 0 (p. 3-8)\n");
+                        break;
+                    }
+                    cfg->dbr_reference = a;
+                    cfg->calculation_mode = 4;
+                }
+                pause = 0;
+                break;
+            case 'B':
+                printf("With compare on, a reading is 1 below, 2 between, 3 above the limits.\n");
+                printf("The limits also feed the MONITOR SRQ (C).\n\n");
+                if (!dm5010_ask("Upper limit: ", &a) || !dm5010_ask("Lower limit: ", &b)) break;
+                cfg->limit_hi = a;
+                cfg->limit_lo = b;
+                printf("Compare readings with the limits (Y/N)? ");
+                cfg->cmpr_on = (toupper(getch()) == 'Y');
+                pause = 0;
+                break;
+            case 'C':
+                printf("1. RQS %-4s all service requests\n", d10_arg(cfg, 9));
+                printf("2. OPC %-4s SRQ when a reading is available\n", d10_arg(cfg, 6));
+                printf("3. OVER %-4s SRQ on over-range\n", d10_arg(cfg, 7));
+                printf("4. USER %-4s SRQ when INST ID is pressed\n", d10_arg(cfg, 8));
+                printf("5. MONITOR %-4s SRQ on the first reading outside the limits\n", d10_arg(cfg, 5));
+                printf("\nToggle: ");
+                i = getch() - '1';
+                if (i >= 0 && i < 5) {
+                    static const unsigned char __far srq_k[] = { 9, 6, 7, 8, 5 };
+                    d10_set_flag(cfg, srq_k[i], !d10_flag(cfg, srq_k[i]));
+                }
+                pause = 0;
+                break;
+            case 'D':
+                printf("Applying settings to DM5010...\n");
+                if (dm5010_apply(slot) == 0) printf("Settings applied, no errors\n");
+                else printf("The meter reported the errors above\n");
+                break;
+            case 'E':
+                if (!dm5010_query(address, "SET?") || dm5010_reply[0] == '\0') {
+                    printf("No reply\n");
+                    break;
+                }
+                printf("%s\n", dm5010_reply);
+                if (dm5010_confirm("Copy these into this slot's settings")) {
+                    dm5010_load_settings(slot, dm5010_reply);
+                    printf("\n");
+                    pause = 0;
+                }
+                break;
+            case 'F':
+                i = dm5010_read(address, slot, &v);
+                dm5010_format(slot, i, v, txt);
+                printf("Reading: %s\n", txt);
+                if (dm5010_live[slot].funct[0]) printf("Meter function: %s\n", dm5010_live[slot].funct);
+                break;
+            case 'G':
+                test_dm5010_comm(address);
+                pause = 0;
+                break;
+            case 'H':
+                if (cfg->statistics_enabled && dm5010_min[slot] <= dm5010_max[slot])
+                    printf("Min %g, Max %g %s\n\n", dm5010_min[slot], dm5010_max[slot], dm5010_unit(slot));
+                printf("T = turn %s, C = clear, other = return: ", cfg->statistics_enabled ? "off" : "on");
+                i = toupper(getch());
+                if (i == 'T') cfg->statistics_enabled = !cfg->statistics_enabled;
+                if (i == 'T' || i == 'C') dm5010_stats_clear(slot);
+                pause = 0;
+                break;
+            case 'I':
+                dm5010_utilities_menu(address);
+                pause = 0;
+                break;
+            case '0':
+            case 27:
+                done = 1;
+                pause = 0;
+                break;
+            default:
+                pause = 0;
+                break;
+        }
+        if (pause) {
+            printf("\nPress any key to continue...");
+            getch();
+        }
+    }
+}
+
+/* Each step counts only when its reply checks out. No INIT, so the user's
+   front-panel setup survives. */
 void test_dm5010_comm(int address) {
-    
-    float value;
-    int test_count = 0;
-    int success_count = 0;
-    
+    int pass = 0, code = -1, n, bad = 0;
+    double v;
+    unsigned char stb;
+
     printf("\n=== DM5010 Communication Test ===\n");
     printf("Testing DM5010 at GPIB address %d\n\n", address);
-    
-    printf("1. Testing identification...\n");
-    gpib_write_dm5010(address, "*IDN?");
-    GPIB_PACE(100);
-    if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
+
+    printf("1. Identification (ID?)\n");
+    if (dm5010_query(address, "ID?") && strstr(dm5010_reply, "DM5010")) {
+        printf("   %s\n", dm5010_reply);
+        pass++;
     } else {
-        printf("   ID query failed!\n");
+        printf("   %s%s\n", dm5010_reply[0] ? "Not a DM5010: " : "No reply", dm5010_reply);
     }
-    test_count++;
-    
-    printf("2. Testing reset...\n");
-    gpib_write_dm5010(address, "*RST");
-    GPIB_PACE(500);
-    gpib_write_dm5010(address, "CONF:VOLT:DC");
-    GPIB_PACE(100);
-    printf("   Reset and configured for DC voltage\n");
-    success_count++;
-    test_count++;
-    
-    printf("3. Testing function configuration...\n");
-    gpib_write_dm5010(address, "CONF:VOLT:DC AUTO,MAX");
-    GPIB_PACE(100);
-    gpib_write_dm5010(address, "FUNC?");
-    GPIB_PACE(100);
-    if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
+
+    printf("2. Function (FUNCT?)\n");
+    if (dm5010_query(address, "FUNCT?") && dm5010_funct_index(dm5010_reply) >= 0) {
+        printf("   %s\n", dm5010_reply);
+        pass++;
     } else {
-        printf("   Function query failed!\n");
+        printf("   Bad or no reply: %s\n", dm5010_reply);
     }
-    test_count++;
-    
-    printf("4. Testing measurement...\n");
-    gpib_write_dm5010(address, "READ?");
-    GPIB_PACE(200);
-    if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%e", &value) == 1) {
-            printf("   Measurement: %.6e V\n", value);
-            success_count++;
-        } else {
-            printf("   %s\n", gpib_response_buffer);
+
+    printf("3. Reading (SEND)\n");
+    if (dm5010_query(address, "SEND") && strstr(dm5010_reply, "E+99")) {
+        printf("   Over-range (%s)\n", dm5010_reply);
+        pass++;
+    } else if (dm5010_reply[0] && sscanf(dm5010_reply, "%lf", &v) == 1) {
+        printf("   %g\n", v);
+        pass++;
+    } else {
+        printf("   No reading\n");
+    }
+
+    printf("4. Calibration checksum (TEST)\n");
+    if (dm5010_query(address, "TEST") && dm5010_reply_number(dm5010_reply, &v)) {
+        printf("   %s - %s\n", dm5010_reply, v == 0.0 ? "correct" : "calibration checksum error");
+        if (v == 0.0) pass++;
+    } else {
+        printf("   No reply\n");
+    }
+
+    printf("5. Status (serial poll, ERR?)\n");
+    if (ieee_spoll(address, &stb) == 0) {
+        printf("   Status byte %u\n", stb);
+        for (n = 0; n < 10 && (code = dm5010_query_error(address)) > 0; n++) {
+            printf("   ERR %d: %s\n", code, dm5010_error_text(code));
+            if (code < 400) bad++;      /* 4xx-7xx are events and warnings */
         }
+        if (code == 0 && !bad) pass++;
+        else if (code < 0) printf("   ERR? not answered\n");
     } else {
-        printf("   Measurement failed!\n");
+        printf("   Serial poll failed\n");
     }
-    test_count++;
-    
-    printf("5. Testing status...\n");
-    gpib_write_dm5010(address, "*STB?");
-    GPIB_PACE(100);
-    if (gpib_read_dm5010(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
-    } else {
-        printf("   Status query failed!\n");
-    }
-    test_count++;
-    
+
     printf("\n=== Test Summary ===\n");
-    printf("Tests passed: %d/%d\n", success_count, test_count);
-    if (success_count == test_count) {
-        printf("DM5010 communication: EXCELLENT\n");
-    } else if (success_count >= test_count * 0.8) {
-        printf("DM5010 communication: GOOD\n");
-    } else if (success_count >= test_count * 0.5) {
-        printf("DM5010 communication: MARGINAL\n");
-    } else {
-        printf("DM5010 communication: POOR - Check connections!\n");
-    }
-    
+    printf("Tests passed: %d/5\n", pass);
+    printf("DM5010 communication: %s\n", pass == 5 ? "GOOD" : pass >= 3 ? "PARTIAL - see above" :
+                                         "POOR - check address and connections");
     printf("\nPress any key to continue...");
     getch();
 }
@@ -4579,6 +4966,9 @@ void single_measurement(void) {
                 break;
                 
             case MOD_DM5010:
+                /* No INIT: it resets the function and range (p. 3-26); SEND triggers */
+                break;
+
             case MOD_DM5120:
                 gpib_write(addr, "INIT");
                 break;
@@ -4618,9 +5008,13 @@ void single_measurement(void) {
                 break;
                 
             case MOD_DM5010:
-                value = read_dm5010_enhanced(g_system->modules[slot].gpib_address, slot);
-                printf("%.6g V\n", value);
-                g_system->modules[slot].last_reading = value;
+                {
+                    char txt[32];
+                    int r = dm5010_read(g_system->modules[slot].gpib_address, slot, &value);
+                    dm5010_format(slot, r, value, txt);
+                    printf("%s\n", txt);
+                    if (r == DM5010_READ_OK) g_system->modules[slot].last_reading = value;
+                }
                 break;
                 
             case MOD_DM5120:
@@ -4928,8 +5322,14 @@ void continuous_monitor(void) {
                             break;
                             
                         case MOD_DM5010:
-                            value = read_dm5010_enhanced(g_system->modules[i].gpib_address, i);
-                            lp("%12.4f V     ", value);
+                            {
+                                char txt[32];
+                                int r = dm5010_read(g_system->modules[i].gpib_address, i, &value);
+                                dm5010_format(i, r, value, txt);
+                                lp("%-18s", txt);
+                                /* Over-range or no reply: nothing new, hold the last value */
+                                if (r != DM5010_READ_OK) value = g_system->modules[i].last_reading;
+                            }
                             break;
                             
                         case MOD_DM5120:

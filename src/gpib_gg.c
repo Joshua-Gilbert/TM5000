@@ -282,7 +282,7 @@ static unsigned read_timeout_for(int address)
             case MOD_DC5009:
             case MOD_DC5010: return 12000u;   /* gate times up to 10 s */
             case MOD_DM5120: return 10000u;   /* AUTOCAL pauses        */
-            case MOD_DM5010: return 5000u;
+            case MOD_DM5010: return dm5010_timeout_ms(address);  /* AVE, LFR */
             }
         }
     }
@@ -369,17 +369,6 @@ int gpib_write_dm5010(int address, char *command)
 int gpib_read_dm5010(int address, char *buffer, int maxlen)
 {
     return gpib_read(address, buffer, maxlen);
-}
-
-int gpib_read_float_dm5010(int address, float *value)
-{
-    char buffer[GPIB_BUFFER_SIZE];
-
-    if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-        if (sscanf(buffer, "%e", value) == 1) return 1;
-        if (sscanf(buffer, "%f", value) == 1) return 1;
-    }
-    return 0;
 }
 
 int command_has_response(const char *cmd)

@@ -100,6 +100,14 @@ void free_module_buffer(int slot) {
 /* Each stored sample is the mean of 2^avg_shift readings (values and times).
  * When the buffer fills, adjacent samples merge in pairs and the group size
  * doubles, so the buffer always spans the whole run (up to avg_shift 15). */
+/* A settings or data file can be hand-edited or damaged: values are copied into
+   fixed-size fields only as far as they fit */
+#define COPY_FIELD(dst, src) copy_field((dst), (src), sizeof(dst))
+static void copy_field(char *dst, const char *src, unsigned size) {
+    strncpy(dst, src, size - 1);
+    dst[size - 1] = '\0';
+}
+
 void store_module_data(int slot, double value) {
     tm5000_module *m;
     unsigned int f, k, n, cnt;
@@ -382,14 +390,14 @@ void load_data(void) {
             break;
         }
         
-        if (sscanf(line, "%d|%d|%d|%[^|]|%u", &slot, &type, &addr, desc, &count) == 5) {
+        if (sscanf(line, "%d|%d|%d|%19[^|]|%u", &slot, &type, &addr, desc, &count) == 5) {
             if (slot >= 0 && slot < 10) {
                 g_system->modules[slot].module_type = type;
                 g_system->modules[slot].slot_number = slot;
                 g_system->modules[slot].gpib_address = addr;
                 g_system->modules[slot].enabled = 1;
                 g_system->modules[slot].last_reading = 0.0;
-                strcpy(g_system->modules[slot].description, desc);
+                COPY_FIELD(g_system->modules[slot].description, desc);
                 
                 /* Defaults first; the ModuleConfigs section overrides them. */
                 switch (type) {
@@ -748,7 +756,7 @@ void load_settings(void) {
                     }
                     break;
                 }
-                if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+                if (sscanf(line, "%49[^=]=%199s", key, value) == 2) {
                     if (strcmp(key, "SampleRateMs") == 0) {
                         g_control_panel.sample_rate_ms = atoi(value);
                     } else if (strcmp(key, "UseCustom") == 0) {
@@ -756,7 +764,7 @@ void load_settings(void) {
                     } else if (strcmp(key, "SelectedRate") == 0) {
                         g_control_panel.selected_rate = atoi(value);
                     } else if (strcmp(key, "CustomRate") == 0) {
-                        strcpy(g_control_panel.custom_rate, value);
+                        COPY_FIELD(g_control_panel.custom_rate, value);
                     } else if (strcmp(key, "MonitorMask") == 0) {
                         g_control_panel.monitor_mask = atoi(value);
                     } else if (strcmp(key, "MonitorAll") == 0) {
@@ -788,14 +796,14 @@ void load_settings(void) {
                     break;
                 }
                 {
-                    int fields = sscanf(line, "Module%d=%d,%d,%[^\n]", &slot, &type, &addr, desc);
+                    int fields = sscanf(line, "Module%d=%d,%d,%49[^\n]", &slot, &type, &addr, desc);
                     if (fields >= 4) {
                     if (slot >= 0 && slot < 10) {
                         g_system->modules[slot].module_type = type;
                         g_system->modules[slot].gpib_address = addr;
                         g_system->modules[slot].enabled = 1;
                         g_system->modules[slot].last_reading = 0.0;
-                        strcpy(g_system->modules[slot].description, desc);
+                        COPY_FIELD(g_system->modules[slot].description, desc);
                         g_system->modules[slot].slot_number = slot;
                         
                         /* Defaults first; [ModuleConfigs] overrides them. */
@@ -842,24 +850,24 @@ void load_settings(void) {
                     line[strcspn(line, "\r\n")] = 0;  /* matched by the [GraphScale] check below */
                     break;
                 }
-                if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+                if (sscanf(line, "%49[^=]=%199s", key, value) == 2) {
                     int slot;
                     if (sscanf(key, "DM5120_%d_LF", &slot) == 1 && slot >= 0 && slot < 10) {
                         g_dm5120_config[slot].lf_termination = atoi(value);
                     } else if (sscanf(key, "DM5120_%d_Function", &slot) == 1 && slot >= 0 && slot < 10) {
-                        strcpy(g_dm5120_config[slot].function, value);
+                        COPY_FIELD(g_dm5120_config[slot].function, value);
                     } else if (sscanf(key, "DM5120_%d_Range", &slot) == 1 && slot >= 0 && slot < 10) {
                         g_dm5120_config[slot].range_mode = atoi(value);
                     } else if (sscanf(key, "DM5120_%d_Filter", &slot) == 1 && slot >= 0 && slot < 10) {
                         g_dm5120_config[slot].filter_enabled = atoi(value);
                     } else if (sscanf(key, "DC5009_%d_Function", &slot) == 1 && slot >= 0 && slot < 10) {
-                        strcpy(g_dc5009_config[slot].function, value);
+                        COPY_FIELD(g_dc5009_config[slot].function, value);
                     } else if (sscanf(key, "DC5009_%d_Channel", &slot) == 1 && slot >= 0 && slot < 10) {
-                        strcpy(g_dc5009_config[slot].channel, value);
+                        COPY_FIELD(g_dc5009_config[slot].channel, value);
                     } else if (sscanf(key, "DC5010_%d_Function", &slot) == 1 && slot >= 0 && slot < 10) {
-                        strcpy(g_dc5010_config[slot].function, value);
+                        COPY_FIELD(g_dc5010_config[slot].function, value);
                     } else if (sscanf(key, "DC5010_%d_Channel", &slot) == 1 && slot >= 0 && slot < 10) {
-                        strcpy(g_dc5010_config[slot].channel, value);
+                        COPY_FIELD(g_dc5010_config[slot].channel, value);
                     }
                 }
             }
@@ -868,7 +876,7 @@ void load_settings(void) {
         if (strcmp(line, "[GraphScale]") == 0) {
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') break;
-                if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+                if (sscanf(line, "%49[^=]=%199s", key, value) == 2) {
                     if (strcmp(key, "MinValue") == 0) {
                         g_graph_scale.min_value = (float)atof(value);
                     } else if (strcmp(key, "MaxValue") == 0) {
@@ -935,17 +943,18 @@ void save_dm5120_config(FILE *fp, int slot) {
 void save_dm5010_config(FILE *fp, int slot) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     
+    /* Lines stay under the loader's 128-byte line buffer */
     fprintf(fp, "Slot%d:DM5010\n", slot);
-    fprintf(fp, "function=%s|range_mode=%d|filter_enabled=%d|filter_count=%d|trigger_mode=%d|\n",
-            cfg->function, cfg->range_mode, cfg->filter_enabled, cfg->filter_count, cfg->trigger_mode);
-    fprintf(fp, "digits=%d|nullval=%.6f|null_enabled=%d|data_format=%d|auto_zero=%d|\n",
-            cfg->digits, cfg->nullval, cfg->null_enabled, cfg->data_format, cfg->auto_zero);
-    fprintf(fp, "calculation_mode=%d|scale_factor=%.6f|scale_offset=%.6f|avg_count=%d|\n",
-            cfg->calculation_mode, cfg->scale_factor, cfg->scale_offset, cfg->avg_count);
-    fprintf(fp, "dbm_reference=%.6f|dbr_reference=%.6f|beeper_enabled=%d|front_panel_lock=%d|\n",
-            cfg->dbm_reference, cfg->dbr_reference, cfg->beeper_enabled, cfg->front_panel_lock);
-    fprintf(fp, "high_speed_mode=%d|statistics_enabled=%d|lf_termination=%d\n",
-            cfg->high_speed_mode, cfg->statistics_enabled, cfg->lf_termination);
+    fprintf(fp, "function=%s|range_mode=%d|trigger_mode=%d|dt_trig=%d|high_speed_mode=%d|lfr_on=%d|\n",
+            cfg->function, cfg->range_mode, cfg->trigger_mode, cfg->dt_trig, cfg->high_speed_mode, cfg->lfr_on);
+    fprintf(fp, "source_front=%d|nullval=%.7g|null_enabled=%d|filter_enabled=%d|avg_count=%d|\n",
+            cfg->source_front, cfg->nullval, cfg->null_enabled, cfg->filter_enabled, cfg->avg_count);
+    fprintf(fp, "ratio_on=%d|scale_factor=%.7g|scale_offset=%.7g|calculation_mode=%d|dbr_reference=%.7g|\n",
+            cfg->ratio_on, cfg->scale_factor, cfg->scale_offset, cfg->calculation_mode, cfg->dbr_reference);
+    fprintf(fp, "cmpr_on=%d|limit_hi=%.7g|limit_lo=%.7g|monitor_on=%d|opc_on=%d|over_on=%d|user_on=%d|\n",
+            cfg->cmpr_on, cfg->limit_hi, cfg->limit_lo, cfg->monitor_on, cfg->opc_on, cfg->over_on, cfg->user_on);
+    fprintf(fp, "rqs_on=%d|statistics_enabled=%d|lf_termination=%d\n",
+            cfg->rqs_on, cfg->statistics_enabled, cfg->lf_termination);
 }
 
 void save_ps5004_config(FILE *fp, int slot) {
@@ -1051,8 +1060,8 @@ int load_dm5120_config(FILE *fp, int slot, char *line, int line_size) {
 
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
-                if (strcmp(key, "function") == 0) strcpy(cfg->function, value);
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
+                if (strcmp(key, "function") == 0) COPY_FIELD(cfg->function, value);
                 else if (strcmp(key, "range_mode") == 0) cfg->range_mode = atoi(value);
                 else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = atoi(value);
                 else if (strcmp(key, "filter_value") == 0) cfg->filter_value = atoi(value);
@@ -1080,41 +1089,52 @@ int load_dm5010_config(FILE *fp, int slot, char *line, int line_size) {
     dm5010_config *cfg = &g_dm5010_config[slot];
     char key[64], value[64];
     char *token;
+    int n, more = 0;
 
+    /* v3.7 files also hold SCPI-era keys (digits, auto_zero, beeper_enabled...);
+       they have no DM5010 counterpart and are skipped */
     while (fgets(line, line_size, fp)) {
         if (strncmp(line, "Slot", 4) == 0 || strncmp(line, "GlobalData:", 11) == 0) {
-            return 1;
+            more = 1;
+            break;
         }
-        
+
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
-                if (strcmp(key, "function") == 0) strcpy(cfg->function, value);
-                else if (strcmp(key, "range_mode") == 0) cfg->range_mode = atoi(value);
-                else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = atoi(value);
-                else if (strcmp(key, "filter_count") == 0) cfg->filter_count = atoi(value);
-                else if (strcmp(key, "trigger_mode") == 0) cfg->trigger_mode = atoi(value);
-                else if (strcmp(key, "digits") == 0) cfg->digits = atoi(value);
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
+                n = atoi(value);
+                if (strcmp(key, "function") == 0) COPY_FIELD(cfg->function, value);
+                else if (strcmp(key, "range_mode") == 0) cfg->range_mode = n;
+                else if (strcmp(key, "trigger_mode") == 0) cfg->trigger_mode = n;
+                else if (strcmp(key, "dt_trig") == 0) cfg->dt_trig = n != 0;
+                else if (strcmp(key, "high_speed_mode") == 0) cfg->high_speed_mode = n != 0;
+                else if (strcmp(key, "lfr_on") == 0) cfg->lfr_on = n != 0;
+                else if (strcmp(key, "source_front") == 0) cfg->source_front = n != 0;
                 else if (strcmp(key, "nullval") == 0) cfg->nullval = (float)atof(value);
-                else if (strcmp(key, "null_enabled") == 0) cfg->null_enabled = atoi(value);
-                else if (strcmp(key, "data_format") == 0) cfg->data_format = atoi(value);
-                else if (strcmp(key, "auto_zero") == 0) cfg->auto_zero = atoi(value);
-                else if (strcmp(key, "calculation_mode") == 0) cfg->calculation_mode = atoi(value);
+                else if (strcmp(key, "null_enabled") == 0) cfg->null_enabled = n != 0;
+                else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = n != 0;
+                else if (strcmp(key, "avg_count") == 0) cfg->avg_count = n > 255 ? 255 : n;
+                else if (strcmp(key, "ratio_on") == 0) cfg->ratio_on = n != 0;
                 else if (strcmp(key, "scale_factor") == 0) cfg->scale_factor = (float)atof(value);
                 else if (strcmp(key, "scale_offset") == 0) cfg->scale_offset = (float)atof(value);
-                else if (strcmp(key, "avg_count") == 0) cfg->avg_count = atoi(value);
-                else if (strcmp(key, "dbm_reference") == 0) cfg->dbm_reference = (float)atof(value);
+                else if (strcmp(key, "calculation_mode") == 0) cfg->calculation_mode = n;
                 else if (strcmp(key, "dbr_reference") == 0) cfg->dbr_reference = (float)atof(value);
-                else if (strcmp(key, "beeper_enabled") == 0) cfg->beeper_enabled = atoi(value);
-                else if (strcmp(key, "front_panel_lock") == 0) cfg->front_panel_lock = atoi(value);
-                else if (strcmp(key, "high_speed_mode") == 0) cfg->high_speed_mode = atoi(value);
-                else if (strcmp(key, "statistics_enabled") == 0) cfg->statistics_enabled = atoi(value);
-                else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = atoi(value);
+                else if (strcmp(key, "cmpr_on") == 0) cfg->cmpr_on = n != 0;
+                else if (strcmp(key, "limit_hi") == 0) cfg->limit_hi = (float)atof(value);
+                else if (strcmp(key, "limit_lo") == 0) cfg->limit_lo = (float)atof(value);
+                else if (strcmp(key, "monitor_on") == 0) cfg->monitor_on = n != 0;
+                else if (strcmp(key, "opc_on") == 0) cfg->opc_on = n != 0;
+                else if (strcmp(key, "over_on") == 0) cfg->over_on = n != 0;
+                else if (strcmp(key, "user_on") == 0) cfg->user_on = n != 0;
+                else if (strcmp(key, "rqs_on") == 0) cfg->rqs_on = n != 0;
+                else if (strcmp(key, "statistics_enabled") == 0) cfg->statistics_enabled = n != 0;
+                else if (strcmp(key, "lf_termination") == 0) cfg->lf_termination = n != 0;
             }
             token = strtok(NULL, "|");
         }
     }
-    return 0;
+    dm5010_fix_legacy_config(slot);
+    return more;
 }
 
 int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
@@ -1129,7 +1149,7 @@ int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "voltage") == 0) cfg->voltage = (float)atof(value);
                 else if (strcmp(key, "current_limit") == 0) cfg->current_limit = (float)atof(value);
                 else if (strcmp(key, "output_enabled") == 0) cfg->output_enabled = atoi(value);
@@ -1160,7 +1180,7 @@ int load_ps5010_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "voltage1") == 0) cfg->voltage1 = (float)atof(value);
                 else if (strcmp(key, "current_limit1") == 0) cfg->current_limit1 = (float)atof(value);
                 else if (strcmp(key, "output1_enabled") == 0) cfg->output1_enabled = atoi(value);
@@ -1203,19 +1223,19 @@ int load_dc5009_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
-                if (strcmp(key, "function") == 0) strcpy(cfg->function, value);
-                else if (strcmp(key, "channel") == 0) strcpy(cfg->channel, value);
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
+                if (strcmp(key, "function") == 0) COPY_FIELD(cfg->function, value);
+                else if (strcmp(key, "channel") == 0) COPY_FIELD(cfg->channel, value);
                 else if (strcmp(key, "gate_time") == 0) cfg->gate_time = (float)atof(value);
                 else if (strcmp(key, "averaging") == 0) cfg->averaging = atoi(value);
-                else if (strcmp(key, "coupling_a") == 0) strcpy(cfg->coupling_a, value);
-                else if (strcmp(key, "coupling_b") == 0) strcpy(cfg->coupling_b, value);
-                else if (strcmp(key, "impedance_a") == 0) strcpy(cfg->impedance_a, value);
-                else if (strcmp(key, "impedance_b") == 0) strcpy(cfg->impedance_b, value);
-                else if (strcmp(key, "attenuation_a") == 0) strcpy(cfg->attenuation_a, value);
-                else if (strcmp(key, "attenuation_b") == 0) strcpy(cfg->attenuation_b, value);
-                else if (strcmp(key, "slope_a") == 0) strcpy(cfg->slope_a, value);
-                else if (strcmp(key, "slope_b") == 0) strcpy(cfg->slope_b, value);
+                else if (strcmp(key, "coupling_a") == 0) COPY_FIELD(cfg->coupling_a, value);
+                else if (strcmp(key, "coupling_b") == 0) COPY_FIELD(cfg->coupling_b, value);
+                else if (strcmp(key, "impedance_a") == 0) COPY_FIELD(cfg->impedance_a, value);
+                else if (strcmp(key, "impedance_b") == 0) COPY_FIELD(cfg->impedance_b, value);
+                else if (strcmp(key, "attenuation_a") == 0) COPY_FIELD(cfg->attenuation_a, value);
+                else if (strcmp(key, "attenuation_b") == 0) COPY_FIELD(cfg->attenuation_b, value);
+                else if (strcmp(key, "slope_a") == 0) COPY_FIELD(cfg->slope_a, value);
+                else if (strcmp(key, "slope_b") == 0) COPY_FIELD(cfg->slope_b, value);
                 else if (strcmp(key, "level_a") == 0) cfg->level_a = (float)atof(value);
                 else if (strcmp(key, "level_b") == 0) cfg->level_b = (float)atof(value);
                 else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = atoi(value);
@@ -1243,19 +1263,19 @@ int load_dc5010_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
-                if (strcmp(key, "function") == 0) strcpy(cfg->function, value);
-                else if (strcmp(key, "channel") == 0) strcpy(cfg->channel, value);
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
+                if (strcmp(key, "function") == 0) COPY_FIELD(cfg->function, value);
+                else if (strcmp(key, "channel") == 0) COPY_FIELD(cfg->channel, value);
                 else if (strcmp(key, "gate_time") == 0) cfg->gate_time = (float)atof(value);
                 else if (strcmp(key, "averaging") == 0) cfg->averaging = atoi(value);
-                else if (strcmp(key, "coupling_a") == 0) strcpy(cfg->coupling_a, value);
-                else if (strcmp(key, "coupling_b") == 0) strcpy(cfg->coupling_b, value);
-                else if (strcmp(key, "impedance_a") == 0) strcpy(cfg->impedance_a, value);
-                else if (strcmp(key, "impedance_b") == 0) strcpy(cfg->impedance_b, value);
-                else if (strcmp(key, "attenuation_a") == 0) strcpy(cfg->attenuation_a, value);
-                else if (strcmp(key, "attenuation_b") == 0) strcpy(cfg->attenuation_b, value);
-                else if (strcmp(key, "slope_a") == 0) strcpy(cfg->slope_a, value);
-                else if (strcmp(key, "slope_b") == 0) strcpy(cfg->slope_b, value);
+                else if (strcmp(key, "coupling_a") == 0) COPY_FIELD(cfg->coupling_a, value);
+                else if (strcmp(key, "coupling_b") == 0) COPY_FIELD(cfg->coupling_b, value);
+                else if (strcmp(key, "impedance_a") == 0) COPY_FIELD(cfg->impedance_a, value);
+                else if (strcmp(key, "impedance_b") == 0) COPY_FIELD(cfg->impedance_b, value);
+                else if (strcmp(key, "attenuation_a") == 0) COPY_FIELD(cfg->attenuation_a, value);
+                else if (strcmp(key, "attenuation_b") == 0) COPY_FIELD(cfg->attenuation_b, value);
+                else if (strcmp(key, "slope_a") == 0) COPY_FIELD(cfg->slope_a, value);
+                else if (strcmp(key, "slope_b") == 0) COPY_FIELD(cfg->slope_b, value);
                 else if (strcmp(key, "level_a") == 0) cfg->level_a = (float)atof(value);
                 else if (strcmp(key, "level_b") == 0) cfg->level_b = (float)atof(value);
                 else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = atoi(value);
@@ -1285,11 +1305,11 @@ int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "frequency") == 0) cfg->frequency = (float)atof(value);
                 else if (strcmp(key, "amplitude") == 0) cfg->amplitude = (float)atof(value);
                 else if (strcmp(key, "offset") == 0) cfg->offset = (float)atof(value);
-                else if (strcmp(key, "waveform") == 0) strcpy(cfg->waveform, value);
+                else if (strcmp(key, "waveform") == 0) COPY_FIELD(cfg->waveform, value);
                 else if (strcmp(key, "output_enabled") == 0) cfg->output_enabled = atoi(value);
                 else if (strcmp(key, "duty_cycle") == 0) cfg->duty_cycle = (float)atof(value);
                 else if (strcmp(key, "sweep_enabled") == 0) cfg->sweep_enabled = atoi(value);
@@ -1297,14 +1317,14 @@ int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
                 else if (strcmp(key, "stop_freq") == 0) cfg->stop_freq = (float)atof(value);
                 else if (strcmp(key, "sweep_time") == 0) cfg->sweep_time = (float)atof(value);
                 else if (strcmp(key, "sweep_type") == 0) cfg->sweep_type = atoi(value);
-                else if (strcmp(key, "trigger_source") == 0) strcpy(cfg->trigger_source, value);
-                else if (strcmp(key, "trigger_slope") == 0) strcpy(cfg->trigger_slope, value);
+                else if (strcmp(key, "trigger_source") == 0) COPY_FIELD(cfg->trigger_source, value);
+                else if (strcmp(key, "trigger_slope") == 0) COPY_FIELD(cfg->trigger_slope, value);
                 else if (strcmp(key, "trigger_level") == 0) cfg->trigger_level = (float)atof(value);
                 else if (strcmp(key, "sync_enabled") == 0) cfg->sync_enabled = atoi(value);
                 else if (strcmp(key, "invert_enabled") == 0) cfg->invert_enabled = atoi(value);
                 else if (strcmp(key, "phase") == 0) cfg->phase = (float)atof(value);
                 else if (strcmp(key, "modulation_enabled") == 0) cfg->modulation_enabled = atoi(value);
-                else if (strcmp(key, "mod_type") == 0) strcpy(cfg->mod_type, value);
+                else if (strcmp(key, "mod_type") == 0) COPY_FIELD(cfg->mod_type, value);
                 else if (strcmp(key, "mod_freq") == 0) cfg->mod_freq = (float)atof(value);
                 else if (strcmp(key, "mod_depth") == 0) cfg->mod_depth = (float)atof(value);
                 else if (strcmp(key, "burst_enabled") == 0) cfg->burst_enabled = atoi(value);
