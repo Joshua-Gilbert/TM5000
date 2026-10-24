@@ -658,8 +658,9 @@ static void ps5004_apply(int slot) {
 
     gpib_remote(address);
     GPIB_PACE(200);
+    ps5004_release_dt(address);
     ps5004_send_flag(address, PS5004_RQS, 0);
-    ps5004_send_flag(address, PS5004_DT, 0);
+    ps5004_show_errors(address, 0);     /* older events, and a 206 from the GET; report only Apply's */
     ps5004_set_voltage(address, cfg->voltage);
     ps5004_set_current(address, cfg->current_limit);
     ps5004_forget_display(slot);
@@ -667,7 +668,7 @@ static void ps5004_apply(int slot) {
     for (i = 0; i < 4; i++) ps5004_send_flag(address, plain[i], ps5004_flag(cfg, plain[i]));
     ps5004_set_output(address, cfg->output_enabled);
 
-    if (ps5004_show_errors(address) == 0) printf("Settings applied\n");
+    if (ps5004_show_errors(address, 1) == 0) printf("Settings applied\n");
     else printf("The supply reported the errors above\n");
     if (cfg->rqs_enabled) ps5004_send_flag(address, PS5004_RQS, 1);
     /* Last: after DT SET even RQS would wait for GET */
@@ -733,7 +734,7 @@ static void ps5004_utilities_menu(int slot) {
                 else printf("No reply\n");
                 break;
             case '3':
-                if (ps5004_show_errors(address) == 0) printf("No errors or events pending\n");
+                if (ps5004_show_errors(address, 1) == 0) printf("No errors or events pending\n");
                 break;
             case '6':
                 for (i = 0; i < sizeof(queries) / sizeof(queries[0]); i++) {
@@ -749,7 +750,9 @@ static void ps5004_utilities_menu(int slot) {
                 break;
             case '9':
                 if (dm5120_confirm("INIT turns the output OFF and sets 0 V, 100 mA")) {
+                    ps5004_release_dt(address);
                     ps5004_init(address);
+                    ps5004_clear_srq(address);     /* a 206 from the release; INIT sets RQS ON */
                     init_ps5004_config(slot);
                     printf("\nSupply and slot at the power-on settings (manual Table 3-2)\n");
                 }
@@ -853,7 +856,7 @@ void configure_ps5004_advanced(int slot) {
                 else printf("  No reply\n");
                 printf("\nRegulation: %s\n", ps5004_regulation_name(ps5004_get_regulation_status(address)));
                 printf("\nPending errors/events:\n");
-                if (ps5004_show_errors(address) == 0) printf("  none\n");
+                if (ps5004_show_errors(address, 1) == 0) printf("  none\n");
                 printf("\nPress any key to continue...");
                 getch();
                 break;
@@ -902,7 +905,7 @@ void configure_ps5004_advanced(int slot) {
                 if (r && strstr(r, "OFF")) printf("DT is OFF: the supply will ignore GET.\n");
                 ps5004_trigger(address);
                 printf("GET sent\n");
-                ps5004_show_errors(address);
+                ps5004_show_errors(address, 1);
                 printf("Press any key to continue...");
                 getch();
                 break;

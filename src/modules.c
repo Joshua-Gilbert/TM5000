@@ -4371,24 +4371,32 @@ static const char *ps5004_error_text(int code) {
    reported by serial poll and ERROR? then names it; with RQS OFF ERROR? returns
    and clears the highest-priority one, 0 when none is left (manual p. 3-7,
    3-20, 3-21). Either way this clears the power-on SRQ. */
-int ps5004_show_errors(int address) {
+int ps5004_show_errors(int address, int print) {
     unsigned char stb;
     char *r = ps5004_query(address, "RQS?");
     int rqs_on = r == NULL || strstr(r, "RQS ON") != NULL;
-    int i, code, last = -1, shown = 0;
+    int i, code, shown = 0;
     float v;
 
     for (i = 0; i < 8; i++) {
         if (rqs_on && (ieee_spoll(address, &stb) != 0 || !(stb & 0x40))) break;
         if (!ps5004_query_value(address, "ERROR?", &v)) break;
         code = (int)v;
-        /* RQS ON answers the last polled event again rather than 0 */
-        if (code <= 0 || (code == last && !rqs_on)) break;
-        printf("  %s %d: %s\n", code >= 400 ? "EVENT" : "ERROR", code, ps5004_error_text(code));
-        last = code;
+        if (code <= 0) break;
+        if (print) printf("  %s %d: %s\n", code >= 400 ? "EVENT" : "ERROR", code, ps5004_error_text(code));
         shown++;
     }
     return shown;
+}
+
+/* Under DT SET every setting, DT OFF included, waits for GET (manual p. 3-6):
+   send DT OFF and GET so the commands after this one take effect. SET? and
+   DT? report SET as ON. A plain DT ON supply answers the GET with error 206. */
+void ps5004_release_dt(int address) {
+    char *r = ps5004_query(address, "DT?");
+    if (r == NULL || strstr(r, "ON") == NULL) return;
+    ps5004_send_flag(address, PS5004_DT, 0);
+    ps5004_trigger(address);
 }
 
 /* Serial-poll until no event is pending, quietly: the power-up SRQ must be
@@ -4526,7 +4534,7 @@ void test_ps5004_comm(int address) {
     }
 
     printf("\nPending errors/events:\n");
-    if (ps5004_show_errors(address) == 0) printf("  none\n");
+    if (ps5004_show_errors(address, 1) == 0) printf("  none\n");
 
     printf("\nSettings (SET?):\n");
     r = ps5004_query(address, "SET?");
@@ -4577,7 +4585,7 @@ void test_ps5004_comm(int address) {
         } else {
             printf("No reply to VOLTAGE?/CURRENT?\n");
         }
-        ps5004_show_errors(address);
+        ps5004_show_errors(address, 1);
     }
 
     printf("\n\nPS5004 communication: %s\n", good >= 4 ? "OK" : good > 0 ? "PARTIAL" : "FAILED");
