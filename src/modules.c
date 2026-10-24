@@ -1210,7 +1210,8 @@ static const char *fg5010_num_error(fg5010_config *cfg, int n, float v) {
     return NULL;
 }
 
-/* ERR? codes, manual Table 3-1 (p. 3-31, 3-32) */
+/* ERR? codes, manual Table 3-1 (p. 3-31, 3-32); 340-394 show only on the
+   front panel */
 static const struct { int code; const char *text; } __far fg5010_errors[] = {
     {   0, "No errors or events" },
     { 101, "Invalid command header" },
@@ -1233,6 +1234,29 @@ static const struct { int code; const char *text; } __far fg5010_errors[] = {
     { 256, "FM-phase lock mode conflict" },
     { 257, "VCF-phase lock mode conflict" },
     { 258, "Gate-mode conflict" },
+    /* Internal errors: also TEST's result codes (p. 3-23) */
+    { 301, "Interrupt fault" },
+    { 302, "System error" },
+    { 311, "Period measurement failed to complete" },
+    { 312, "Period measurement overflow" },
+    { 313, "Shift register (VIA) failed to function" },
+    { 314, "Mag-latch relay strobe interrupt failed" },
+    { 315, "Phase lock status over and under range at once" },
+    { 316, "Automatic frequency correction range exceeded" },
+    { 320, "VIA fault on CPU board" },
+    { 321, "Trig/gate control error on CPU board" },
+    { 322, "4 MHz reference clock or counter fault" },
+    { 323, "Frequency control logic fault, Loop 2 board" },
+    { 324, "Loop cycle counter fault, Loop 2 board" },
+    { 325, "Frequency prescaler fault, Loop 2 board" },
+    { 326, "Low-frequency generator fault" },
+    { 327, "No signal from Loop 1 board" },
+    { 328, "Inadequate frequency range (2 kHz range)" },
+    { 329, "Inadequate frequency range (20 kHz range)" },
+    { 330, "Inadequate frequency range (200 kHz range)" },
+    { 331, "Inadequate frequency range (2 MHz range)" },
+    { 332, "Inadequate frequency range (20 MHz range)" },
+    { 333, "Burst counter fault" },
     { 401, "Power on" },
     { 403, "User request (INST ID button)" },
     { 731, "Went out of phase lock" },
@@ -1418,7 +1442,9 @@ int fg5010_state_text(int address, char *out) {
     if (f >= 1.0e6)      sprintf(out, "%8.4f MHz", f / 1.0e6);
     else if (f >= 1.0e3) sprintf(out, "%8.3f kHz", f / 1.0e3);
     else                 sprintf(out, "%8.3f Hz ", f);
-    sprintf(out + strlen(out), " %6.3fVpp %+5.2fV %-3s %-5s OUT %s", a, o, func, mode, relay);
+    out[12] = '\0';     /* a garbled reply must not run past the 60 bytes */
+    snprintf(out + strlen(out), 60 - strlen(out), " %6.3fVpp %+5.2fV %-3s %-5s OUT %s",
+             a, o, func, mode, relay);
     return 1;
 }
 
@@ -1439,15 +1465,20 @@ static void fg5010_apply(int slot) {
     /* Each group is one message: the FG5010 checks a message's settings together,
        so FREQ/SYM and AMPL/OFFS need no particular order, and an error discards
        only that message (p. 3-28). OFFs go first: FM, VCF and HOLD block PHLOCK,
-       HOLD blocks FREQ over 200 Hz. */
+       HOLD blocks FREQ over 200 Hz. VCF goes off in any case: VCF mode allows no
+       range change, and VCF ON takes its top frequency from the range FREQ
+       selected (p. 3-25). */
     for (on = 0; on <= 1; on++) {
         if (on) {
             sprintf(msg, "MODE %s;SLOPE %s;%s", fg5010_modes[cfg->mode], cfg->trigger_slope,
                     cfg->waveform);         /* FUNC header is optional (p. 3-10) */
             gpib_write(address, msg);
-            /* NR2 (fixed point) throughout: 5 decimals hold 4 digits down to 0.002 Hz */
-            sprintf(msg, "%sFREQ %.5f;SYM %d", cfg->frequency == 0.0 ? "VCF ON;" : "",
-                    cfg->frequency, (int)cfg->duty_cycle);
+            /* NR2 (fixed point) throughout: 5 decimals hold 4 digits down to 0.002 Hz.
+               FREQ 0 is legal only once VCF is on: sent after the toggles. */
+            if (cfg->frequency == 0.0)
+                sprintf(msg, "SYM %d", (int)cfg->duty_cycle);
+            else
+                sprintf(msg, "FREQ %.5f;SYM %d", cfg->frequency, (int)cfg->duty_cycle);
             gpib_write(address, msg);
             sprintf(msg, "AMPL %.4f;OFFS %.2f", cfg->amplitude, cfg->offset);
             gpib_write(address, msg);
@@ -1456,7 +1487,7 @@ static void fg5010_apply(int slot) {
         }
         msg[0] = '\0';
         for (i = 0; i < 8; i++) {
-            if (!(cfg->toggles & (1 << i)) == !on) {
+            if (!(cfg->toggles & (1 << i)) == !on || (!on && (1 << i) == FG5010_VCF)) {
                 if (msg[0]) strcat(msg, ";");
                 strcat(msg, fg5010_toggles[i]);
                 strcat(msg, on ? " ON" : " OFF");
@@ -1464,6 +1495,7 @@ static void fg5010_apply(int slot) {
         }
         if (msg[0]) gpib_write(address, msg);
     }
+    if (cfg->frequency == 0.0) gpib_write(address, "FREQ 0");  /* VCF is on by now */
     sprintf(msg, "DT %s", fg5010_dts[cfg->dt_mode]);
     gpib_write(address, msg);
     GPIB_PACE(60);  /* longest settling, recall: 58 ms (Table 1-6, p. 1-9) */
@@ -1527,7 +1559,15 @@ static void fg5010_read_back(int slot) {
     printf("\nSettings copied\n");
 }
 
-/* Show and optionally switch the output relay; nothing else touches it */
+/* After anything that can move the relay: never guess its state */
+static void fg5010_show_relay(int address) {
+    if (fg5010_query(address, "OUT?") && fg5010_field(fg5010_reply, "OUT"))
+        printf("Output relay is now %s\n", fg5010_on(fg5010_reply, "OUT") ? "ON" : "OFF");
+    else
+        printf("No reply to OUT?: check the OUTPUT ON light\n");
+}
+
+/* Show and optionally switch the output relay: the only item that sends OUT */
 static void fg5010_output(int address) {
     int on, rqs;
 
@@ -1549,10 +1589,7 @@ static void fg5010_output(int address) {
     GPIB_PACE(20);  /* relay: under 8 ms (Table 1-6, p. 1-9) */
     fg5010_show_errors(address);
     fg5010_end(address, rqs);
-    if (fg5010_query(address, "OUT?") && fg5010_field(fg5010_reply, "OUT"))
-        printf("Output relay is now %s\n", fg5010_on(fg5010_reply, "OUT") ? "ON" : "OFF");
-    else
-        printf("No reply to OUT?: check the OUTPUT ON light\n");
+    fg5010_show_relay(address);
 }
 
 /* TEST's run time is not in the manual: allow its reply 30 s */
@@ -1566,25 +1603,39 @@ static void fg5010_long_timeout(int on) {
 #endif
 }
 
-/* Binary block reply: "LLSET %<count><data><checksum>;" (p. 3-4, 3-12, 3-18).
-   Only shown: blocks are never sent back, as the drivers' reads end at an LF
-   byte and their writes at NUL/CR/LF, which a block may hold. */
-static void fg5010_dump_block(int address, const char *cmd) {
-    unsigned char *b = (unsigned char *)fg5010_reply;
-    int n, i, start, count, sum;
+/* Binary block replies "LLSET %<count><data><checksum>;" and "STORE n:%...;"
+   (p. 3-4, 3-12, 3-18), held for writing back with LLSET or STOR n:. The
+   first 8 bytes stay free for that command's header. blk_at is the '%'
+   offset, -1 unless a whole block with a good checksum is held. */
+static unsigned char __far fg5010_blk[512];
+static int fg5010_blk_at = -1, fg5010_blk_len, fg5010_blk_llset;
 
+static void fg5010_dump_block(int address, const char *cmd) {
+    unsigned char *b = fg5010_blk + 8;
+    int n, i, start, count, sum;
+#ifdef GRIDGPIB
+    unsigned got;
+    int endr;
+#endif
+
+    fg5010_blk_at = -1;
     if (gpib_write(address, (char *)cmd) != 0) {
         printf("Not sent\n");
         return;
     }
     GPIB_PACE(50);
-    n = gpib_read(address, fg5010_reply, sizeof(fg5010_reply));
+#ifdef GRIDGPIB
+    /* Raw up to EOI: the data may hold LF bytes */
+    n = gg_read(address, b, sizeof(fg5010_blk) - 9, &got, &endr, 0) == GG_OK ? (int)got : 0;
+#else
+    n = gpib_read(address, (char *)b, sizeof(fg5010_blk) - 8);
+#endif
     if (n <= 0 || b[0] == 0xFF) {
         printf("No reply\n");
         return;
     }
     for (start = 0; start < n && b[start] != '%'; start++) ;
-    printf("Reply header: %.*s\n", start, fg5010_reply);
+    printf("Reply header: %.*s\n", start, (char *)b);
     if (start + 3 > n) {
         printf("No binary block in the reply\n");
         return;
@@ -1595,10 +1646,19 @@ static void fg5010_dump_block(int address, const char *cmd) {
     sum = b[start + 1] + b[start + 2];
     for (i = 0; i < count && start + 3 + i < n; i++) sum += b[start + 3 + i];
     printf("%d data bytes", count - 1);
-    if (i < count) printf(", %d received: the read ended at an LF byte in the data\n", i);
-    else printf(", checksum %s\n", (sum & 0xFF) == 0 ? "OK" : "BAD");
+    if (i < count) {
+        printf(", %d received: the read ended early (an LF byte in the data)\n", i);
+    } else {
+        printf(", checksum %s\n", (sum & 0xFF) == 0 ? "OK" : "BAD");
+        if ((sum & 0xFF) == 0) {
+            fg5010_blk_at = 8 + start;
+            fg5010_blk_len = 3 + count;
+            fg5010_blk_llset = (cmd[0] == 'L');
+        }
+    }
     for (n = 0; n < i; n++) printf("%02X%s", b[start + 3 + n], (n % 16 == 15) ? "\n" : " ");
     printf("\n");
+    if (fg5010_blk_at >= 0) printf("Held: W writes it back\n");
 }
 
 /* A location 0-9 for STOR/REC/SEND, -1 if none */
@@ -1610,6 +1670,46 @@ static int fg5010_ask_location(void) {
     return (c >= '0' && c <= '9') ? c - '0' : -1;
 }
 
+/* The held block back as LLSET <binblk> (every setting, the relay too) or
+   STOR n:<binblk>. Only blocks this FG5010 sent are written (CAUTION, p. 3-12,
+   3-21). With the LF/EOI terminator switch an LF byte in the block ends the
+   message early: the FG5010 then reports error 109 and changes nothing. */
+static void fg5010_write_block(int address) {
+#ifdef GRIDGPIB
+    char hdr[8];
+    unsigned char *p;
+    int loc, plen, rqs;
+
+    if (fg5010_blk_at < 0) {
+        printf("No block held: read one with L or S first\n");
+        return;
+    }
+    if (fg5010_blk_llset) {
+        printf("LLSET sets every setting, the output relay included. Send (Y/N)? ");
+        if (toupper(getch()) != 'Y') return;
+        strcpy(hdr, "LLSET ");
+    } else {
+        if ((loc = fg5010_ask_location()) < 0) return;
+        printf("Overwrite stored setup %d with the held block (Y/N)? ", loc);
+        if (toupper(getch()) != 'Y') return;
+        sprintf(hdr, "STOR %d:", loc);
+    }
+    printf("\n");
+    plen = strlen(hdr);
+    p = fg5010_blk + fg5010_blk_at - plen;
+    memcpy(p, hdr, plen);
+    p[plen + fg5010_blk_len] = ';';
+    rqs = fg5010_begin(address);
+    if (gg_write(address, p, plen + fg5010_blk_len + 1, 1) != GG_OK) printf("Not sent\n");
+    if (fg5010_show_errors(address) == 0) printf("Block accepted\n");
+    fg5010_end(address, rqs);
+    if (fg5010_blk_llset) fg5010_show_relay(address);
+#else
+    printf("Writing a block back needs tm5000g.exe (GRIDGPIB): Driver488 OUTPUT\n");
+    printf("sends text, and a block can hold NUL, CR and LF bytes.\n");
+#endif
+}
+
 /* ID, self test, error queue, single queries, status, display, INIT, setups */
 static void fg5010_utilities_menu(int address) {
     static const char* __far disp_args[] = { "FREQ", "AMPL", "OFFS", "NBURST", "PHASE", "SYM" };
@@ -1618,7 +1718,6 @@ static void fg5010_utilities_menu(int address) {
     static const char* __far trig_text[] = { "trigger status not available",
         "input below threshold", "input toggling faster than 3 Hz", "input above threshold" };
     char cmd[16];
-    const char *p;
     int choice, done = 0, loc, i;
     float v;
 
@@ -1637,6 +1736,7 @@ static void fg5010_utilities_menu(int address) {
         printf("9. Recall stored settings (REC 0-9) - can switch the output\n");
         printf("L. Low-level settings block (LLSET?)\n");
         printf("S. Stored settings block (SEND 0-9)\n");
+        printf("W. Write the block from L or S back (LLSET, or STOR 0-9)\n");
         printf("0. Return\n\nSelect option: ");
         choice = toupper(getch());
         printf("\n\n");
@@ -1646,7 +1746,10 @@ static void fg5010_utilities_menu(int address) {
                 printf("%s\n", fg5010_query(address, "ID?") ? fg5010_reply : "No reply");
                 break;
             case '2':
-                printf("Running TEST (ROM, serial I/O and AFC tests, p. 3-23)...\n");
+                printf("TEST cuts the signal while it runs, then restores the settings\n");
+                printf("(p. 3-23). Run it (Y/N)? ");
+                if (toupper(getch()) != 'Y') break;
+                printf("\nRunning TEST (ROM, serial I/O and AFC tests)...\n");
                 fg5010_long_timeout(1);
                 i = fg5010_query_value(address, "TEST", "TEST", &v);
                 fg5010_long_timeout(0);
@@ -1714,10 +1817,7 @@ static void fg5010_utilities_menu(int address) {
                 printf("\n");
                 sprintf(cmd, "REC %d", loc);
                 fg5010_send_checked(address, cmd);
-                if (fg5010_query(address, "OUT?") && (p = fg5010_field(fg5010_reply, "OUT")) != NULL)
-                    printf("Output relay is now %s\n", fg5010_on(fg5010_reply, "OUT") ? "ON" : "OFF");
-                else
-                    printf("No reply to OUT?: check the OUTPUT ON light\n");
+                fg5010_show_relay(address);
                 break;
             case 'L':
                 fg5010_dump_block(address, "LLSET?");
@@ -1726,6 +1826,9 @@ static void fg5010_utilities_menu(int address) {
                 if ((loc = fg5010_ask_location()) < 0) break;
                 sprintf(cmd, "SEND %d", loc);
                 fg5010_dump_block(address, cmd);
+                break;
+            case 'W':
+                fg5010_write_block(address);
                 break;
             case '0':
             case 27:
@@ -1754,14 +1857,16 @@ static int fg5010_ask(const char *prompt, float *v) {
 /* Every FG5010 setting, kept in the slot and sent with Apply; the output relay,
    triggers and setups act at once and ask first where they change the output. */
 void configure_fg5010_advanced(int slot) {
-    fg5010_config *cfg = &g_fg5010_config[slot];
-    int address = g_system->modules[slot].gpib_address;
+    fg5010_config *cfg;
+    int address;
     int choice, i, done = 0, pause;
     float v;
     char cmd[16];
     const char *msg;
 
     if (slot < 0 || slot >= 10) return;
+    cfg = &g_fg5010_config[slot];
+    address = g_system->modules[slot].gpib_address;
     fg5010_fix_config(slot);
 
     while (!done) {
@@ -1808,6 +1913,9 @@ void configure_fg5010_advanced(int slot) {
                 fg5010_set_num(cfg, i, v);
                 if (i == 0 && (cfg->toggles & FG5010_HOLD) && v > 200.0)
                     printf("HOLD is on: the FG5010 refuses over 200 Hz (error 255)\n");
+                else if (i == 0 && v == 0.0)
+                    printf("VCF then sweeps from 0 Hz up to the top of the range the FG5010\n"
+                           "is in when Apply turns VCF on (p. 3-25).\n");
                 else if (i == 4)
                     printf("PHLOCK: offset from the TRIG/GATE input. TRIG/GATE/BURST: start of\n"
                            "the first cycle. Above 1 MHz the range narrows (p. 1-6).\n");
@@ -5399,8 +5507,8 @@ void continuous_monitor(void) {
                                once a second (every 10 s while it doesn't answer), so the
                                generator doesn't set the pace */
                             {
-                                static unsigned long fg5010_last[10];
-                                static unsigned char fg5010_slow[10];
+                                static unsigned long __far fg5010_last[10];
+                                static unsigned char __far fg5010_slow[10];
                                 unsigned long now = *((unsigned long far *)0x0040006CL);
                                 if (!mon_last[i][0] ||
                                     now - fg5010_last[i] >= (fg5010_slow[i] ? 182UL : 18UL)) {
