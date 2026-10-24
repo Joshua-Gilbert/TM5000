@@ -44,7 +44,7 @@ void gpib_clear_dm5120(int address);
 /* DM5010-specific GPIB functions */
 int gpib_write_dm5010(int address, char *command);
 int gpib_read_dm5010(int address, char *buffer, int maxlen);
-int gpib_read_float_dm5010(int address, float *value);
+unsigned dm5010_timeout_ms(int address);   /* modules.c: reading time for its settings */
 
 /* Utility functions */
 int command_has_response(const char *cmd);

@@ -578,6 +578,41 @@ void get_power_units(float range, char **unit_str, float *scale_factor, int *dec
     }
 }
 
+/* Counter time readings: the unit is picked by the span, as for frequency */
+void get_time_units(float range, char **unit_str, float *scale_factor, int *decimal_places) {
+    if (range < 1e-6) {
+        *unit_str = "NS";
+        *scale_factor = 1e9;
+    } else if (range < 1e-3) {
+        *unit_str = "US";
+        *scale_factor = 1e6;
+    } else if (range < 1.0) {
+        *unit_str = "MS";
+        *scale_factor = 1e3;
+    } else {
+        *unit_str = "S";
+        *scale_factor = 1.0;
+    }
+    *decimal_places = 2;
+}
+
+/* Counts and ratios have no unit; large spans are shown in thousands or millions */
+void get_count_units(float range, char **unit_str, float *scale_factor, int *decimal_places) {
+    if (range < 1e4) {
+        *unit_str = "";
+        *scale_factor = 1.0;
+        *decimal_places = range < 10.0 ? 3 : 0;
+    } else if (range < 1e7) {
+        *unit_str = "K";
+        *scale_factor = 1e-3;
+        *decimal_places = 1;
+    } else {
+        *unit_str = "M";
+        *scale_factor = 1e-6;
+        *decimal_places = 1;
+    }
+}
+
 /* Dispatch on unit_type; shared by the statistics and print paths. (review #11) */
 void get_units_for_type(int unit_type, float range, char **unit_str,
                         float *scale_factor, int *decimal_places) {
@@ -588,6 +623,8 @@ void get_units_for_type(int unit_type, float range, char **unit_str,
         case UNIT_CURRENT:    get_current_units(range, unit_str, scale_factor, decimal_places);    break;
         case UNIT_RESISTANCE: get_resistance_units(range, unit_str, scale_factor, decimal_places); break;
         case UNIT_POWER:      get_power_units(range, unit_str, scale_factor, decimal_places);      break;
+        case UNIT_TIME:       get_time_units(range, unit_str, scale_factor, decimal_places);       break;
+        case UNIT_COUNT:      get_count_units(range, unit_str, scale_factor, decimal_places);      break;
         case UNIT_VOLTAGE:
         default:              get_graph_units(range, unit_str, scale_factor, decimal_places);      break;
     }
@@ -913,6 +950,7 @@ void draw_grid_dynamic(int max_samples) {
     int has_current_traces = 0;
     int has_resistance_traces = 0;
     int has_power_traces = 0;
+    int counter_unit = -1;               /* UNIT_TIME or UNIT_COUNT from a counter trace */
     int offset_mode = 0;
     double offset_ref = 0.0;
     double gmn, gmx;
@@ -937,11 +975,13 @@ void draw_grid_dynamic(int max_samples) {
                 case UNIT_CURRENT: has_current_traces = 1; break;
                 case UNIT_RESISTANCE: has_resistance_traces = 1; break;
                 case UNIT_POWER: has_power_traces = 1; break;
+                case UNIT_TIME:
+                case UNIT_COUNT: if (counter_unit < 0) counter_unit = g_traces[i].unit_type; break;
             }
         }
     }
     
-    /* Unit priority: dB > derivative > current > resistance > power > frequency > voltage */
+    /* Unit priority: dB > derivative > current > resistance > power > counter s/count > frequency > voltage */
     if (has_db_traces) {
         get_db_units(y_range, &unit_label, &scale_multiplier, &decimal_places);
     } else if (has_derivative_traces) {
@@ -952,6 +992,8 @@ void draw_grid_dynamic(int max_samples) {
         get_resistance_units(y_range, &unit_label, &scale_multiplier, &decimal_places);
     } else if (has_power_traces) {
         get_power_units(y_range, &unit_label, &scale_multiplier, &decimal_places);
+    } else if (counter_unit >= 0) {
+        get_units_for_type(counter_unit, y_range, &unit_label, &scale_multiplier, &decimal_places);
     } else if (has_frequency_traces) {
         get_frequency_units(y_range, &unit_label, &scale_multiplier, &decimal_places);
     } else {
@@ -1099,7 +1141,11 @@ void draw_grid_dynamic(int max_samples) {
         double us = 1.0;               /* display scale for the reference */
         char *u;
         int dec;
-        if (has_frequency_traces) {
+        if (counter_unit >= 0 && !has_derivative_traces && !has_current_traces &&
+            !has_resistance_traces && !has_power_traces) {
+            us = scale_multiplier;          /* same unit as the axis: NS, US, MS, S, K, M */
+            u = unit_label;
+        } else if (has_frequency_traces) {
             if (fabs(r) >= 1e6)      { us = 1e-6; u = "MHZ"; }
             else if (fabs(r) >= 1e3) { us = 1e-3; u = "KHZ"; }
             else                     { us = 1.0;  u = "HZ"; }

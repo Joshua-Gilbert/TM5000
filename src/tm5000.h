@@ -21,9 +21,9 @@
 #include <errno.h>
 
 /* Version information */
-#define TM5000_VERSION "3.7"
+#define TM5000_VERSION "3.8"
 #define TM5000_VERSION_MAJOR 3
-#define TM5000_VERSION_MINOR 7
+#define TM5000_VERSION_MINOR 8
 
 /* Per-slot sample buffer limits */
 #define MAX_SAMPLES_PER_MODULE 1024
@@ -87,6 +87,8 @@
 #define UNIT_CURRENT    4    /* A, mA, µA for current measurements */
 #define UNIT_RESISTANCE 5    /* Ω, mΩ, µΩ for resistance measurements */
 #define UNIT_POWER      6    /* Power spectrum units (V²/Hz) */
+#define UNIT_TIME       7    /* s, ms, us, ns (counter period/width/interval) */
+#define UNIT_COUNT      8    /* dimensionless: counts, ratios */
 
 /* Mouse definitions */
 #define MOUSE_INT       0x33
@@ -237,32 +239,41 @@ typedef struct {
     unsigned int reserved:7;
 } dm5120_config;
 
+/* DM5010: Tek Codes & Formats settings (manual pp. 3-3/3-4). Same layout as the
+   v3.7 struct; renamed fields reuse ones that held 0 (or, inverted, 1) in old
+   profiles, and dm5010_fix_legacy_config converts the rest. */
 typedef struct {
-    char function[10];      /* Current function (DCV, ACV, OHMS, CURR, DIODE) */
-    unsigned char range_mode;         /* 0=AUTO, 1-7=Manual range */
-    unsigned char filter_count;       /* Filter count 1-100 */
-    unsigned char trigger_mode;       /* 0=FREE, 1=SINGLE, 2=EXT */
-    unsigned char digits;            /* Display digits (4-5) */
-    float nullval;         /* Null/REL value for relative measurements */
-    unsigned char calculation_mode;  /* 0=NONE, 1=AVG, 2=SCALE, 3=DBM, 4=DBR */
-    float scale_factor;    /* Scaling factor for calculations */
-    float scale_offset;    /* Scaling offset for calculations */
-    unsigned char avg_count;         /* Number of readings for averaging */
-    float dbm_reference;   /* dBm reference resistance (default 600) */
-    float dbr_reference;   /* dBr reference value */
-    float min_value;       /* Minimum measured value */
-    float max_value;       /* Maximum measured value */
-    
-    unsigned int filter_enabled:1;     /* Digital filter */
-    unsigned int null_enabled:1;      /* NULL/REL */
-    unsigned int data_format:1;       /* 0=ASCII, 1=Scientific notation */
-    unsigned int auto_zero:1;
-    unsigned int beeper_enabled:1;
-    unsigned int front_panel_lock:1;
-    unsigned int high_speed_mode:1;
+    char function[10];      /* DCV, ACV, ACDC, OHMS or DIODE */
+    unsigned char range_mode;         /* 0=AUTO, 1-6 = full-scale index (modules.c table) */
+    unsigned char filter_count;       /* unused */
+    unsigned char trigger_mode;       /* 0=MODE RUN, 1=MODE TRIG */
+    unsigned char digits;            /* unused: DIGIT is high_speed_mode */
+    float nullval;         /* NULL offset, V or ohms */
+    unsigned char calculation_mode;  /* dB: 0=off, 3=CALC DBM, 4=CALC DBR */
+    float scale_factor;    /* RATIO A, not 0 */
+    float scale_offset;    /* RATIO B */
+    unsigned char avg_count;         /* AVE N, 1-255 here */
+    float dbm_reference;   /* unused: dBm is fixed at 1 mW in 600 ohm (p. 3-7) */
+    float dbr_reference;   /* DBR ref, not 0 */
+    float limit_hi;        /* LIMITS first argument (upper button) */
+    float limit_lo;        /* LIMITS second argument */
+
+    unsigned int filter_enabled:1;     /* CALC AVE */
+    unsigned int null_enabled:1;
+    unsigned int source_front:1;      /* 1 = SOURCE FRONT, the power-on state */
+    unsigned int rqs_on:1;            /* 1 = RQS ON, the power-on state */
+    unsigned int unused_bit:1;
+    unsigned int lfr_on:1;
+    unsigned int high_speed_mode:1;   /* DIGIT 3.5 */
     unsigned int statistics_enabled:1; /* Track min/max */
     unsigned int lf_termination:1;    /* terminate with LF, not CRLF */
-    unsigned int reserved:7;
+    unsigned int ratio_on:1;          /* CALC RATIO */
+    unsigned int cmpr_on:1;           /* CALC CMPR */
+    unsigned int dt_trig:1;           /* DT TRIG */
+    unsigned int monitor_on:1;        /* MONITOR ON */
+    unsigned int opc_on:1;
+    unsigned int over_on:1;
+    unsigned int user_on:1;
 } dm5010_config;
 
 typedef struct {
@@ -277,130 +288,107 @@ typedef struct {
     unsigned int dt_enabled:1;         /* Device trigger */
     unsigned int user_enabled:1;       /* INST ID button */
     unsigned int rqs_enabled:1;        /* Service requests */
-    unsigned int lf_termination:1;     /* terminate with LF, not CRLF */
-    unsigned int reserved:8;
+    unsigned int lf_termination:1;     /* unused: the terminator is a rear switch (manual p. 3-16) */
+    unsigned int dt_set:1;             /* with dt_enabled: DT SET, settings wait for GET */
+    unsigned int reserved:7;
 } ps5004_config;
 
+/* PS5010 slot settings, sent by Apply. Stored raw in PROFILES.DAT: the layout is
+   the v3.7 one, with bits that never held a setting renamed. */
 typedef struct {
-    /* Positive/Negative Floating Supplies - Constant Voltage Mode: 0 to ±32V */
-    float voltage1;             /* Positive supply voltage (0 to +32V) */
-    float current_limit1;       /* Current limit Ch1: 50mA-750mA (1.6A @ ≤15V) */
-    float voltage2;             /* Negative supply voltage (0 to -32V) */
-    float current_limit2;       /* Current limit Ch2: 50mA-750mA (1.6A @ ≤15V) */
-    
-    /* Logic Supply - Constant Voltage Mode: 4.5-5.5V */
-    float logic_voltage;        /* Logic supply voltage (4.5-5.5V) */
-    float logic_current_limit;  /* Logic current limit (100mA-3.0A) */
-    float tracking_ratio;       /* Ratio for asymmetric tracking */
-    float ovp_level1;           /* OVP threshold channel 1 */
-    float ovp_level2;           /* OVP threshold channel 2 */
-    
-    unsigned char tracking_mode;          /* 0=Independent, 1=Series, 2=Parallel */
-    unsigned char display_channel;        /* 0=Ch1, 1=Ch2, 2=Logic */
-    unsigned char display_mode;           /* 0=Voltage, 1=Current */
-    unsigned char error_queue_size;       /* Number of errors in queue */
-    
-    unsigned int output1_enabled:1;
-    unsigned int output2_enabled:1;
-    unsigned int logic_enabled:1;
-    unsigned int ovp_enabled:1;            /* Over voltage protection */
-    unsigned int cv_mode1:1;               /* Ch1 constant voltage */
-    unsigned int cc_mode1:1;               /* Ch1 constant current */
-    unsigned int cv_mode2:1;               /* Ch2 constant voltage */
-    unsigned int cc_mode2:1;               /* Ch2 constant current */
-    unsigned int srq_enabled:1;
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:6;
+    float voltage1;             /* VPOS, 0-32 V */
+    float current_limit1;       /* IPOS, 0.05 A steps; max per compartment */
+    float voltage2;             /* VNEG magnitude, 0-32 V */
+    float current_limit2;       /* INEG */
+    float logic_voltage;        /* VLOG, 4.50-5.50 V */
+    float logic_current_limit;  /* ILOG, 0.1-3.0 A in 0.1 A steps */
+    float unused_f[3];          /* no PS5010 command: tracking ratio, OVP levels */
+    unsigned char unused_c[4];  /* no PS5010 command: tracking/display modes */
+
+    unsigned int fsout_enabled:1;   /* FSOUT: + and - floating supplies switch together */
+    unsigned int unused_out2:1;     /* was a CH2 output flag; the supply has no such switch */
+    unsigned int logic_enabled:1;   /* LSOUT */
+    unsigned int high_power:1;      /* in the high-power compartment (was OVP, always 0) */
+    unsigned int unused_b:4;
+    unsigned int srq_enabled:1;     /* RQS */
+    unsigned int unused_lf:1;
+    unsigned int pri_enabled:1;     /* regulation-change SRQs, manual p. 3-8..3-10 */
+    unsigned int nri_enabled:1;
+    unsigned int lri_enabled:1;
+    unsigned int user_enabled:1;    /* USER: SRQ on the INST ID button */
+    unsigned int dt_enabled:1;      /* DT SET: new settings wait for GET */
+    unsigned int reserved:1;
 } ps5010_config;
 
+/* DC5009 and DC5010 share one layout, the same size as before. Fields a model
+   lacks keep their defaults. */
 typedef struct {
-    char function[8];           /* FREQ, PERIOD, WIDTH, RATIO, TIME, TOTALIZE, etc. */
-    char channel[4];            /* A, B, AB, BA, etc. */
-    float gate_time;            /* Gate time in seconds */
-    int averaging;              /* -1=auto, 1=no avg, >1=avg count */
+    char function[8];           /* header: FREQ PER WID RAT TIME TOT EVE TMAN PROB RISE FALL */
+    char channel[4];            /* its argument: A B/A AB BA A+B A-B A&B, or "" */
+    float gate_time;            /* unused: neither counter has a gate time */
+    int averaging;              /* -1 = auto (~0.3 s), else n for AVE 1.E+n */
     char coupling_a[4];         /* AC, DC */
-    char coupling_b[4];         /* AC, DC */
-    char impedance_a[4];        /* HI, LO */
-    char impedance_b[4];        /* HI, LO */
-    char attenuation_a[4];      /* X1, X10 */
-    char attenuation_b[4];      /* X1, X10 */
+    char coupling_b[4];
+    char impedance_a[4];        /* DC5010 termination: HI (1 Mohm) or LO (50 ohm) */
+    char impedance_b[4];
+    char attenuation_a[4];      /* "1" or "5" (X1 / X5) */
+    char attenuation_b[4];
     char slope_a[4];            /* POS, NEG */
-    char slope_b[4];            /* POS, NEG */
-    float level_a;              /* Trigger level Channel A */
-    float level_b;              /* Trigger level Channel B */
-    long overflow_count;        /* Extended range overflow counter */
-    float last_measurement;     /* Last measurement result */
-    
-    unsigned int filter_enabled:1;         /* Input filter */
-    unsigned int auto_trigger:1;
-    unsigned int overflow_enabled:1;       /* Overflow indication */
-    unsigned int preset_enabled:1;
-    unsigned int srq_enabled:1;
-    unsigned int measurement_complete:1;
+    char slope_b[4];
+    float level_a;              /* programmed trigger level, V */
+    float level_b;
+    long overflow_count;        /* TOT/TMAN counter overflows seen (OVER ON) */
+    float last_measurement;     /* last reading: sets the expected measurement time */
+
+    unsigned int filter_enabled:1;         /* DC5010 FIL ON (20 MHz) */
+    unsigned int auto_trigger:1;           /* AUTO levels (DC5009 both channels, DC5010 A) */
+    unsigned int overflow_enabled:1;       /* OVER ON */
+    unsigned int preset_enabled:1;         /* PRE ON: /16 prescaler on channel A */
+    unsigned int srq_enabled:1;            /* RQS ON */
+    unsigned int opc_enabled:1;            /* OPC ON */
     unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int null_enabled:1;           /* DC5010 NULL ON */
+    unsigned int fptrig:1;                 /* DC5009 levels from the front-panel knobs */
+    unsigned int rear_a:1;                 /* DC5009 SOUR REAR, channel A */
+    unsigned int rear_b:1;
+    unsigned int user_enabled:1;           /* USER ON */
+    unsigned int dt_mode:2;                /* DT OFF / TRIG / GATE */
+    unsigned int b_level_swap:1;           /* DC5010: channel B in the other level mode than A */
+    unsigned int reserved:1;
 } dc5009_config;
 
-typedef struct {
-    char function[8];           /* FREQ, PERIOD, WIDTH, RATIO, TIME, TOTALIZE, etc. */
-    char channel[4];            /* A, B, AB, BA, etc. */
-    float gate_time;            /* Gate time in seconds */
-    int averaging;              /* -1=auto, 1=no avg, >1=avg count */
-    char coupling_a[4];         /* AC, DC */
-    char coupling_b[4];         /* AC, DC */
-    char impedance_a[4];        /* HI, LO */
-    char impedance_b[4];        /* HI, LO */
-    char attenuation_a[4];      /* X1, X10 */
-    char attenuation_b[4];      /* X1, X10 */
-    char slope_a[4];            /* POS, NEG */
-    char slope_b[4];            /* POS, NEG */
-    float level_a;              /* Trigger level Channel A */
-    float level_b;              /* Trigger level Channel B */
-    long overflow_count;        /* Extended range overflow counter */
-    float last_measurement;     /* Last measurement result */
-    
-    unsigned int filter_enabled:1;         /* Input filter */
-    unsigned int auto_trigger:1;
-    unsigned int overflow_enabled:1;       /* Overflow indication */
-    unsigned int preset_enabled:1;
-    unsigned int srq_enabled:1;
-    unsigned int measurement_complete:1;
-    unsigned int rise_fall_enabled:1;      /* DC5010 only */
-    unsigned int burst_mode:1;             /* DC5010 only */
-    unsigned int lf_termination:1;         /* terminate with LF, not CRLF */
-    unsigned int reserved:7;
-} dc5010_config;
+typedef dc5009_config dc5010_config;
+unsigned dc50xx_timeout_ms(int slot);   /* modules.c; gpib_gg.c's counter read timeout */
 
+/* FG5010 settings, manual 070-3467-01 section 3. PROFILES.DAT stores this raw:
+   fields the FG5010 has no use for (it has no sweep, trigger source/level,
+   modulation depth or burst period) are kept so the size does not change. */
+#define FG5010_LAYOUT 5010      /* in 'layout': fields hold the meanings below */
 typedef struct {
-    char waveform[12];
-    char trigger_source[10];    /* INT, EXT, MAN */
-    char trigger_slope[4];      /* POS, NEG */
-    char mod_type[4];           /* AM, FM */
-    float frequency;            /* Hz (0.1 Hz to 15 MHz) */
-    float amplitude;            /* Vpp (0.01 to 20 Vpp) */
-    float offset;               /* DC offset, V (-10 to +10) */
-    float duty_cycle;           /* square/pulse, % (1 to 99) */
-    float start_freq;           /* Sweep start frequency */
-    float stop_freq;            /* Sweep stop frequency */
-    float sweep_time;           /* s (0.1 to 999) */
-    float trigger_level;        /* External trigger level, V (-5 to +5) */
-    float phase;                /* degrees (0-360) */
-    float mod_freq;             /* Modulation frequency */
-    float mod_depth;            /* Modulation depth (%) */
-    float burst_period;         /* Burst repetition period */
-    int burst_count;            /* cycles per burst */
-    int sweep_type;             /* 0=Linear, 1=Log */
-    int units_freq;             /* 0=Hz, 1=kHz, 2=MHz */
-    int units_time;             /* 0=s, 1=ms, 2=us */
+    char waveform[12];          /* FUNC: SINE, SQUARE, TRIANGLE */
+    char trigger_source[10];    /* unused */
+    char trigger_slope[4];      /* SLOPE: POS, NEG */
+    char mod_type[4];           /* unused */
+    float frequency;            /* FREQ, Hz: 0.002 to 20 MHz, 0 with VCF */
+    float amplitude;            /* AMPL, V p-p open circuit: 0 or 0.02 to 20 */
+    float offset;               /* OFFS, V open circuit: -7.5 to +7.5 */
+    float duty_cycle;           /* SYM, %: 10 to 90 */
+    float start_freq;           /* unused */
+    float stop_freq;            /* unused */
+    float sweep_time;           /* unused */
+    float trigger_level;        /* unused */
+    float phase;                /* PHAS, degrees: -90 to +90 */
+    float mod_freq;             /* unused */
+    float mod_depth;            /* unused */
+    float burst_period;         /* unused */
+    int burst_count;            /* NBUR: 1 to 9999 */
+    int mode;                   /* MODE: 0 CONT, 1 TRIG, 2 GATE, 3 BURST, 4 PHLOCK */
+    int layout;                 /* FG5010_LAYOUT; older profiles hold 0-2 here */
+    int units_time;             /* unused */
 
-    unsigned int output_enabled:1;
-    unsigned int sweep_enabled:1;
-    unsigned int sync_enabled:1;       /* Sync output */
-    unsigned int invert_enabled:1;
-    unsigned int modulation_enabled:1; /* AM/FM modulation */
-    unsigned int burst_enabled:1;
-    unsigned int lf_termination:1;     /* terminate with LF, not CRLF */
-    unsigned int reserved:9;
+    unsigned int toggles:8;     /* ON/OFF settings, bit n = fg5010_toggles[n] */
+    unsigned int dt_mode:2;     /* DT: 0 OFF, 1 SET, 2 TRIG, 3 GATE */
+    unsigned int reserved:6;
 } fg5010_config;
 
 extern measurement_system *g_system;

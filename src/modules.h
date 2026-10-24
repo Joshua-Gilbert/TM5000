@@ -83,130 +83,87 @@ void dm5120_reset_buffer_async(int slot);
 /* DM5010 functions */
 void init_dm5010_config(int slot);
 void configure_dm5010_advanced(int slot);
-void dm5010_set_function(int address, char *function);
-void dm5010_set_range(int address, char *function, float range);
-void dm5010_set_filter(int address, int enabled, int count);
-void dm5010_set_trigger(int address, char *mode);
-void dm5010_set_autozero(int address, int enabled);
-void dm5010_set_null(int address, int enabled, float value);
-void dm5010_set_calculation(int address, int mode, float factor, float offset);
-void dm5010_beeper(int address, int enabled);
-void dm5010_lock_front_panel(int address, int locked);
-float read_dm5010_enhanced(int address, int slot);
+void dm5010_fix_legacy_config(int slot);
+#define DM5010_READ_NONE 0      /* no reply or no number */
+#define DM5010_READ_OK   1
+#define DM5010_READ_OVER 2      /* +-1.E+99 */
+int dm5010_read(int address, int slot, double *value);
+const char *dm5010_unit(int slot);
+void dm5010_format(int slot, int r, double v, char *out);
 void test_dm5010_comm(int address);
 
 /* PS5004 functions */
+#define PS5004_NFLAGS 7     /* ps5004_flag(): OUT VRI CRI URI DT USER RQS */
+#define PS5004_OUT    0
+#define PS5004_DT     4
+#define PS5004_RQS    6
 void init_ps5004_config(int slot);
 void configure_ps5004_advanced(int slot);
+int ps5004_flag(const ps5004_config *cfg, int i);
+void ps5004_set_flag(ps5004_config *cfg, int i, int on);
+void ps5004_send_flag(int address, int i, int on);
+float ps5004_round_voltage(float v);
+float ps5004_round_current(float a);
+int ps5004_query_block(int address, const char *query, char **reply);
+char *ps5004_query(int address, const char *query);
+int ps5004_parse_number(const char *s, float *value);
+int ps5004_read_value(int address, float *value);
+void ps5004_select_display(int slot, int mode);
+void ps5004_forget_display(int slot);
+int ps5004_display_shown(int address);
+int ps5004_measure(int slot, int mode, float *value);
 void ps5004_init(int address);
 void ps5004_set_voltage(int address, float voltage);
 void ps5004_set_current(int address, float current);
 void ps5004_set_output(int address, int on);
-void ps5004_set_display(int address, char *mode);
 int ps5004_get_regulation_status(int address);
-float ps5004_read_value(int address);
+const char *ps5004_regulation_name(int status);
+int ps5004_show_errors(int address, int print);
+void ps5004_release_dt(int address);
+void ps5004_clear_srq(int address);
+void ps5004_trigger(int address);
+int ps5004_parse_settings(char *s, ps5004_config *cfg);
+int ps5004_compare(const ps5004_config *now, const ps5004_config *want);
+void ps5004_print_items(const char *s);
 void test_ps5004_comm(int address);
 
 /* PS5010 functions */
 void init_ps5010_config(int slot);
 void configure_ps5010_advanced(int slot);
-void ps5010_init(int address);
-void ps5010_set_voltage(int address, int channel, float voltage);
-void ps5010_set_current(int address, int channel, float current);
-void ps5010_set_output(int address, int channel, int on);
-void ps5010_set_tracking_voltage(int address, float voltage);
+/* Flags in the order of ps5010_flag_cmd: FSOUT LSOUT PRI NRI LRI RQS USER DT */
+#define PS5010_NFLAGS 8
+extern const char * const __far ps5010_flag_cmd[PS5010_NFLAGS];
+int ps5010_get_flag(const ps5010_config *cfg, int i);
+void ps5010_set_flag(ps5010_config *cfg, int i, int on);
+float ps5010_max_current(int high_power, float volts);
+float ps5010_round(float v, float step);
+int ps5010_query(int address, const char *query, char *buf, int maxlen);
+int ps5010_query_value(int address, const char *query, float *value);
+int ps5010_query_on(int address, const char *query);
 int ps5010_read_regulation(int address, int *neg_stat, int *pos_stat, int *log_stat);
-int ps5010_get_settings(int address, char *buffer, int maxlen);
-int ps5010_get_error(int address);
-void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on);
-void ps5010_set_srq(int address, int on);
+const char *ps5010_reg_text(int code);
+const char *ps5010_error_text(int code);
+int ps5010_show_errors(int address);
 void test_ps5010_comm(int address);
 
-/* DC5009 functions */
+/* DC5009 / DC5010 counters: one driver for both models */
 void init_dc5009_config(int slot);
-void configure_dc5009_advanced(int slot);
-void dc5009_set_function(int address, char *function, char *channel);
-void dc5009_set_coupling(int address, char channel, char *coupling);
-void dc5009_set_impedance(int address, char channel, char *impedance);
-void dc5009_set_attenuation(int address, char channel, char *attenuation);
-void dc5009_set_slope(int address, char channel, char *slope);
-void dc5009_set_level(int address, char channel, float level);
-void dc5009_set_filter(int address, int enabled);
-void dc5009_set_gate_time(int address, float gate_time);
-void dc5009_set_averaging(int address, int count);
-void dc5009_auto_trigger(int address);
-void dc5009_start_measurement(int address);
-void dc5009_stop_measurement(int address);
-double dc5009_read_measurement(int address);
-int dc5009_check_overflow(int address);
-void dc5009_clear_overflow(int address);
-void dc5009_query_function(int address, char *buffer, int size);
-void dc5009_query_id(int address, char *buffer, int size);
-int dc5009_query_error(int address);
-void dc5009_set_preset(int address, int enabled);
-void dc5009_manual_timing(int address);
-void dc5009_set_srq(int address, int enabled);
-unsigned char dc5009_get_status_byte(int address);
-double dc5009_read_extended_range(int address);
-void test_dc5009_comm(int address);
-
-/* DC5010 functions */
 void init_dc5010_config(int slot);
+void configure_dc5009_advanced(int slot);
 void configure_dc5010_advanced(int slot);
-void dc5010_set_function(int address, char *function, char *channel);
-void dc5010_set_coupling(int address, char channel, char *coupling);
-void dc5010_set_impedance(int address, char channel, char *impedance);
-void dc5010_set_attenuation(int address, char channel, char *attenuation);
-void dc5010_set_slope(int address, char channel, char *slope);
-void dc5010_set_level(int address, char channel, float level);
-void dc5010_set_filter(int address, int enabled);
-void dc5010_set_gate_time(int address, float gate_time);
-void dc5010_set_averaging(int address, int count);
-void dc5010_auto_trigger(int address);
-void dc5010_start_measurement(int address);
-void dc5010_stop_measurement(int address);
-double dc5010_read_measurement(int address);
-int dc5010_check_overflow(int address);
-void dc5010_clear_overflow(int address);
-void dc5010_set_burst_mode(int address, int enabled);
-void dc5010_measure_rise_time(int address);
-void dc5010_measure_fall_time(int address);
-void dc5010_query_function(int address, char *buffer, int size);
-void dc5010_query_id(int address, char *buffer, int size);
-int dc5010_query_error(int address);
-void dc5010_set_preset(int address, int enabled);
-void dc5010_manual_timing(int address);
-void dc5010_totalize_sum(int address);
-void dc5010_totalize_diff(int address);
-void dc5010_propagation_delay(int address);
-void dc5010_set_srq(int address, int enabled);
-unsigned char dc5010_get_status_byte(int address);
-double dc5010_read_extended_range(int address);
-void test_dc5010_comm(int address);
+void dc50xx_test(int slot);
+int dc50xx_read(int slot, double *value);       /* 1 reading, 0 none ready, -1 no reply */
+int dc50xx_single(int slot, int phase, double *value);
+void dc50xx_sync_function(int slot);
+void dc50xx_format(char *buf, int slot, double value);   /* buf >= 32 */
+int dc50xx_trace_unit(int slot);
 
 /* FG5010 functions */
 void init_fg5010_config(int slot);
-void configure_fg5010(int slot);
+void fg5010_fix_config(int slot);
 void configure_fg5010_advanced(int slot);
-void fg5010_set_frequency(int address, float freq);
-void fg5010_set_amplitude(int address, float amp);
-void fg5010_set_offset(int address, float offset);
-void fg5010_set_waveform(int address, char *waveform);
-void fg5010_set_duty_cycle(int address, float duty);
-void fg5010_enable_output(int address, int enable);
-void fg5010_set_sweep(int address, int enable, float start_freq, float stop_freq, float time);
-void fg5010_set_trigger(int address, char *source, char *slope, float level);
-void fg5010_set_sync(int address, int enable);
-void fg5010_set_invert(int address, int enable);
-void fg5010_set_phase(int address, float phase);
-void fg5010_set_modulation(int address, int enable, char *type, float freq, float depth);
-void fg5010_set_burst(int address, int enable, int count, float period);
 int test_fg5010_comm(int address);  /* 0 = pass, -1 = fail, 1 = declined (not run) */
-float fg5010_read_frequency(int address);
-int fg5010_read_output_status(int address);
-
-/* FG5010 programs */
-void fg5010_pulse_program_menu(int slot);
+int fg5010_state_text(int address, char *out);  /* monitor line; no printf */
 
 /* Measurement functions */
 void single_measurement(void);

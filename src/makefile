@@ -117,7 +117,7 @@ wcl: main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c mod
 	$(WATCOM_BIN)/wcl.exe $(CFLAGS) main.c gpib.c modules.c graphics.c ui.c data.c print.c math_functions.c module_funcs.c ieeeio_w.c -fe=$(TARGET)
 
 help:
-	@echo TM5000 Version 3.7 Build System
+	@echo TM5000 Version 3.8 Build System
 	@echo ===============================
 	@echo ""
 	@echo Available targets:

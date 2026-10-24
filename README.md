@@ -1,6 +1,6 @@
 # TM5000 GPIB Control System
 
-![Version](https://img.shields.io/badge/Version-3.7-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![License](https://img.shields.io/badge/License-Research-lightgrey)
+![Version](https://img.shields.io/badge/Version-3.8-brightgreen) ![Platform](https://img.shields.io/badge/Platform-DOS%2016--bit-blue) ![License](https://img.shields.io/badge/License-Research-lightgrey)
 
 <img width="1344" height="1691" alt="Gridcase 1520 with Tektronix TM5006A GPIB measurement system — FFT analysis of precision voltage reference" src="https://github.com/user-attachments/assets/7f70d8ae-4ebc-4a04-a70c-bf06f67a440f" />
 
@@ -24,17 +24,17 @@ frozen under [`archive/`](archive).
 
 ```
 TM5000/
-├── src/                 Current canonical source (v3.7) — build from here
+├── src/                 Current canonical source (v3.8) — build from here
 ├── driver/gridgpib/     GRIDGPIB resident GPIB driver + test (used by tm5000g.exe)
 ├── archive/             Frozen historical versions (reference only)
 │   ├── v1-binaries/     V1.8 / V1.9 executables (no source survives)
 │   ├── v2-source/       V2.0–V2.9 monolithic single-file C
-│   └── v3.0/ … v3.6/    Earlier modular releases (each self-contained)
+│   └── v3.0/ … v3.7/    Earlier modular releases (each self-contained)
 ├── docs/
 │   ├── BUILD.md         Toolchain + build/run instructions
-│   ├── ARCHITECTURE.md  Architecture notes (v3.7)
+│   ├── ARCHITECTURE.md  Architecture notes (v3.8)
 │   ├── FINDINGS.md      Cross-version regression analysis (what worked vs broke)
-│   └── changelogs/      Per-version changelogs (v3.5, v3.6, v3.7) + release notes
+│   └── changelogs/      Per-version changelogs (v3.5–v3.8) + release notes
 ├── CHANGELOG.md         Consolidated version history
 ├── CONTRIBUTING.md
 ├── README.md
@@ -120,6 +120,7 @@ declarations exist); they are optimization scaffolding. See
 | **v3.5** | July 2025 | Configuration profiles; metadata export; dual-trace math |
 | **v3.6** | June 2026 | Regression fixes; polynomial/exponential fit, cross-correlation, phase/delay; linker dead-strip |
 | **v3.7** | October 2026 | TM5000G on the GRIDGPIB driver; double precision + time stamps; pooled/averaged buffers; auto-detect; AUTO rate; graph/print/FFT fixes |
+| **v3.8** | October 2026 | Every instrument checked against its Tek manual: correct commands, full command coverage, safe outputs; DM5120 error 551 fixed; audit fixes |
 
 ## Requirements
 
@@ -137,7 +138,7 @@ See [docs/BUILD.md](docs/BUILD.md).
 ```sh
 # Build (from the source tree)
 cd src
-wmake                     # tm5000.exe + tm5000g.exe (~310 KB each); prebuilt copies are committed
+wmake                     # tm5000.exe + tm5000g.exe (~374 KB each); prebuilt copies are committed
 # WATCOM_BIN defaults to a WSL path; elsewhere: wmake WATCOM_BIN=C:/WATCOM/binnt
 
 # Run on DOS / DOSBox
@@ -154,6 +155,15 @@ Main Menu → Configure Modules → [select instrument] → [set parameters]
 ```
 
 ## Status
+
+v3.8 checks every instrument driver against its Tektronix instruction manual (and, for
+the DM5120, its firmware's command table). Several paths sent SCPI or invented commands,
+parsed replies without their headers, used `INIT` as a trigger, or switched supply and
+generator outputs on without asking; every command in each manual is now used or
+reachable from its menu. It also fixes the DM5120's error 551 in continuous monitoring
+and the October 2026 audit findings. v3.8 is built but **not yet run on hardware**; the
+bench checks are listed in
+[docs/changelogs/CHANGELOG_v3.8.md](docs/changelogs/CHANGELOG_v3.8.md).
 
 v3.7 was built and tested on a GRiDCase 1520 bench (TM5006A, DC5009, FG5010,
 PRS10). Besides TM5000G (a resident driver 23× smaller than Driver488, ~4× less

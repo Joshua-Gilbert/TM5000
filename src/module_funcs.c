@@ -82,11 +82,13 @@ void send_custom_command(void) {
            g_system->modules[slot].gpib_address);
     printf("Type 'EXIT' to return to main menu\n");
     printf("\nCommon test commands:\n");
-    printf("  DM5120:  voltage?, X, INIT, FUNCT?, RANGE?\n");
-    printf("           FUNCT DCV, RANGE AUTO, SEND, READ?\n");
-    printf("  PS5004:  ID?, SET?, VOLTAGE?, CURRENT?, REGULATION?\n");
-    printf("           VOLTAGE 5.0, CURRENT 0.1, OUTPUT ON/OFF\n");
-    printf("  General: *IDN?, *RST, *CLS, ERROR?\n");
+    printf("  DM5120:  FUNCT?, RANGE?, ERROR?, FUNCT DCV, RANGE AUTO, SEND\n");
+    printf("  DM5010:  FUNCT?, ERR?, DCV 0, SEND\n");
+    printf("  DC5009/DC5010: FUNC?, ERR?, FREQ A, AVE -1, SEND\n");
+    printf("  PS5004:  ID?, SET?, VOLTAGE?, CURRENT?, REGULATION?, ERROR?, HELP?\n");
+    printf("           VOLTAGE 5.0, CURRENT 0.1, OUTPUT ON/OFF, DISPLAY CURRENT, SEND\n");
+    printf("  PS5010:  REG?, ERR?, VPOS?   FG5010: FREQ?, AMPL?, ERR?\n");
+    printf("  All:     ID?, SET? (Tek codes and formats; *IDN? and other SCPI fail)\n");
     printf("----------------------------------------\n\n");
     
     drain_console_line();
@@ -190,7 +192,8 @@ static int dm5120_confirm(const char *what) {
 static void dm5120_utilities_menu(int address) {
     static char __far reply[128];
     char text[16];
-    int choice, done = 0;
+    int choice, done = 0, i;
+    long lval;
 
     while (!done) {
         clrscr();
@@ -205,8 +208,12 @@ static void dm5120_utilities_menu(int address) {
         printf("7. RESET - factory default settings\n");
         printf("8. PONSAVE - save current settings as power-on\n");
         printf("9. Firmware help (HELP?)\n");
+        printf("A. Trigger delay (DELAY)          B. Trigger on GET (DT TRIG/OFF)\n");
+        printf("C. Send GET (bus trigger)         D. Null on this reading (NULLVAL ACQUIRE)\n");
+        printf("E. Press a front-panel key (KEY)  F. Event reporting (ERRSTAT/OVER/USER)\n");
+        printf("A-F are not kept in the slot; PONSAVE keeps them in the meter.\n");
         printf("0. Return\n\nSelect option: ");
-        choice = getch();
+        choice = toupper(getch());
         printf("\n\n");
 
         switch (choice) {
@@ -259,6 +266,66 @@ static void dm5120_utilities_menu(int address) {
                     gpib_write_dm5120(address, "PONSAVE");
                     GPIB_PACE(300);
                     printf("\nSaved as the power-on settings\n");
+                }
+                break;
+            case 'A':
+                printf("Delay from trigger to conversion, 0-65000 ms (manual p. 3-11): ");
+                lval = -1;
+                scanf("%ld", &lval);
+                if (lval < 0 || lval > 65000L) {
+                    printf("Out of range\n");
+                    break;
+                }
+                sprintf(reply, "DELAY %ld", lval);
+                gpib_write_dm5120(address, reply);
+                if (dm5120_show_errors(address) == 0) printf("DELAY %ld ms set\n", lval);
+                break;
+            case 'B':
+                /* GET adds a trigger to the TRIGGER source, it doesn't replace it (p. 3-12) */
+                printf("Trigger a reading on GET: 1 = DT TRIG, 0 = DT OFF: ");
+                lval = -1;
+                scanf("%ld", &lval);
+                if (lval != 0 && lval != 1) break;
+                gpib_write_dm5120(address, lval ? "DT TRIG" : "DT OFF");
+                if (dm5120_show_errors(address) == 0) printf("DT %s\n", lval ? "TRIG" : "OFF");
+                break;
+            case 'C':
+                sprintf(reply, "TRIGGER %d\r\n", address);   /* Driver488's GET; gpib_gg has it too */
+                ieee_write(reply);
+                printf("GET sent (a reading follows only with DT TRIG)\n");
+                break;
+            case 'D':
+                gpib_write_dm5120(address, "NULLVAL ACQUIRE");
+                if (dm5120_show_errors(address) == 0)
+                    printf("Null value taken from the latest reading; NULL ON uses it\n");
+                break;
+            case 'E':
+                /* Table 3-2 */
+                printf("0 ACV  1 OHMS  2 DCA  3 ACA  4 DECREMENT  5 INCREMENT  6 AUTO  7 NULL\n");
+                printf("8 FILTER  9 dB  10 DCV  11 ENTER  12 PRGM  13 EXT  14 INT\n");
+                printf("Key (0-14): ");
+                lval = -1;
+                scanf("%ld", &lval);
+                if (lval < 0 || lval > 14) break;
+                gpib_write_dm5120(address, "TEXT \"\"");   /* KEY needs the display text cleared */
+                sprintf(reply, "KEY %ld", lval);
+                gpib_write_dm5120(address, reply);
+                if (dm5120_show_errors(address) == 0) printf("Key %ld pressed\n", lval);
+                break;
+            case 'F':
+                {
+                    static const char * __far evs[] = { "ERRSTAT", "OVER", "USER" };
+                    printf("1 ERRSTAT (report errors)  2 OVER (overflow)  3 USER (ID key): ");
+                    lval = -1;
+                    scanf("%ld", &lval);
+                    if (lval < 1 || lval > 3) break;
+                    printf("1 = ON, 0 = OFF: ");
+                    i = -1;
+                    scanf("%d", &i);
+                    if (i != 0 && i != 1) break;
+                    sprintf(reply, "%s %s", evs[lval - 1], i ? "ON" : "OFF");
+                    gpib_write_dm5120(address, reply);
+                    if (dm5120_show_errors(address) == 0) printf("%s\n", reply);
                 }
                 break;
             case '0':
@@ -600,219 +667,331 @@ void configure_dm5120_advanced(int slot) {
     }
 }
 
-void configure_ps5004_advanced(int slot) {
-    int choice, done = 0;
-    int address = g_system->modules[slot].gpib_address;
+/* What the PS5004 display, and so SEND, measures (manual p. 3-6) */
+static const char* __far ps5004_disp_name[] = { "VOLTAGE (V)", "CURRENT (mA)", "CURRENT LIMIT (mA)" };
+
+/* Number from the console in [lo, hi]; 0 after showing why it was refused */
+static int ps5004_ask(const char *prompt, float lo, float hi, float *out) {
+    float v;
+
+    printf("%s", prompt);
+    if (scanf("%f", &v) != 1) {
+        drain_console_line();
+        printf("Not a number\n");
+    } else if (v < lo || v > hi) {
+        printf("Out of range\n");
+    } else {
+        *out = v;
+        return 1;
+    }
+    printf("Press any key to continue...");
+    getch();
+    return 0;
+}
+
+/* Menu choice 0..max from the console, -1 if none */
+static int ps5004_ask_choice(int max) {
+    int v = -1;
+    if (scanf("%d", &v) != 1) drain_console_line();
+    return v >= 0 && v <= max ? v : -1;
+}
+
+/* Raw bytes of a binary-block reply. Shown only: the block format is not in
+   the manual (p. 3-10), and a 0Ah byte inside it ends the read early, so the
+   tail is drained rather than left to answer the next query. */
+static void ps5004_show_block(int address, const char *query) {
+    char *r;
+    int i, n = ps5004_query_block(address, query, &r);
+
+    drain_input_buffer();
+    printf("%s %d bytes:", query, n);
+    for (i = 0; i < n && i < 40; i++) printf(" %02X", (unsigned char)r[i]);
+    printf("\n");
+}
+
+/* Apply with RQS OFF so errors wait for ERROR? (manual p. 3-7) and DT OFF so
+   each setting takes effect now; DT SET would hold them for GET (p. 3-6) */
+static void ps5004_apply(int slot) {
+    static const unsigned char __far plain[] = { 1, 2, 3, 5 };   /* VRI CRI URI USER */
     ps5004_config *cfg = &g_ps5004_config[slot];
-    char buffer[80];
-    float temp_float;
-    int temp_int;
-    
+    ps5004_config now;
+    int address = g_system->modules[slot].gpib_address;
+    int i;
+    char *r;
+
+    if (cfg->output_enabled) {
+        printf("\n\nThe output will be ON at %.4f V, %.1f mA limit.", cfg->voltage, cfg->current_limit * 1000);
+        if (!dm5120_confirm("Apply")) return;
+    }
+    printf("\n\nApplying settings to PS5004...\n");
+
+    gpib_remote(address);
+    GPIB_PACE(200);
+    ps5004_release_dt(address);
+    ps5004_send_flag(address, PS5004_RQS, 0);
+    ps5004_show_errors(address, 0);     /* older events, and a 206 from the GET; report only Apply's */
+    /* Output OFF before the new voltage, so a live load never sees it; ON only after */
+    if (!cfg->output_enabled) ps5004_set_output(address, 0);
+    ps5004_set_voltage(address, cfg->voltage);
+    ps5004_set_current(address, cfg->current_limit);
+    ps5004_forget_display(slot);
+    ps5004_select_display(slot, cfg->display_mode);
+    for (i = 0; i < 4; i++) ps5004_send_flag(address, plain[i], ps5004_flag(cfg, plain[i]));
+    if (cfg->output_enabled) ps5004_set_output(address, 1);
+
+    /* VRI/CRI/URI crossovers (724, 725) show up here too, so "codes", not "errors" */
+    if (ps5004_show_errors(address, 1) == 0) printf("Settings applied\n");
+    else printf("Settings sent; the supply reported the codes above\n");
+    if (cfg->rqs_enabled) ps5004_send_flag(address, PS5004_RQS, 1);
+    /* Last: after DT SET even RQS would wait for GET */
+    if (cfg->dt_enabled) {
+        gpib_write(address, cfg->dt_set ? "DT SET" : "DT ON");
+        GPIB_PACE(50);
+    }
+
+    /* Read back: shows the supply's own 0.5 mV / 2.5 mA rounding */
+    r = ps5004_query(address, "SET?");
+    if (r == NULL) {
+        printf("No reply to SET?\n");
+    } else {
+        now = *cfg;
+        ps5004_parse_settings(r, &now);
+        if (ps5004_compare(&now, cfg) == 0) printf("Read back with SET?: all settings match\n");
+        else printf("(read back with SET?)\n");
+    }
+}
+
+/* ID, ROM test, errors and events, single queries, HELP?, INIT, device clear */
+static void ps5004_utilities_menu(int slot) {
+    /* Each setting's own query (manual p. 3-5 to 3-15); SET? returns them all */
+    static const char* __far queries[] = {
+        "VOLTAGE?", "CURRENT?", "OUTPUT?", "DISPLAY?", "VRI?", "CRI?",
+        "URI?", "DT?", "USER?", "RQS?", "REGULATION?"
+    };
+    int address = g_system->modules[slot].gpib_address;
+    int choice, done = 0, i;
+    char *r;
+    float v;
+
     while (!done) {
         clrscr();
-        printf("PS5004 Power Supply Configuration - Slot %d\n", slot);
-        printf("=====================================\n\n");
-        
-        printf("1. Voltage: %.4f V\n", cfg->voltage);
-        printf("2. Current Limit: %.3f A (%.0f mA)\n", 
-               cfg->current_limit, cfg->current_limit * 1000);
-        printf("3. Output: %s\n", cfg->output_enabled ? "ON" : "OFF");
-        printf("4. Display: ");
-        switch(cfg->display_mode) {
-            case 0: printf("VOLTAGE\n"); break;
-            case 1: printf("CURRENT\n"); break;
-            case 2: printf("CURRENT LIMIT\n"); break;
+        printf("PS5004 Utilities - GPIB %d\n", address);
+        printf("==========================\n\n");
+        printf("1. Identify (ID?)\n");
+        printf("2. ROM self test (TEST)\n");
+        printf("3. Read pending errors/events (serial poll, ERROR?)\n");
+        printf("4. Last event with its description (ERRMSG?)\n");
+        printf("5. Last event code (EVENT?)\n");
+        printf("6. Read each setting with its own query\n");
+        printf("7. Firmware command list (HELP?)\n");
+        printf("8. Binary settings blocks (LLSET?, FVOLTS?)\n");
+        printf("9. INIT - power-on settings: output OFF, 0 V, 100 mA\n");
+        printf("A. Device clear (SDC)\n");
+        printf("0. Return\n\nSelect option: ");
+        choice = toupper(getch());
+        printf("\n\n");
+
+        switch (choice) {
+            case '1':
+            case '4':
+            case '5':
+            case '7':
+                r = ps5004_query(address, choice == '1' ? "ID?" : choice == '4' ? "ERRMSG?" :
+                                          choice == '5' ? "EVENT?" : "HELP?");
+                printf("%s\n", r ? r : "No reply");
+                break;
+            case '2':   /* TEST 0 passes, 394 fails (manual p. 3-13) */
+                r = ps5004_query(address, "TEST");
+                if (r && ps5004_parse_number(r, &v)) printf("%s: ROM test %s\n", r, v == 0 ? "passed" : "FAILED");
+                else printf("No reply\n");
+                break;
+            case '3':
+                if (ps5004_show_errors(address, 1) == 0) printf("No errors or events pending\n");
+                break;
+            case '6':
+                for (i = 0; i < sizeof(queries) / sizeof(queries[0]); i++) {
+                    r = ps5004_query(address, queries[i]);
+                    printf("%-12s %s\n", queries[i], r ? r : "no reply");
+                }
+                break;
+            case '8':
+                ps5004_show_block(address, "LLSET?");
+                ps5004_show_block(address, "FVOLTS?");
+                printf("\nShown only: the block format is not in the manual (p. 3-10),\n");
+                printf("so TM5000 never sends LLSET or FVOLTS.\n");
+                break;
+            case '9':
+                if (dm5120_confirm("INIT turns the output OFF and sets 0 V, 100 mA")) {
+                    ps5004_release_dt(address);
+                    ps5004_init(address);
+                    ps5004_clear_srq(address);     /* a 206 from the release; INIT sets RQS ON */
+                    init_ps5004_config(slot);
+                    printf("\nSupply and slot at the power-on settings (manual Table 3-2)\n");
+                }
+                break;
+            case 'A':
+                gpib_clear(address);
+                printf("Device clear sent: pending settings and events cleared,\n");
+                printf("except power-on (manual p. 3-18)\n");
+                break;
+            case '0':
+            case 27:
+                done = 1;
+                break;
         }
-        printf("5. Voltage Regulation Interrupt (VRI): %s\n", 
-               cfg->vri_enabled ? "ON" : "OFF");
-        printf("6. Current Regulation Interrupt (CRI): %s\n", 
-               cfg->cri_enabled ? "ON" : "OFF");
-        printf("7. Unregulated Interrupt (URI): %s\n", 
-               cfg->uri_enabled ? "ON" : "OFF");
-        printf("8. Device Trigger (DT): %s\n", 
-               cfg->dt_enabled ? "ON" : "OFF");
-        printf("9. User Button (INST ID): %s\n", 
-               cfg->user_enabled ? "ON" : "OFF");
-        printf("A. Service Requests (RQS): %s\n", 
-               cfg->rqs_enabled ? "ON" : "OFF");
-        printf("B. LF Termination: %s\n", 
-               cfg->lf_termination ? "ON (LF only)" : "OFF (CRLF)");
-        printf("C. Query Current Status\n");
-        printf("D. Apply Settings to PS5004\n");
-        printf("E. Test Measurement\n");
-        printf("F. Run Communication Test\n");
-        printf("G. Initialize PS5004 (INIT command)\n");
-        printf("0. Return to Module Config\n");
-        
+        if (!done) {
+            printf("\nPress any key...");
+            getch();
+        }
+    }
+}
+
+void configure_ps5004_advanced(int slot) {
+    static const char __far flag_keys[] = "3567x9A";    /* ps5004_flag() order; DT has its own prompt */
+    int choice, done = 0, temp_int, shown;
+    int address = g_system->modules[slot].gpib_address;
+    ps5004_config *cfg = &g_ps5004_config[slot];
+    ps5004_config now;
+    float temp_float;
+    char *r;
+
+    ps5004_forget_display(slot);   /* the terminal may have changed it */
+
+    while (!done) {
+        clrscr();
+        printf("PS5004 Power Supply Configuration - Slot %d (GPIB %d)\n", slot, address);
+        printf("===================================================\n\n");
+
+        printf("1. Voltage: %.4f V\n", cfg->voltage);
+        printf("2. Current Limit: %.1f mA\n", cfg->current_limit * 1000);
+        printf("3. Output: %s\n", cfg->output_enabled ? "ON" : "OFF");
+        printf("4. Display (what the monitor logs): %s\n", ps5004_disp_name[(unsigned)cfg->display_mode % 3]);
+        printf("5. Voltage Regulation Interrupt (VRI): %s\n", cfg->vri_enabled ? "ON" : "OFF");
+        printf("6. Current Regulation Interrupt (CRI): %s\n", cfg->cri_enabled ? "ON" : "OFF");
+        printf("7. Unregulated Interrupt (URI): %s\n", cfg->uri_enabled ? "ON" : "OFF");
+        printf("8. Device Trigger (DT): %s\n",
+               !cfg->dt_enabled ? "OFF" : cfg->dt_set ? "SET (settings wait for GET)" : "ON");
+        printf("9. INST ID Button Request (USER): %s\n", cfg->user_enabled ? "ON" : "OFF");
+        printf("A. Service Requests (RQS): %s\n", cfg->rqs_enabled ? "ON" : "OFF");
+
+        printf("\nC. Query Status (SET?, errors)    D. Apply Settings to PS5004\n");
+        printf("E. Test Measurement (V, I, limit)  F. Communication Test\n");
+        printf("L. Load Settings from the PS5004   T. Trigger (GET)\n");
+        printf("U. Utilities (ID, ROM test, INIT, HELP)   0. Return\n");
+        printf("\nSettings take effect on D. The message terminator (EOI or LF/EOI) is a\n");
+        printf("rear-panel switch, not a bus command (manual p. 3-16).\n");
+
         printf("\nSelect option: ");
         choice = toupper(getch());
-        
+
         switch(choice) {
-            case '1':  /* Voltage */
-                printf("\n\nEnter voltage (0-20V): ");
-                scanf("%f", &temp_float);
-                if (temp_float >= 0.0 && temp_float <= 20.0) {
-                    cfg->voltage = temp_float;
+            case '1':  /* 0.5 mV steps (manual p. 3-14) */
+                if (ps5004_ask("\n\nVoltage, 0 to 20 V: ", 0.0, 20.0, &temp_float))
+                    cfg->voltage = ps5004_round_voltage(temp_float);
+                break;
+
+            case '2':  /* 2.5 mA steps (manual p. 3-5) */
+                if (ps5004_ask("\n\nCurrent limit, 10 to 305 mA: ", 10.0, 305.0, &temp_float))
+                    cfg->current_limit = ps5004_round_current(temp_float / 1000.0);
+                break;
+
+            case '3':
+            case '5':
+            case '6':
+            case '7':
+            case '9':
+            case 'A':
+                temp_int = strchr(flag_keys, choice) - flag_keys;
+                ps5004_set_flag(cfg, temp_int, !ps5004_flag(cfg, temp_int));
+                break;
+
+            case '4':  /* The front-panel limit knob works only in CURRENT LIMIT (manual p. 2-5) */
+                printf("\n\n0. VOLTAGE  1. CURRENT  2. CURRENT LIMIT\nSelect: ");
+                temp_int = ps5004_ask_choice(2);
+                if (temp_int >= 0) cfg->display_mode = temp_int;
+                break;
+
+            case '8':
+                printf("\n\n0. OFF  1. ON (GET accepted)\n");
+                printf("2. SET: every later setting, the monitor's DISPLAY too, waits for GET (T)\nSelect: ");
+                temp_int = ps5004_ask_choice(2);
+                if (temp_int >= 0) {
+                    cfg->dt_enabled = temp_int != 0;
+                    cfg->dt_set = temp_int == 2;
                 }
                 break;
-                
-            case '2':  /* Current limit */
-                printf("\n\nEnter current limit in mA (10-305): ");
-                scanf("%f", &temp_float);
-                if (temp_float >= 10.0 && temp_float <= 305.0) {
-                    cfg->current_limit = temp_float / 1000.0;  /* entered in mA, stored in A */
-                }
-                break;
-                
-            case '3':  /* Output */
-                cfg->output_enabled = !cfg->output_enabled;
-                break;
-                
-            case '4':  /* Display mode */
-                printf("\n\nDisplay modes:\n");
-                printf("0. VOLTAGE\n");
-                printf("1. CURRENT\n");
-                printf("2. CURRENT LIMIT\n");
-                printf("Select: ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 2) {
-                    cfg->display_mode = temp_int;
-                }
-                break;
-                
-            case '5':  /* VRI */
-                cfg->vri_enabled = !cfg->vri_enabled;
-                break;
-                
-            case '6':  /* CRI */
-                cfg->cri_enabled = !cfg->cri_enabled;
-                break;
-                
-            case '7':  /* URI */
-                cfg->uri_enabled = !cfg->uri_enabled;
-                break;
-                
-            case '8':  /* DT */
-                cfg->dt_enabled = !cfg->dt_enabled;
-                break;
-                
-            case '9':  /* User button */
-                cfg->user_enabled = !cfg->user_enabled;
-                break;
-                
-            case 'A':  /* RQS */
-                cfg->rqs_enabled = !cfg->rqs_enabled;
-                break;
-                
-            case 'B':  /* LF termination */
-                cfg->lf_termination = !cfg->lf_termination;
-                printf("\n\nLF termination %s.\n", 
-                       cfg->lf_termination ? "enabled (LF only)" : "disabled (CRLF)");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
+
             case 'C':  /* Query status */
-                printf("\n\nQuerying PS5004 status...\n");
-                
-                gpib_write(address, "SET?");
-                GPIB_PACE(100);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("All settings:\n%s\n", buffer);
-                }
-                
-                gpib_write(address, "REGULATION?");
-                GPIB_PACE(50);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("\nRegulation status: %s", buffer);
-                    temp_int = ps5004_get_regulation_status(address);
-                    switch(temp_int) {
-                        case 1: printf(" (Voltage regulation)\n"); break;
-                        case 2: printf(" (Current regulation)\n"); break;
-                        case 3: printf(" (Unregulated)\n"); break;
-                    }
-                }
-                
-                gpib_write(address, "ERROR?");
-                GPIB_PACE(50);
-                if (gpib_read(address, buffer, sizeof(buffer)) > 0) {
-                    printf("Error status: %s\n", buffer);
-                }
-                
+                printf("\n\nPS5004 settings (SET?):\n");
+                r = ps5004_query(address, "SET?");
+                if (r) ps5004_print_items(r);
+                else printf("  No reply\n");
+                printf("\nRegulation: %s\n", ps5004_regulation_name(ps5004_get_regulation_status(address)));
+                printf("\nPending errors/events:\n");
+                if (ps5004_show_errors(address, 1) == 0) printf("  none\n");
                 printf("\nPress any key to continue...");
                 getch();
                 break;
-                
-            case 'D':  /* Apply settings */
-                printf("\n\nApplying settings to PS5004...\n");
-                
-                gpib_remote(address);
-                GPIB_PACE(200);
-                
-                ps5004_set_voltage(address, cfg->voltage);
-                ps5004_set_current(address, cfg->current_limit);
-                
-                switch(cfg->display_mode) {
-                    case 0: ps5004_set_display(address, "VOLTAGE"); break;
-                    case 1: ps5004_set_display(address, "CURRENT"); break;
-                    case 2: ps5004_set_display(address, "CLIMIT"); break;
-                }
-                
-                gpib_write(address, cfg->vri_enabled ? "VRI ON" : "VRI OFF");
-                GPIB_PACE(50);
-                gpib_write(address, cfg->cri_enabled ? "CRI ON" : "CRI OFF");
-                GPIB_PACE(50);
-                gpib_write(address, cfg->uri_enabled ? "URI ON" : "URI OFF");
-                GPIB_PACE(50);
-                
-                gpib_write(address, cfg->dt_enabled ? "DT ON" : "DT OFF");
-                GPIB_PACE(50);
-                gpib_write(address, cfg->user_enabled ? "USER ON" : "USER OFF");
-                GPIB_PACE(50);
-                gpib_write(address, cfg->rqs_enabled ? "RQS ON" : "RQS OFF");
-                GPIB_PACE(50);
-                
-                ps5004_set_output(address, cfg->output_enabled);
-                
-                printf("Settings applied!\n");
+
+            case 'D':
+                ps5004_apply(slot);
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
-            case 'E':  /* Test measurement */
-                printf("\n\nTesting measurement...\n");
-                
-                ps5004_set_display(address, "VOLTAGE");
-                GPIB_PACE(100);
-                
-                printf("Voltage reading: ");
-                temp_float = ps5004_read_value(address);
-                printf("%.4f V\n", temp_float);
-                
-                ps5004_set_display(address, "CURRENT");
-                GPIB_PACE(100);
-                
-                printf("Current reading: ");
-                temp_float = ps5004_read_value(address);
-                printf("%.3f A (%.1f mA)\n", temp_float, temp_float * 1000);
-                
+
+            case 'E':  /* Each display change waits two DVM readings (manual p. 3-12) */
+                printf("\n\nMeasuring...\n");
+                for (temp_int = 0; temp_int < 3; temp_int++) {
+                    printf("%-20s", ps5004_disp_name[temp_int]);
+                    ps5004_forget_display(slot);
+                    ps5004_select_display(slot, temp_int);
+                    /* Label by DISPLAY?: under DT SET the change waits for GET (p. 3-6) */
+                    shown = ps5004_display_shown(address);
+                    if (shown >= 0 && shown != temp_int) printf("not selected (DT SET? T sends GET)\n");
+                    else if (shown < 0 || !ps5004_read_value(address, &temp_float)) printf("no reply\n");
+                    else if (temp_int == 0) printf("%.4f V\n", temp_float);
+                    else printf("%.1f mA\n", temp_float * 1000);
+                }
+                ps5004_forget_display(slot);
+                ps5004_select_display(slot, cfg->display_mode);
+                printf("Regulation          %s\n", ps5004_regulation_name(ps5004_get_regulation_status(address)));
                 printf("\nPress any key to continue...");
                 getch();
                 break;
-                
-            case 'F':  /* Run communication test */
+
+            case 'F':
                 test_ps5004_comm(address);
                 break;
-                
-            case 'G':  /* Initialize */
-                printf("\n\nInitializing PS5004...\n");
-                ps5004_init(address);
-                init_ps5004_config(slot);
-                printf("PS5004 initialized to power-on state.\n");
+
+            case 'L':  /* The supply's settings become the slot's */
+                r = ps5004_query(address, "SET?");
+                now = *cfg;
+                if (r && ps5004_parse_settings(r, &now) == 10) {
+                    *cfg = now;
+                    ps5004_forget_display(slot);
+                    printf("\n\nLoaded the supply's settings\n");
+                } else {
+                    printf("\n\nNo complete SET? reply; settings unchanged\n");
+                }
                 printf("Press any key to continue...");
                 getch();
                 break;
-                
+
+            case 'T':  /* GET is ignored, error 206, unless DT is enabled (manual p. 3-18) */
+                printf("\n\n");
+                r = ps5004_query(address, "DT?");
+                if (r && strstr(r, "OFF")) printf("DT is OFF: the supply will ignore GET.\n");
+                ps5004_trigger(address);
+                printf("GET sent\n");
+                ps5004_show_errors(address, 1);
+                printf("Press any key to continue...");
+                getch();
+                break;
+
+            case 'U':
+                ps5004_utilities_menu(slot);
+                break;
+
             case '0':
                 done = 1;
                 break;
@@ -820,258 +999,509 @@ void configure_ps5004_advanced(int slot) {
     }
 }
 
+/* ---- PS5010: menu values go to the supply only on Apply or an action that
+   says so; anything that can turn an output on or change a live one asks first. */
+
+static char __far ps5010_cmd[160];   /* also SET? replies, about 120 characters (p. 3-11) */
+
+/* Number typed at the console: 1 typed, 0 ENTER alone, -1 ESC. Reads keys with
+   getch so a newline left by an earlier scanf can't stand in for an answer. */
+static int ps5010_getnum(float *v) {
+    char s[12];
+    int n = 0, c;
+
+    fflush(stdout);
+    while ((c = getch()) != '\r') {
+        if (c == 27) {
+            printf("\n");
+            return -1;
+        }
+        if (c == '\b') {
+            if (n) {
+                n--;
+                putch('\b'); putch(' '); putch('\b');
+            }
+        } else if (n < 11 && (isdigit(c) || c == '.')) {
+            s[n++] = (char)c;
+            putch(c);
+        }
+    }
+    printf("\n");
+    s[n] = '\0';
+    if (n == 0) return 0;
+    return sscanf(s, "%f", v) == 1 ? 1 : -1;
+}
+
+/* 1 with *v accepted (typed in range, or kept with ENTER), 0 otherwise */
+static int ps5010_ask(const char *what, float lo, float hi, float *v) {
+    float x;
+    int r;
+
+    printf("%s (%.2f-%.2f, ENTER keeps %.2f): ", what, lo, hi, *v);
+    r = ps5010_getnum(&x);
+    if (r == 0) return 1;
+    if (r < 0) return 0;
+    if (x < lo - 0.001f || x > hi + 0.001f) {
+        printf("Out of range, not changed\n");
+        return 0;
+    }
+    *v = x;
+    return 1;
+}
+
+static int ps5010_confirm(const char *what) {
+    int c;
+    printf("%s (Y/N)? ", what);
+    c = toupper(getch());
+    printf("%c\n", c == 'Y' ? 'Y' : 'N');
+    return c == 'Y';
+}
+
+static void ps5010_pause(void) {
+    printf("\nPress any key...");
+    getch();
+}
+
+/* What the supply would refuse with 205/204 (p. 3-21), or NULL */
+static const char *ps5010_check(const ps5010_config *cfg) {
+    if (cfg->voltage1 < 0.0f || cfg->voltage1 > 32.001f ||
+        cfg->voltage2 < 0.0f || cfg->voltage2 > 32.001f) return "floating voltage outside 0-32 V";
+    if (cfg->logic_voltage < 4.499f || cfg->logic_voltage > 5.501f) return "logic voltage outside 4.50-5.50 V";
+    if (cfg->current_limit1 < 0.049f ||
+        cfg->current_limit1 > ps5010_max_current(cfg->high_power, cfg->voltage1) + 0.001f ||
+        cfg->current_limit2 < 0.049f ||
+        cfg->current_limit2 > ps5010_max_current(cfg->high_power, cfg->voltage2) + 0.001f)
+        return "floating current limit outside the compartment's range (option 6)";
+    if (cfg->logic_current_limit < 0.099f || cfg->logic_current_limit > 3.001f) return "logic current limit outside 0.1-3.0 A";
+    return NULL;
+}
+
+/* Lower a floating limit that a new voltage or compartment no longer allows */
+static void ps5010_fit_limits(ps5010_config *cfg) {
+    float m = ps5010_max_current(cfg->high_power, cfg->voltage1);
+    if (cfg->current_limit1 > m + 0.001f) {
+        cfg->current_limit1 = m;
+        printf("IPOS lowered to %.2f A, the most allowed at %.2f V\n", m, cfg->voltage1);
+    }
+    m = ps5010_max_current(cfg->high_power, cfg->voltage2);
+    if (cfg->current_limit2 > m + 0.001f) {
+        cfg->current_limit2 = m;
+        printf("INEG lowered to %.2f A, the most allowed at %.2f V\n", m, cfg->voltage2);
+    }
+}
+
+static const char *ps5010_flag_word(int i, int on) {
+    return on ? (i == 7 ? "SET" : "ON") : "OFF";
+}
+
+static void ps5010_show_out(int address) {
+    if (ps5010_query(address, "OUT?", ps5010_cmd, sizeof(ps5010_cmd))) printf("Outputs now: %s\n", ps5010_cmd);
+}
+
+/* Every setting, read back into the menu (one query each) */
+static void ps5010_read_back(int slot) {
+    static const char * const __far q[] = { "VPOS?", "IPOS?", "VNEG?", "INEG?", "VLOG?", "ILOG?" };
+    ps5010_config *cfg = &g_ps5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    float *dst[6];
+    float x;
+    int i, f, missed = 0;
+
+    dst[0] = &cfg->voltage1; dst[1] = &cfg->current_limit1;
+    dst[2] = &cfg->voltage2; dst[3] = &cfg->current_limit2;
+    dst[4] = &cfg->logic_voltage; dst[5] = &cfg->logic_current_limit;
+    for (i = 0; i < 6; i++) {
+        if (ps5010_query_value(address, q[i], &x)) *dst[i] = (float)fabs(x);
+        else missed++;
+    }
+    for (i = 0; i < PS5010_NFLAGS; i++) {
+        sprintf(ps5010_cmd, "%s?", ps5010_flag_cmd[i]);
+        f = ps5010_query_on(address, ps5010_cmd);
+        if (f < 0) missed++;
+        else ps5010_set_flag(cfg, i, f);
+    }
+    if (missed) printf("%d queries got no reply; those menu values are unchanged\n", missed);
+    else printf("Menu now shows the supply's settings\n");
+}
+
+/* Send the menu's settings. Reporting and DT go first with RQS off, so every
+   error below queues for ERR?; RQS is restored at the end. */
+static void ps5010_apply(int slot) {
+    ps5010_config *cfg = &g_ps5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    const char *bad = ps5010_check(cfg);
+    int i, n, errors;
+
+    if (bad) {
+        printf("\nNot sent: %s\n", bad);
+        return;
+    }
+    if (cfg->fsout_enabled || cfg->logic_enabled) {
+        printf("\nOutputs that will be ON:\n");
+        if (cfg->fsout_enabled)
+            printf("  floating +%.2f V / -%.2f V, limits %.2f / %.2f A\n", cfg->voltage1,
+                   cfg->voltage2, cfg->current_limit1, cfg->current_limit2);
+        if (cfg->logic_enabled)
+            printf("  logic %.2f V, limit %.1f A\n", cfg->logic_voltage, cfg->logic_current_limit);
+        if (!ps5010_confirm("Energise them")) return;
+    }
+
+    printf("\nApplying settings to PS5010...\n");
+    gpib_remote(address);
+    GPIB_PACE(200);
+
+    n = sprintf(ps5010_cmd, "RQS OFF");
+    for (i = 2; i < PS5010_NFLAGS; i++) {
+        if (i == 5) continue;    /* RQS */
+        n += sprintf(ps5010_cmd + n, ";%s %s", ps5010_flag_cmd[i], ps5010_flag_word(i, ps5010_get_flag(cfg, i)));
+    }
+    gpib_write(address, ps5010_cmd);
+    errors = ps5010_show_errors(address);
+
+    /* One message: the supply executes its settings as a group, so no half-sent
+       pair of V and I can conflict, and a processing error drops them all (p. 3-17) */
+    /* snprintf: a damaged settings file can hold any float */
+    snprintf(ps5010_cmd, sizeof(ps5010_cmd), "VPOS %.2f;IPOS %.2f;VNEG %.2f;INEG %.2f;VLOG %.2f;ILOG %.1f;FSOUT %s;LSOUT %s",
+            cfg->voltage1, cfg->current_limit1, cfg->voltage2, cfg->current_limit2,
+            cfg->logic_voltage, cfg->logic_current_limit,
+            cfg->fsout_enabled ? "ON" : "OFF", cfg->logic_enabled ? "ON" : "OFF");
+    gpib_write(address, ps5010_cmd);
+    delay(50);   /* output switching up to 35 ms, current change 20 ms (p. 1-3, 1-4) */
+    if (ps5010_show_errors(address) != 0) errors = 1;   /* -1: no reply */
+    if (cfg->srq_enabled) gpib_write(address, "RQS ON");
+
+    printf("%s\n", errors ? "Errors or no reply; R reads back what the supply holds." : "Settings applied.");
+    if (cfg->dt_enabled) printf("DT SET: the supply holds them until a GET (Utilities).\n");
+    ps5010_show_out(address);
+}
+
+/* Regulation-change, user and trigger settings, sent by Apply */
+static void ps5010_srq_menu(ps5010_config *cfg) {
+    static const char * const __far desc[] = {
+        "SRQ when the positive supply changes CV/CC/unregulated",
+        "SRQ when the negative supply changes mode",
+        "SRQ when the logic supply changes mode",
+        "service requests at all (off: errors still queue for ERR?)",
+        "SRQ when the INST ID button is pressed",
+        "new settings wait for GET (DT SET)"
+    };
+    int c, i;
+
+    for (;;) {
+        clrscr();
+        printf("PS5010 SRQ and trigger settings (sent by Apply)\n");
+        printf("===============================================\n\n");
+        for (i = 2; i < PS5010_NFLAGS; i++) {
+            printf("%d. %-4s %-3s  %s\n", i - 1, ps5010_flag_cmd[i],
+                   ps5010_flag_word(i, ps5010_get_flag(cfg, i)), desc[i - 2]);
+        }
+        printf("\nThe monitor reads REG? and does not service SRQs.\n");
+        printf("1-6 toggles, 0 returns: ");
+        c = getch();
+        if (c == '0' || c == 27) return;
+        i = c - '0' + 1;
+        if (i >= 2 && i < PS5010_NFLAGS) ps5010_set_flag(cfg, i, !ps5010_get_flag(cfg, i));
+    }
+}
+
+/* Settings block from LLSET? (p. 3-7), kept to send back with LLSET */
+static unsigned char __far ps5010_ll[160];
+static int ps5010_ll_len = 0, ps5010_ll_addr = -1;
+
+/* '%', 2-byte count of data + checksum, data, checksum; count, data and
+   checksum sum to 0 mod 256. Moves a valid block to the start: its length, or 0. */
+static int ps5010_ll_take(unsigned char *r, int n) {
+    unsigned char *p = memchr(r, '%', n);
+    unsigned sum = 0;
+    int i, cnt, room;
+
+    if (p == NULL) return 0;
+    /* Compare lengths, not far pointers: a garbage count would wrap the offset */
+    room = n - (int)(p - r) - 3;
+    if (room < 1) return 0;
+    cnt = p[1] * 256 + p[2];
+    if (cnt < 1 || cnt > room) return 0;
+    for (i = 1; i < 3 + cnt; i++) sum += p[i];
+    if (sum & 0xFF) return 0;
+    memmove(r, p, 3 + cnt);
+    return 3 + cnt;
+}
+
+static void ps5010_utilities(int slot) {
+    ps5010_config *cfg = &g_ps5010_config[slot];
+    int address = g_system->modules[slot].gpib_address;
+    int choice, i, n;
+    unsigned hp;
+
+    for (;;) {
+        clrscr();
+        printf("PS5010 Utilities - GPIB %d\n", address);
+        printf("==========================\n\n");
+        printf("1. Identify (ID?)\n");
+        printf("2. ROM self test (TEST)\n");
+        printf("3. Error/event queue (ERR?)\n");
+        printf("4. All settings (SET?)\n");
+        printf("5. Send GET (executes settings held by DT SET)\n");
+        printf("6. INIT - power-on settings: outputs OFF, 0 V\n");
+        printf("7. Save the supply's settings (LLSET?)\n");
+        printf("8. Restore saved settings (LLSET)%s\n", ps5010_ll_addr == address ? "" : " - nothing saved");
+        printf("0. Return\n\nSelect option: ");
+        choice = getch();
+        printf("\n\n");
+        if (choice == '0' || choice == 27) return;
+
+        gpib_remote(address);
+        GPIB_PACE(100);
+        switch (choice) {
+            case '1':
+            case '4':
+                printf("%s\n", ps5010_query(address, choice == '1' ? "ID?" : "SET?", ps5010_cmd,
+                                            sizeof(ps5010_cmd)) ? ps5010_cmd : "No reply");
+                break;
+            case '2':
+                if (!ps5010_query(address, "TEST", ps5010_cmd, sizeof(ps5010_cmd))) {
+                    printf("No reply\n");
+                    break;
+                }
+                /* 0, or the failing ROM's code from Table 3-2 (p. 3-22) */
+                n = atoi(ps5010_cmd + strcspn(ps5010_cmd, "0123456789"));
+                printf("%s -> ", ps5010_cmd);
+                if (n == 0) printf("ROM checksums good\n");
+                else if (n >= 392 && n <= 395) printf("%X000 ROM checksum error\n", 0xC + n - 392);
+                else printf("ROM error %d\n", n);
+                break;
+            case '3':
+                if (ps5010_show_errors(address) == 0) printf("No errors\n");
+                break;
+            case '5':
+                sprintf(ps5010_cmd, "TRIGGER %d\r\n", address);
+                ieee_write(ps5010_cmd);
+                delay(50);   /* GET programming time up to 35 ms (p. 1-3, 1-4) */
+                if (ps5010_show_errors(address) == 0) printf("GET sent\n");
+                ps5010_show_out(address);
+                break;
+            case '6':
+                if (!ps5010_confirm("INIT switches every output OFF and sets 0 V; go ahead")) break;
+                gpib_write(address, "INIT");
+                GPIB_PACE(100);
+                hp = cfg->high_power;
+                init_ps5010_config(slot);
+                cfg->high_power = hp;
+                ps5010_show_errors(address);
+                printf("Supply and menu at the power-on settings (Table 3-3)\n");
+                break;
+            case '7':
+                n = 0;
+                if (gpib_write(address, "LLSET?") == 0) {
+                    GPIB_PACE(20);
+                    n = gpib_read(address, (char *)ps5010_ll, sizeof(ps5010_ll));
+                }
+                ps5010_ll_len = n > 0 ? ps5010_ll_take(ps5010_ll, n) : 0;
+                ps5010_ll_addr = ps5010_ll_len ? address : -1;
+                if (ps5010_ll_len) printf("Saved a %d-byte settings block\n", ps5010_ll_len);
+                else printf("No intact block (count/checksum wrong; a CR or LF in the\nbinary data ends a text-mode GPIB read). Nothing saved.\n");
+                break;
+            case '8':
+                if (ps5010_ll_addr != address) {
+                    printf("Nothing saved for this address (option 7 first)\n");
+                    break;
+                }
+                for (i = 0; i < ps5010_ll_len; i++) {
+                    if (ps5010_ll[i] == 0 || ps5010_ll[i] == '\r' || ps5010_ll[i] == '\n') break;
+                }
+                /* gpib_write sends a NUL-terminated line, "output NN;" + command + CRLF */
+                if (i < ps5010_ll_len || ps5010_ll_len + 6 + 14 > GPIB_BUFFER_SIZE) {
+                    printf("The block is too long or holds bytes (NUL, CR, LF) that a\ntext-mode GPIB write can't carry; not sent\n");
+                    break;
+                }
+                if (!ps5010_confirm("LLSET restores every saved setting, outputs ON included; go ahead")) break;
+                strcpy(ps5010_cmd, "LLSET ");
+                memcpy(ps5010_cmd + 6, ps5010_ll, ps5010_ll_len);
+                ps5010_cmd[6 + ps5010_ll_len] = '\0';
+                gpib_write(address, ps5010_cmd);
+                delay(50);   /* settle, not bus pacing: outputs may switch, up to 35 ms (p. 1-3, 1-4) */
+                if (ps5010_show_errors(address) == 0) printf("Settings restored\n");
+                ps5010_read_back(slot);
+                ps5010_show_out(address);
+                break;
+        }
+        ps5010_pause();
+    }
+}
+
 void configure_ps5010_advanced(int slot) {
-    int choice, done = 0;
     int address = g_system->modules[slot].gpib_address;
     ps5010_config *cfg = &g_ps5010_config[slot];
-    char buffer[80];
-    float temp_float;
-    int temp_int, channel;
-    
-    while (!done) {
+    int choice, i, on;
+    float v, a;
+
+    for (;;) {
         clrscr();
-        printf("PS5010 Dual Power Supply Configuration - Slot %d\n", slot);
-        printf("============================================\n\n");
-        
-        printf("Channel 1:\n");
-        printf("1. Voltage: %.3f V    Current Limit: %.3f A    Output: %s\n",
-               cfg->voltage1, cfg->current_limit1, 
-               cfg->output1_enabled ? "ON" : "OFF");
-        
-        printf("\nChannel 2:\n");
-        printf("2. Voltage: %.3f V    Current Limit: %.3f A    Output: %s\n",
-               cfg->voltage2, cfg->current_limit2,
-               cfg->output2_enabled ? "ON" : "OFF");
-        
-        printf("\nLogic Supply:\n");
-        printf("3. Voltage: %.3f V    Current Limit: %.3f A    Output: %s\n",
-               cfg->logic_voltage, cfg->logic_current_limit,
-               cfg->logic_enabled ? "ON" : "OFF");
-        
-        printf("\nTracking Mode:\n");
-        printf("4. Mode: ");
-        switch(cfg->tracking_mode) {
-            case 0: printf("Independent\n"); break;
-            case 1: printf("Series (outputs track together)\n"); break;
-            case 2: printf("Parallel (current sharing)\n"); break;
-        }
-        
-        printf("\nDisplay:\n");
-        printf("5. Channel: %s    Mode: %s\n",
-               cfg->display_channel == 0 ? "CH1" : 
-               (cfg->display_channel == 1 ? "CH2" : "Logic"),
-               cfg->display_mode == 0 ? "Voltage" : "Current");
-        
-        printf("\nActions:\n");
-        printf("6. LF Termination: %s\n", 
-               cfg->lf_termination ? "ON (LF only)" : "OFF (CRLF)");
-        printf("7. Apply All Settings\n");
-        printf("8. Read Regulation Status\n");
-        printf("9. Test VTRA Command\n");
-        printf("A. Run Communication Test\n");
-        printf("0. Return to Module Config\n");
-        
+        printf("PS5010 Triple Power Supply - Slot %d, GPIB %d\n", slot, address);
+        printf("=============================================\n");
+        printf("Menu values reach the supply only with D, which asks before any output is ON.\n\n");
+        printf("1. Positive  VPOS %5.2f V   IPOS %.2f A\n", cfg->voltage1, cfg->current_limit1);
+        printf("2. Negative  VNEG %5.2f V   INEG %.2f A\n", cfg->voltage2, cfg->current_limit2);
+        printf("3. Logic     VLOG %5.2f V   ILOG %.1f A\n", cfg->logic_voltage, cfg->logic_current_limit);
+        printf("4. Floating outputs, + and - together (FSOUT): %s\n", cfg->fsout_enabled ? "ON" : "OFF");
+        printf("5. Logic output (LSOUT): %s\n", cfg->logic_enabled ? "ON" : "OFF");
+        printf("6. Compartment: %s (floating limit to %.2f A, %.2f A at 15 V and below)\n",
+               cfg->high_power ? "high power" : "standard",
+               ps5010_max_current(cfg->high_power, 32.0f), ps5010_max_current(cfg->high_power, 0.0f));
+        printf("7. SRQ/trigger:");
+        for (i = 2; i < PS5010_NFLAGS; i++)
+            printf(" %s %s", ps5010_flag_cmd[i], ps5010_flag_word(i, ps5010_get_flag(cfg, i)));
+        printf("\n\nD. Apply settings to the PS5010   R. Read settings back from the PS5010\n");
+        printf("S. Status (REG?, OUT?, SET?)      T. Set both floating now (VTRA/ITRA)\n");
+        printf("O. Switch an output now           X. ALL OUTPUTS OFF now (OUT OFF)\n");
+        printf("U. Utilities (ID, TEST, errors, GET, INIT, LLSET)\n");
+        printf("C. Communication test (read only) 0. Return\n");
         printf("\nSelect option: ");
-        choice = getch();
-        
-        switch(choice) {
-            case '1':  /* Channel 1 settings */
-                printf("\n\nChannel 1 Configuration:\n");
-                printf("V)oltage, C)urrent limit, O)utput toggle: ");
-                choice = toupper(getch());
-                
-                switch(choice) {
-                    case 'V':
-                        printf("\nEnter positive voltage (0-32V): ");
-                        scanf("%f", &temp_float);
-                        if (temp_float >= 0.0 && temp_float <= 32.0) {
-                            cfg->voltage1 = temp_float;
-                        }
-                        break;
-                    case 'C':
-                        printf("\nEnter current limit in mA (50-750): ");
-                        scanf("%f", &temp_float);
-                        if (temp_float >= 50.0 && temp_float <= 750.0) {
-                            cfg->current_limit1 = temp_float / 1000.0;
-                        }
-                        break;
-                    case 'O':
-                        cfg->output1_enabled = !cfg->output1_enabled;
-                        break;
+        choice = toupper(getch());
+        printf("\n\n");
+
+        switch (choice) {
+            case '1':
+            case '2':
+                {
+                    float *vp = choice == '1' ? &cfg->voltage1 : &cfg->voltage2;
+                    float *ap = choice == '1' ? &cfg->current_limit1 : &cfg->current_limit2;
+
+                    printf("%s floating supply (resolution 0.01 V to 10 V, 0.1 V above; 0.05 A)\n",
+                           choice == '1' ? "Positive" : "Negative (magnitude)");
+                    v = *vp;
+                    if (ps5010_ask("Voltage", 0.0f, 32.0f, &v)) *vp = ps5010_round(v, v <= 10.0f ? 0.01f : 0.1f);
+                    a = *ap;
+                    if (ps5010_ask("Current limit, A", 0.05f, ps5010_max_current(cfg->high_power, *vp), &a))
+                        *ap = ps5010_round(a, 0.05f);
+                    ps5010_fit_limits(cfg);
                 }
+                ps5010_pause();
                 break;
-                
-            case '2':  /* Channel 2 settings */
-                printf("\n\nChannel 2 Configuration:\n");
-                printf("V)oltage, C)urrent limit, O)utput toggle: ");
-                choice = toupper(getch());
-                
-                switch(choice) {
-                    case 'V':
-                        printf("\nEnter negative voltage (0-32V): ");
-                        scanf("%f", &temp_float);
-                        if (temp_float >= 0.0 && temp_float <= 32.0) {
-                            cfg->voltage2 = temp_float;
-                        }
-                        break;
-                    case 'C':
-                        printf("\nEnter current limit in mA (50-750): ");
-                        scanf("%f", &temp_float);
-                        if (temp_float >= 50.0 && temp_float <= 750.0) {
-                            cfg->current_limit2 = temp_float / 1000.0;
-                        }
-                        break;
-                    case 'O':
-                        cfg->output2_enabled = !cfg->output2_enabled;
-                        break;
-                }
+            case '3':
+                printf("Logic supply (resolution 0.01 V; 0.1 A)\n");
+                v = cfg->logic_voltage;
+                if (ps5010_ask("Voltage", 4.5f, 5.5f, &v)) cfg->logic_voltage = ps5010_round(v, 0.01f);
+                a = cfg->logic_current_limit;
+                if (ps5010_ask("Current limit, A", 0.1f, 3.0f, &a)) cfg->logic_current_limit = ps5010_round(a, 0.1f);
+                ps5010_pause();
                 break;
-                
-            case '3':  /* Logic supply settings */
-                printf("\n\nLogic Supply Configuration:\n");
-                printf("V)oltage, C)urrent limit, O)utput toggle: ");
-                choice = toupper(getch());
-                
-                switch(choice) {
-                    case 'V':
-                        printf("\nEnter voltage (4.5-5.5V): ");
-                        scanf("%f", &temp_float);
-                        if (temp_float >= 4.5 && temp_float <= 5.5) {
-                            cfg->logic_voltage = temp_float;
-                        }
-                        break;
-                    case 'C':
-                        printf("\nEnter current limit in A (0.1-3.0): ");
-                        scanf("%f", &temp_float);
-                        if (temp_float >= 0.1 && temp_float <= 3.0) {
-                            cfg->logic_current_limit = temp_float;
-                        }
-                        break;
-                    case 'O':
-                        cfg->logic_enabled = !cfg->logic_enabled;
-                        break;
-                }
+            case '4':
+                cfg->fsout_enabled = !cfg->fsout_enabled;
                 break;
-                
-            case '4':  /* Tracking mode */
-                printf("\n\nTracking modes:\n");
-                printf("0. Independent (no tracking)\n");
-                printf("1. Series (voltages track together)\n");
-                printf("2. Parallel (current sharing)\n");
-                printf("Select: ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 2) {
-                    cfg->tracking_mode = temp_int;
-                }
+            case '5':
+                cfg->logic_enabled = !cfg->logic_enabled;
                 break;
-                
-            case '5':  /* Display settings */
-                printf("\n\nDisplay channel (0=CH1, 1=CH2, 2=Logic): ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 2) {
-                    cfg->display_channel = temp_int;
-                }
-                
-                printf("Display mode (0=Voltage, 1=Current): ");
-                scanf("%d", &temp_int);
-                if (temp_int >= 0 && temp_int <= 1) {
-                    cfg->display_mode = temp_int;
-                }
+            case '6':
+                cfg->high_power = !cfg->high_power;
+                ps5010_fit_limits(cfg);
+                ps5010_pause();
                 break;
-                
-            case '6':  /* LF termination */
-                cfg->lf_termination = !cfg->lf_termination;
-                printf("\n\nLF termination %s.\n", 
-                       cfg->lf_termination ? "enabled (LF only)" : "disabled (CRLF)");
-                printf("Press any key to continue...");
-                getch();
+            case '7':
+                ps5010_srq_menu(cfg);
                 break;
-                
-            case '7':  /* Apply all settings */
-                printf("\n\nApplying settings to PS5010...\n");
-                
-                gpib_remote(address);
-                GPIB_PACE(200);
-                
-                ps5010_set_voltage(address, 1, cfg->voltage1);
-                ps5010_set_voltage(address, 2, cfg->voltage2);
-                ps5010_set_voltage(address, 3, cfg->logic_voltage);
-                
-                ps5010_set_current(address, 1, cfg->current_limit1);
-                ps5010_set_current(address, 2, cfg->current_limit2);
-                ps5010_set_current(address, 3, cfg->logic_current_limit);
-                
-                ps5010_set_output(address, 1, cfg->output1_enabled);
-                ps5010_set_output(address, 2, cfg->output2_enabled);
-                ps5010_set_output(address, 3, cfg->logic_enabled);
-                
-                printf("Settings applied!\n");
-                printf("Press any key to continue...");
-                getch();
+            case 'D':
+                ps5010_apply(slot);
+                ps5010_pause();
                 break;
-                
-            case '8':  /* Read regulation status */
-                printf("\n\nReading regulation status...\n");
-                
+            case 'R':
+                ps5010_read_back(slot);
+                ps5010_pause();
+                break;
+            case 'S':
                 {
                     int neg_stat, pos_stat, log_stat;
-                    if (ps5010_read_regulation(address, &neg_stat, &pos_stat, &log_stat)) {
-                        printf("\nChannel 1 (POS): ");
-                        switch(pos_stat) {
-                            case 1: printf("Voltage regulation mode\n"); break;
-                            case 2: printf("Current regulation mode\n"); break;
-                            case 3: printf("Unregulated\n"); break;
-                            default: printf("Unknown\n");
-                        }
-                        
-                        printf("Channel 2 (NEG): ");
-                        switch(neg_stat) {
-                            case 1: printf("Voltage regulation mode\n"); break;
-                            case 2: printf("Current regulation mode\n"); break;
-                            case 3: printf("Unregulated\n"); break;
-                            default: printf("Unknown\n");
-                        }
-                        
-                        printf("Logic supply: ");
-                        switch(log_stat) {
-                            case 1: printf("Voltage regulation mode\n"); break;
-                            case 2: printf("Current regulation mode\n"); break;
-                            case 3: printf("Unregulated\n"); break;
-                            default: printf("Unknown\n");
-                        }
-                        
-                        printf("\nNote: PS5010 cannot measure actual voltage/current values.\n");
-                        printf("Only regulation status is available via GPIB.\n");
-                    } else {
-                        printf("Failed to read regulation status\n");
-                    }
+                    if (ps5010_read_regulation(address, &neg_stat, &pos_stat, &log_stat))
+                        printf("REG? positive %s, negative %s, logic %s (CV/CC/UR)\n", ps5010_reg_text(pos_stat),
+                               ps5010_reg_text(neg_stat), ps5010_reg_text(log_stat));
+                    else
+                        printf("REG? no reply\n");
+                    ps5010_show_out(address);
+                    if (ps5010_query(address, "SET?", ps5010_cmd, sizeof(ps5010_cmd))) printf("SET? %s\n", ps5010_cmd);
+                    printf("\nThe PS5010 can't measure its outputs; use a DMM for values.\n");
                 }
-                
-                printf("\nPress any key to continue...");
-                getch();
+                ps5010_pause();
                 break;
-                
-            case '9':  /* VTRA tracking-voltage test */
-                printf("\n\nTesting tracking voltage command...\n");
-                printf("Note: Hardware tracking mode is set by front panel switch.\n");
-                printf("VTRA command sets both POS and NEG to same voltage.\n\n");
-                
-                printf("Setting both supplies to 10V using VTRA...\n");
-                ps5010_set_tracking_voltage(address, 10.0);
-                GPIB_PACE(200);
-                
-                printf("Command sent. Check front panel displays.\n");
-                printf("\nPress any key to continue...");
-                getch();
+            case 'T':
+                printf("VTRA/ITRA set both floating supplies to one magnitude, now.\n");
+                v = cfg->voltage1;
+                a = cfg->current_limit1;
+                if (!ps5010_ask("Voltage, both", 0.0f, 32.0f, &v)) {
+                    ps5010_pause();
+                    break;
+                }
+                v = ps5010_round(v, v <= 10.0f ? 0.01f : 0.1f);
+                if (a > ps5010_max_current(cfg->high_power, v)) a = ps5010_max_current(cfg->high_power, v);
+                if (!ps5010_ask("Current limit, both, A", 0.05f, ps5010_max_current(cfg->high_power, v), &a)) {
+                    ps5010_pause();
+                    break;
+                }
+                a = ps5010_round(a, 0.05f);
+                gpib_remote(address);
+                on = ps5010_query_on(address, "FSOUT?");
+                printf("Send VTRA %.2f;ITRA %.2f.%s\n", v, a, on == 0 ? "" :
+                       on == 1 ? " Floating outputs are ON: the terminals change now." :
+                                 " FSOUT? didn't answer: the outputs may be ON.");
+                if (!ps5010_confirm("Send")) break;
+                sprintf(ps5010_cmd, "VTRA %.2f;ITRA %.2f", v, a);
+                gpib_write(address, ps5010_cmd);
+                if (ps5010_show_errors(address) == 0) {
+                    cfg->voltage1 = cfg->voltage2 = v;
+                    cfg->current_limit1 = cfg->current_limit2 = a;
+                    printf("Both floating supplies set; menu updated\n");
+                }
+                ps5010_pause();
                 break;
-                
-            case 'A':  /* Communication test */
+            case 'O':
+                printf("F)loating (FSOUT), L)ogic (LSOUT) or A)ll (OUT)? ");
+                choice = toupper(getch());
+                if (choice != 'F' && choice != 'L' && choice != 'A') break;
+                printf("%c   1 = ON, 0 = OFF: ", choice);
+                on = getch();
+                if (on != '0' && on != '1') break;
+                on -= '0';
+                printf("%s\n", on ? "ON" : "OFF");
+                gpib_remote(address);
+                GPIB_PACE(100);
+                if (on) {
+                    /* What the supply holds, which may not be the menu's values */
+                    for (i = 0; i < 3; i++) {
+                        static const char * const __far vq[] = { "VPOS?", "VNEG?", "VLOG?" };
+                        if (ps5010_query_value(address, vq[i], &v)) printf("  %.4s %.2f V", vq[i], fabs(v));
+                    }
+                    printf("\n");
+                    if (!ps5010_confirm("Turn ON at the supply's present settings")) break;
+                }
+                sprintf(ps5010_cmd, "%s %s", choice == 'F' ? "FSOUT" : choice == 'L' ? "LSOUT" : "OUT",
+                        on ? "ON" : "OFF");
+                gpib_write(address, ps5010_cmd);
+                delay(50);   /* output on/off about 12 ms (p. 1-3) */
+                if (ps5010_show_errors(address) == 0) {
+                    if (choice != 'L') cfg->fsout_enabled = on;
+                    if (choice != 'F') cfg->logic_enabled = on;
+                }
+                ps5010_show_out(address);
+                ps5010_pause();
+                break;
+            case 'X':
+                gpib_remote(address);
+                gpib_write(address, "OUT OFF");
+                delay(50);   /* output on/off about 12 ms (p. 1-3) */
+                cfg->fsout_enabled = 0;
+                cfg->logic_enabled = 0;
+                ps5010_show_errors(address);
+                ps5010_show_out(address);
+                ps5010_pause();
+                break;
+            case 'U':
+                ps5010_utilities(slot);
+                break;
+            case 'C':
                 test_ps5010_comm(address);
                 break;
-                
             case '0':
-                done = 1;
-                break;
+            case 27:
+                return;
         }
     }
 }
