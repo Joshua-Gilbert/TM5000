@@ -68,8 +68,8 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (Driver488, 380,792 bytes) and `tm5000g.exe` (GRIDGPIB,
-381,082 bytes), ~372 KB each. Prebuilt copies of both are committed in `src/`.
+Output: `tm5000.exe` (Driver488, 380,824 bytes) and `tm5000g.exe` (GRIDGPIB,
+381,098 bytes), ~372 KB each. Prebuilt copies of both are committed in `src/`.
 
 `tm5000g.exe` uses `gpib_gg.c` + `gridgpib.c` instead of `gpib.c`, and compiles
 `modules.c` / `module_funcs.c` a second time with `-DGRIDGPIB` (as

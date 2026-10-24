@@ -423,6 +423,7 @@ int apply_config_profile(config_profile *profile) {
     memcpy(g_dc5009_config, profile->dc5009_configs, sizeof(g_dc5009_config));
     memcpy(g_dc5010_config, profile->dc5010_configs, sizeof(g_dc5010_config));
     memcpy(g_fg5010_config, profile->fg5010_configs, sizeof(g_fg5010_config));
+    for (i = 0; i < 10; i++) fg5010_fix_config(i);
     
     memcpy(&g_graph_scale, &profile->graph_settings, sizeof(g_graph_scale));
     memcpy(&g_fft_config, &profile->fft_settings, sizeof(g_fft_config));
