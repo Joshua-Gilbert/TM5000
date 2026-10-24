@@ -110,16 +110,20 @@ void test_ps5004_comm(int address);
 /* PS5010 functions */
 void init_ps5010_config(int slot);
 void configure_ps5010_advanced(int slot);
-void ps5010_init(int address);
-void ps5010_set_voltage(int address, int channel, float voltage);
-void ps5010_set_current(int address, int channel, float current);
-void ps5010_set_output(int address, int channel, int on);
-void ps5010_set_tracking_voltage(int address, float voltage);
+/* Flags in the order of ps5010_flag_cmd: FSOUT LSOUT PRI NRI LRI RQS USER DT */
+#define PS5010_NFLAGS 8
+extern const char * const __far ps5010_flag_cmd[PS5010_NFLAGS];
+int ps5010_get_flag(const ps5010_config *cfg, int i);
+void ps5010_set_flag(ps5010_config *cfg, int i, int on);
+float ps5010_max_current(int high_power, float volts);
+float ps5010_round(float v, float step);
+int ps5010_query(int address, const char *query, char *buf, int maxlen);
+int ps5010_query_value(int address, const char *query, float *value);
+int ps5010_query_on(int address, const char *query);
 int ps5010_read_regulation(int address, int *neg_stat, int *pos_stat, int *log_stat);
-int ps5010_get_settings(int address, char *buffer, int maxlen);
-int ps5010_get_error(int address);
-void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on);
-void ps5010_set_srq(int address, int on);
+const char *ps5010_reg_text(int code);
+const char *ps5010_error_text(int code);
+int ps5010_show_errors(int address);
 void test_ps5010_comm(int address);
 
 /* DC5009 functions */
