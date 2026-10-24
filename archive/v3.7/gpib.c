@@ -1,0 +1,604 @@
+/*
+ * Driver488 back end (tm5000.exe): GPIB I/O through the Personal488 devices
+ * \DEV\IEEEOUT and \DEV\IEEEIN. Driver488 enforces strict command/response pairing.
+ * gpib_gg.c implements the same gpib.h over GRIDGPIB.
+ */
+
+#include "gpib.h"
+
+extern void rawmode(int handle);
+
+int ieee_write(const char *str) {
+    if (ieee_out < 0) return -1;
+    return write(ieee_out, str, strlen(str));
+}
+
+int ieee_read(char *buffer, int maxlen) {
+    int bytes_read;
+    
+    if (ieee_in < 0) return -1;
+    
+    bytes_read = read(ieee_in, buffer, maxlen-1);
+    if (bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+    } else if (bytes_read < 0) {
+        if (errno == 5) {  /* general failure: usually just no data available */
+            buffer[0] = '\0';
+            return 0;  /* no data, not an error */
+        } else if (errno == 9) {  /* bad file number: READFAULT */
+            printf("DEBUG: READFAULT detected (errno=9) - attempting recovery\n");
+            buffer[0] = '\0';
+            return -1;  /* callers fall back on -1 */
+        } else if (errno == 6) {  /* invalid handle or device not ready */
+            printf("DEBUG: Invalid handle or device not ready (errno=6)\n");
+            buffer[0] = '\0';
+            return -1;
+        } else {
+            printf("DEBUG: Read error, errno=%d\n", errno);
+            buffer[0] = '\0';
+            return bytes_read;
+        }
+    }
+    
+    return bytes_read;
+}
+
+int gpib_check_srq(int address) {
+    char cmd[80];
+    char response[10];
+    int status;
+    
+    sprintf(cmd, "spoll %2d\r\n", address);
+    ieee_write(cmd);
+    delay(50);
+    
+    if (ieee_read(response, sizeof(response)) > 0) {
+        status = atoi(response);
+        return status;
+    }
+    return 0;
+}
+
+const char gpib_driver_name[] = "Personal488 (Driver488)";
+const char gpib_driver_note[] = "Note: Personal488 enforces strict command/response pairing\n";
+
+/* 0: cleanup() sends LOCAL to each instrument slot itself */
+int gpib_release_bus(void) { return 0; }
+
+void gpib_driver_help(void) {
+    printf("\nMake sure:\n");
+    printf("1. DRVR488.EXE is loaded\n");
+    printf("2. Personal488 hardware is connected\n");
+}
+
+/* Probe under a 1 s TIME OUT: OUTPUT to an empty address fails with "no listener",
+ * and a device that listens but never talks times out. Restores Driver488's 10 s after. */
+int gpib_probe(int address, char *id, int maxlen) {
+    char cmd[40];
+    int present = 0;
+    
+    id[0] = '\0';
+    ieee_write("TIME OUT 1\r\n");
+    sprintf(cmd, "OUTPUT %2d;ID?\r\n", address);
+    if (ieee_write(cmd) > 0) {
+        delay(50);
+        sprintf(cmd, "ENTER %2d\r\n", address);
+        if (ieee_write(cmd) > 0 && ieee_read(id, maxlen) > 0) present = 1;
+        if (!present || strncmp(id, "ID", 2) != 0) {
+            sprintf(cmd, "OUTPUT %2d;*IDN?\r\n", address);
+            if (ieee_write(cmd) > 0) {
+                delay(50);
+                sprintf(cmd, "ENTER %2d\r\n", address);
+                if (ieee_write(cmd) > 0 && ieee_read(id, maxlen) > 0) present = 1;
+                else if (!present) id[0] = '\0';
+            }
+        }
+    }
+    ieee_write("TIME OUT 10\r\n");
+    return present;
+}
+
+int ieee_spoll(int address, unsigned char *status) {
+    char cmd[80];
+    char response[10];
+    int result;
+    
+    sprintf(cmd, "spoll %2d\r\n", address);
+    ieee_write(cmd);
+    delay(50);
+    
+    if (ieee_read(response, sizeof(response)) > 0) {
+        result = atoi(response);
+        *status = (unsigned char)(result & 0xFF);
+        return 0;
+    }
+    *status = 0;
+    return -1;
+}
+
+void gpib_write(int address, char *command) {
+    char cmd_buffer[GPIB_BUFFER_SIZE];
+    
+    if (g_system && address >= 10 && address < 18) {
+        int slot = address - 10;
+        if (slot >= 0 && slot < 10 && 
+            g_system->modules[slot].module_type == MOD_DM5120) {
+            gpib_check_srq(address);
+            delay(50);
+        }
+    }
+    
+    sprintf(cmd_buffer, "output %2d;%s\r\n", address, command);
+    ieee_write(cmd_buffer);
+    
+    if (g_system && address >= 10 && address < 18) {
+        int slot = address - 10;
+        if (slot >= 0 && slot < 10 && 
+            g_system->modules[slot].module_type == MOD_DM5120) {
+            delay(100);
+        } else {
+            delay(50);
+        }
+    } else {
+        delay(50);
+    }
+}
+
+int gpib_read(int address, char *buffer, int maxlen) {
+    char cmd_buffer[80];
+    int bytes_read;
+    
+    sprintf(cmd_buffer, "enter %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    
+    delay(50);
+    
+    bytes_read = ieee_read(buffer, maxlen);
+    return bytes_read;
+}
+
+int gpib_read_float(int address, float *value) {
+    char buffer[GPIB_BUFFER_SIZE];
+    char cmd_buffer[80];
+    
+    sprintf(cmd_buffer, "enter %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    
+    if (ieee_read(buffer, sizeof(buffer)) > 0) {
+        if (sscanf(buffer, "%*[^+-]%f", value) == 1) {
+            return 1;
+        }
+        if (sscanf(buffer, "%f", value) == 1) {
+            return 1;
+        }
+        if (sscanf(buffer, "%e", value) == 1) {
+            return 1;
+        }
+    }
+    
+    return 0;
+}
+
+void gpib_remote(int address) {
+    char cmd_buffer[80];
+    
+    sprintf(cmd_buffer, "remote %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    delay(100);  /* longer settle, for the DM5120 */
+}
+
+void gpib_local(int address) {
+    char cmd_buffer[80];
+    
+    sprintf(cmd_buffer, "local %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    delay(50);
+}
+
+void gpib_clear(int address) {
+    char cmd_buffer[80];
+    
+    sprintf(cmd_buffer, "clear %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    delay(100);
+}
+
+/*
+ * DM5120 variants: each finds the slot by address and terminates with LF only when
+ * that slot's lf_termination is set (instrument front panel shows "LF"), else CRLF.
+ */
+void gpib_write_dm5120(int address, char *command) {
+    char cmd_buffer[GPIB_BUFFER_SIZE];
+    int slot;
+    char *termination;
+    
+    slot = -1;
+    {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    
+    if (slot != -1 && g_dm5120_config[slot].lf_termination) {
+        termination = "\n";
+    } else {
+        termination = "\r\n";
+    }
+    
+    gpib_check_srq(address);
+    delay(50);
+    
+    sprintf(cmd_buffer, "output %2d; %s%s", address, command, termination);
+    ieee_write(cmd_buffer);
+    
+    delay(200);
+}
+
+int gpib_read_dm5120(int address, char *buffer, int maxlen) {
+    char cmd_buffer[80];
+    int bytes_read;
+    int slot;
+    char *termination;
+    
+    slot = -1;
+    {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    
+    if (slot != -1 && g_dm5120_config[slot].lf_termination) {
+        termination = "\n";
+    } else {
+        termination = "\r\n";
+    }
+    
+    sprintf(cmd_buffer, "enter %2d%s", address, termination);
+    ieee_write(cmd_buffer);
+    
+    delay(100);
+    
+    bytes_read = ieee_read(buffer, maxlen-1);
+    if (bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+    } else {
+        buffer[0] = '\0';
+    }
+    
+    return bytes_read;
+}
+
+int gpib_read_float_dm5120(int address, float *value) {
+    char buffer[GPIB_BUFFER_SIZE];
+    char cmd_buffer[80];
+    int slot;
+    char *termination;
+    
+    slot = -1;
+    {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    
+    if (slot != -1 && g_dm5120_config[slot].lf_termination) {
+        termination = "\n";
+    } else {
+        termination = "\r\n";
+    }
+    
+    sprintf(cmd_buffer, "enter %2d%s", address, termination);
+    ieee_write(cmd_buffer);
+    
+    delay(100);
+    
+    if (ieee_read(buffer, sizeof(buffer)) > 0) {
+        if (sscanf(buffer, "NDCV%e", value) == 1) return 1;
+        if (sscanf(buffer, "DCV%e", value) == 1) return 1;
+        if (sscanf(buffer, "NACV%e", value) == 1) return 1;
+        if (sscanf(buffer, "ACV%e", value) == 1) return 1;
+        if (sscanf(buffer, "%e", value) == 1) return 1;
+        if (sscanf(buffer, "%f", value) == 1) return 1;
+    }
+    
+    return 0;
+}
+
+void gpib_remote_dm5120(int address) {
+    char cmd_buffer[80];
+    int slot;
+    char *termination;
+    
+    slot = -1;
+    {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    
+    if (slot != -1 && g_dm5120_config[slot].lf_termination) {
+        termination = "\n";
+    } else {
+        termination = "\r\n";
+    }
+    
+    sprintf(cmd_buffer, "remote %2d%s", address, termination);
+    ieee_write(cmd_buffer);
+    delay(200);
+}
+
+void gpib_local_dm5120(int address) {
+    char cmd_buffer[80];
+    int slot;
+    char *termination;
+    
+    slot = -1;
+    {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    
+    if (slot != -1 && g_dm5120_config[slot].lf_termination) {
+        termination = "\n";
+    } else {
+        termination = "\r\n";
+    }
+    
+    sprintf(cmd_buffer, "local %2d%s", address, termination);
+    ieee_write(cmd_buffer);
+    delay(100);
+}
+
+void gpib_clear_dm5120(int address) {
+    char cmd_buffer[80];
+    int slot;
+    char *termination;
+    
+    slot = -1;
+    {
+        int i;
+        for (i = 0; i < 10; i++) {
+            if (g_system->modules[i].gpib_address == address && g_system->modules[i].module_type == MOD_DM5120) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    
+    if (slot != -1 && g_dm5120_config[slot].lf_termination) {
+        termination = "\n";
+    } else {
+        termination = "\r\n";
+    }
+    
+    sprintf(cmd_buffer, "abort%s", termination);
+    ieee_write(cmd_buffer);
+    delay(100);
+    
+    sprintf(cmd_buffer, "clear %2d%s", address, termination);
+    ieee_write(cmd_buffer);
+    delay(200);
+}
+
+void gpib_write_dm5010(int address, char *command) {
+    char cmd_buffer[GPIB_BUFFER_SIZE];
+    
+    gpib_check_srq(address);
+    delay(50);
+    
+    sprintf(cmd_buffer, "output %2d; %s\r\n", address, command);
+    ieee_write(cmd_buffer);
+    
+    delay(100);
+}
+
+int gpib_read_dm5010(int address, char *buffer, int maxlen) {
+    char cmd_buffer[80];
+    int bytes_read;
+    
+    sprintf(cmd_buffer, "enter %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    
+    delay(100);
+    
+    bytes_read = ieee_read(buffer, maxlen-1);
+    if (bytes_read > 0) {
+        buffer[bytes_read] = '\0';
+    } else {
+        buffer[0] = '\0';
+    }
+    
+    return bytes_read;
+}
+
+int gpib_read_float_dm5010(int address, float *value) {
+    char buffer[GPIB_BUFFER_SIZE];
+    char cmd_buffer[80];
+    
+    sprintf(cmd_buffer, "enter %2d\r\n", address);
+    ieee_write(cmd_buffer);
+    
+    delay(100);
+    
+    if (ieee_read(buffer, sizeof(buffer)) > 0) {
+        if (sscanf(buffer, "%e", value) == 1) return 1;
+        if (sscanf(buffer, "%f", value) == 1) return 1;
+        if (sscanf(buffer, "%eV", value) == 1) return 1;
+        if (sscanf(buffer, "%eA", value) == 1) return 1;
+        if (sscanf(buffer, "%eR", value) == 1) return 1;
+    }
+    
+    return 0;
+}
+
+int command_has_response(const char *cmd) {
+    if (strncasecmp(cmd, "hello", 5) == 0) return 1;
+    if (strncasecmp(cmd, "status", 6) == 0) return 1;
+    if (strncasecmp(cmd, "enter", 5) == 0) return 1;
+    if (strncasecmp(cmd, "spoll", 5) == 0) return 1;
+    
+    if (strncasecmp(cmd, "fill", 4) == 0) return 1;
+    
+    if (strncasecmp(cmd, "output", 6) == 0) return 0;
+    if (strncasecmp(cmd, "remote", 6) == 0) return 0;
+    if (strncasecmp(cmd, "local", 5) == 0) return 0;
+    if (strncasecmp(cmd, "clear", 5) == 0) return 0;
+    if (strncasecmp(cmd, "reset", 5) == 0) return 0;  /* Usually no response */
+    
+    if (strncasecmp(cmd, "break", 5) == 0) return 0;
+    
+    return 0;
+}
+
+void drain_input_buffer(void) {
+    char buffer[GPIB_BUFFER_SIZE];
+    int bytes_read;
+    int total_drained = 0;
+    
+    while ((bytes_read = read(ieee_in, buffer, sizeof(buffer))) > 0) {
+        total_drained += bytes_read;
+        if (total_drained > 1024) break;  /* bound the drain if the driver keeps returning data */
+    }
+}
+
+int init_gpib_system(void) {
+    int i, bytes_read;
+    char response[GPIB_BUFFER_SIZE];
+    
+    printf("Opening IEEE device handles...\n");
+    
+    ieee_out = open("\\dev\\ieeeout", O_WRONLY | O_BINARY);
+    if (ieee_out < 0) {
+        printf("Cannot open \\DEV\\IEEEOUT\n");
+        return -1;
+    }
+    
+    printf("Waiting before opening input device...\n");
+    delay(400);  /* let the driver settle before opening IEEEIN */
+    
+    ieee_in = open("\\dev\\ieeein", O_RDONLY | O_BINARY);
+    if (ieee_in < 0) {
+        printf("Cannot open \\DEV\\IEEEIN\n");
+        close(ieee_out);
+        return -1;
+    }
+    
+    printf("Setting raw mode...\n");
+    rawmode(ieee_out);
+    rawmode(ieee_in);  /* may fail on Personal488; harmless */
+    
+    printf("Sending BREAK via IOCTL...\n");
+    {
+        union REGS regs;
+        struct SREGS segs;
+        char break_cmd[] = "BREAK";
+        
+        regs.x.ax = 0x4403;     /* IOCTL write to the driver's control channel */
+        regs.x.bx = ieee_out;
+        regs.x.cx = 5;          /* strlen("BREAK") */
+        regs.x.dx = (unsigned)break_cmd;
+        segread(&segs);         /* current DS supplies the segment of DS:DX */
+        
+        intdosx(&regs, &regs, &segs);
+        
+        if (regs.x.cflag) {
+            printf("  IOCTL BREAK failed, error code: %d\n", regs.x.ax);
+        } else {
+            printf("  IOCTL BREAK succeeded\n");
+        }
+    }
+    delay(200);
+    
+    printf("Initializing IEEE subsystem...\n");
+    
+    ieee_write("hello\r\n");
+    delay(100);
+    
+    bytes_read = ieee_read(response, sizeof(response));
+    if (bytes_read > 0) {
+        printf("IOTech Driver: %s", response);
+    } else {
+        printf("Warning: No hello response\n");
+    }
+    
+    printf("Querying status...\n");
+    ieee_write("status\r\n");
+    delay(100);
+    
+    bytes_read = ieee_read(response, sizeof(response));
+    if (bytes_read > 0) {
+        printf("Driver Status: %s", response);
+    }
+    
+    printf("Draining input buffer...\n");
+    drain_input_buffer();
+    
+    printf("GPIB system initialized successfully.\n");
+    return 0;
+}
+
+/* Query driver STATUS into gpib_error/g_error_msg; a SEQUENCE error gets one ABORT to clear it. */
+void check_gpib_error(void) {
+    char status[GPIB_BUFFER_SIZE];
+    int bytes_read;
+    
+    memset(status, 0, sizeof(status));
+    
+    ieee_write("status\r\n");
+    delay(50);
+    
+    bytes_read = ieee_read(status, sizeof(status));
+    
+    if (bytes_read > 0) {
+        printf("GPIB Status: %s\n", status);
+        
+        if (strstr(status, "ERROR") || strstr(status, "Error")) {
+            strcpy(g_error_msg, status);
+            gpib_error = 1;
+            
+            if (strstr(status, "SEQUENCE")) {
+                printf("Attempting to clear SEQUENCE error...\n");
+                
+                ieee_write("abort\r\n");
+                delay(100);
+                
+                ieee_write("status\r\n");
+                delay(50);
+                bytes_read = ieee_read(status, sizeof(status));
+                if (bytes_read > 0) {
+                    printf("Status after abort: %s\n", status);
+                    if (!strstr(status, "ERROR")) {
+                        gpib_error = 0;
+                    }
+                }
+            }
+        } else {
+            gpib_error = 0;
+        }
+    } else {
+        printf("Warning: No status response received\n");
+        gpib_error = 1;
+        strcpy(g_error_msg, "No status response");
+    }
+}

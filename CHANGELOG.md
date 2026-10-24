@@ -15,7 +15,10 @@ The project has three eras:
 
 ---
 
-## [Unreleased] — Audit fixes
+## [3.8] — 2026-10-24 — Every instrument checked against its manual; audit fixes
+
+Detailed changelog: [docs/changelogs/CHANGELOG_v3.8.md](docs/changelogs/CHANGELOG_v3.8.md) ·
+Previous source: [archive/v3.7/](archive/v3.7/)
 
 Built clean with OpenWatcom 2.0 (no new warnings), both executables; not yet run on
 hardware.
@@ -158,6 +161,9 @@ hardware.
   of an unconditional "Settings applied!". Query Status prints whatever is still queued.
 - Utilities menu: `ID?`, self test (`TEST?`), error/event queue, front-panel `TEXT`,
   `INIT`, `RESET` and `PONSAVE` (both confirmed first), and the firmware's `HELP?`.
+  Also `DELAY`, `DT TRIG/OFF` with a bus GET, `NULLVAL ACQUIRE`, `KEY` and the
+  `ERRSTAT`/`OVER`/`USER` event masks, so every command in the manual except `CAL` is
+  reachable.
 - The reading-rate tables use the 50 Hz figures where they are slower, and the 6½-digit
   bus-triggered rate is 0.2/s (was 0.25).
 

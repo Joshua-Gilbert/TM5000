@@ -4,7 +4,7 @@ TM5000 is a 16-bit real-mode MS-DOS application built with the **OpenWatcom
 C/C++** toolchain. It runs on period hardware or DOSBox / 86Box, not on a modern
 OS directly.
 
-This guide covers the current tree, [`src/`](../src) (v3.7). Versions under
+This guide covers the current tree, [`src/`](../src) (v3.8). Versions under
 [`archive/`](../archive) are reference only.
 
 ---
@@ -68,8 +68,8 @@ wmake          # native OpenWatcom make
 make           # GNU make (e.g. under WSL) invoking the Watcom tools
 ```
 
-Output: `tm5000.exe` (Driver488, 380,824 bytes) and `tm5000g.exe` (GRIDGPIB,
-381,098 bytes), ~372 KB each. Prebuilt copies of both are committed in `src/`.
+Output: `tm5000.exe` (Driver488, 382,760 bytes) and `tm5000g.exe` (GRIDGPIB,
+383,050 bytes), ~374 KB each. Prebuilt copies of both are committed in `src/`.
 
 `tm5000g.exe` uses `gpib_gg.c` + `gridgpib.c` instead of `gpib.c`, and compiles
 `modules.c` / `module_funcs.c` a second time with `-DGRIDGPIB` (as

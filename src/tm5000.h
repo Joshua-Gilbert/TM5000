@@ -21,9 +21,9 @@
 #include <errno.h>
 
 /* Version information */
-#define TM5000_VERSION "3.7"
+#define TM5000_VERSION "3.8"
 #define TM5000_VERSION_MAJOR 3
-#define TM5000_VERSION_MINOR 7
+#define TM5000_VERSION_MINOR 8
 
 /* Per-slot sample buffer limits */
 #define MAX_SAMPLES_PER_MODULE 1024

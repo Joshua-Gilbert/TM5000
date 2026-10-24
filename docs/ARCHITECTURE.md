@@ -1,4 +1,4 @@
-# TM5000 Architecture (as-built, v3.7)
+# TM5000 Architecture (as-built, v3.8)
 
 How [`src/`](../src) is built and organized. Toolchain: [BUILD.md](BUILD.md);
 cross-version bug history: [FINDINGS.md](FINDINGS.md); releases:
@@ -111,10 +111,17 @@ state for save/restore.
   slot's GPIB address (1–30) is set by the user in the slot-setup menu; addresses must be
   unique. Auto-detect (Configure Modules → A) scans addresses 1–30 with `gpib_probe()`
   and fills free slots only.
-- Seven instrument drivers live in `modules.c`. **DC5009 and DC5010 share one
-  implementation**: the 22 byte-identical `dc5010_*` routines forward to their `dc5009_*`
-  counterparts; only the DC5010-unique features (rise/fall time, A±B totalize, burst) are
-  separate.
+- Seven instrument drivers live in `modules.c` (the DM5120, PS5004 and PS5010 setup
+  menus in `module_funcs.c`). All the instruments use Tek Codes & Formats: commands are
+  `HEADER arg;`, replies carry their header and are parsed after it, and each driver's
+  strings were checked against its manual (sources in
+  [changelogs/CHANGELOG_v3.8.md](changelogs/CHANGELOG_v3.8.md)). Outputs change only on
+  an explicit menu action with a Y/N prompt.
+- **DC5009 and DC5010 share one table-driven implementation** (`dc50xx_*`):
+  `dc5010_config` is a typedef of `dc5009_config`, and the slot's model selects the
+  function list and the model-only commands (DC5010 `FIL`/`TER`/`NULL`/`RISE`/`FALL`;
+  DC5009 `SOUR`/`FPTR`). Readings carry the function's unit (`UNIT_TIME`,
+  `UNIT_COUNT` added for them).
 - DM5120 buffered acquisition defaults to an internal (`TALK,CONT`) trigger so the buffer
   self-fills without external trigger hardware; `EXT` is opt-in per the advanced config.
 
@@ -177,9 +184,9 @@ control size:
 - `wcc -zm` emits each function in its own segment, so that
 - `wlink OPTION ELIMINATE` can drop every unreferenced function from the image. The linker
   has no identical-code folding, so duplicate functions are consolidated in source instead
-  (e.g. the DC5009/DC5010 forwarders).
+  (e.g. the shared DC5009/DC5010 driver).
 
-`tm5000.exe` is 316,738 bytes and `tm5000g.exe` 316,468 bytes (~310 KB each), leaving
+`tm5000.exe` is 382,760 bytes and `tm5000g.exe` 383,050 bytes (~374 KB each), leaving
 room in 640 KB for the pooled 10×1024-sample far buffers (8 bytes per sample plus a
 4-byte time stamp). `tm5000g.exe` swaps `gpib.c` for `gpib_gg.c` + `gridgpib.c` and
 builds `modules.c` / `module_funcs.c` with `-DGRIDGPIB`.
@@ -218,4 +225,4 @@ They are not safe to call as written:
 
 ---
 
-*Describes v3.7. Update when the module structure, data layout, or build options change.*
+*Describes v3.8. Update when the module structure, data layout, or build options change.*

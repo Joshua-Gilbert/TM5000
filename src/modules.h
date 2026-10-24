@@ -155,7 +155,7 @@ void dc50xx_test(int slot);
 int dc50xx_read(int slot, double *value);       /* 1 reading, 0 none ready, -1 no reply */
 int dc50xx_single(int slot, int phase, double *value);
 void dc50xx_sync_function(int slot);
-void dc50xx_format(char *buf, int slot, double value);   /* buf >= 20 */
+void dc50xx_format(char *buf, int slot, double value);   /* buf >= 32 */
 int dc50xx_trace_unit(int slot);
 
 /* FG5010 functions */
