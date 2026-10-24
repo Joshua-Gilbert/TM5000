@@ -288,8 +288,9 @@ typedef struct {
     unsigned int dt_enabled:1;         /* Device trigger */
     unsigned int user_enabled:1;       /* INST ID button */
     unsigned int rqs_enabled:1;        /* Service requests */
-    unsigned int lf_termination:1;     /* terminate with LF, not CRLF */
-    unsigned int reserved:8;
+    unsigned int lf_termination:1;     /* unused: the terminator is a rear switch (manual p. 3-16) */
+    unsigned int dt_set:1;             /* with dt_enabled: DT SET, settings wait for GET */
+    unsigned int reserved:7;
 } ps5004_config;
 
 typedef struct {

@@ -93,15 +93,38 @@ void dm5010_format(int slot, int r, double v, char *out);
 void test_dm5010_comm(int address);
 
 /* PS5004 functions */
+#define PS5004_NFLAGS 7     /* ps5004_flag(): OUT VRI CRI URI DT USER RQS */
+#define PS5004_OUT    0
+#define PS5004_DT     4
+#define PS5004_RQS    6
 void init_ps5004_config(int slot);
 void configure_ps5004_advanced(int slot);
+int ps5004_flag(const ps5004_config *cfg, int i);
+void ps5004_set_flag(ps5004_config *cfg, int i, int on);
+void ps5004_send_flag(int address, int i, int on);
+float ps5004_round_voltage(float v);
+float ps5004_round_current(float a);
+int ps5004_query_block(int address, const char *query, char **reply);
+char *ps5004_query(int address, const char *query);
+int ps5004_parse_number(const char *s, float *value);
+int ps5004_read_value(int address, float *value);
+void ps5004_select_display(int slot, int mode);
+void ps5004_forget_display(int slot);
+int ps5004_display_shown(int address);
+int ps5004_measure(int slot, int mode, float *value);
 void ps5004_init(int address);
 void ps5004_set_voltage(int address, float voltage);
 void ps5004_set_current(int address, float current);
 void ps5004_set_output(int address, int on);
-void ps5004_set_display(int address, char *mode);
 int ps5004_get_regulation_status(int address);
-float ps5004_read_value(int address);
+const char *ps5004_regulation_name(int status);
+int ps5004_show_errors(int address, int print);
+void ps5004_release_dt(int address);
+void ps5004_clear_srq(int address);
+void ps5004_trigger(int address);
+int ps5004_parse_settings(char *s, ps5004_config *cfg);
+int ps5004_compare(const ps5004_config *now, const ps5004_config *want);
+void ps5004_print_items(const char *s);
 void test_ps5004_comm(int address);
 
 /* PS5010 functions */
