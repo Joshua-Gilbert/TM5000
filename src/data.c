@@ -97,6 +97,14 @@ void free_module_buffer(int slot) {
     reset_slot_state(m);
 }
 
+/* A settings or data file can be hand-edited or damaged: values are copied into
+   fixed-size fields only as far as they fit */
+#define COPY_FIELD(dst, src) copy_field((dst), (src), sizeof(dst))
+static void copy_field(char *dst, const char *src, unsigned size) {
+    strncpy(dst, src, size - 1);
+    dst[size - 1] = '\0';
+}
+
 /* Each stored sample is the mean of 2^avg_shift readings (values and times).
  * When the buffer fills, adjacent samples merge in pairs and the group size
  * doubles, so the buffer always spans the whole run (up to avg_shift 15). */
@@ -382,14 +390,14 @@ void load_data(void) {
             break;
         }
         
-        if (sscanf(line, "%d|%d|%d|%[^|]|%u", &slot, &type, &addr, desc, &count) == 5) {
+        if (sscanf(line, "%d|%d|%d|%19[^|]|%u", &slot, &type, &addr, desc, &count) == 5) {
             if (slot >= 0 && slot < 10) {
                 g_system->modules[slot].module_type = type;
                 g_system->modules[slot].slot_number = slot;
                 g_system->modules[slot].gpib_address = addr;
                 g_system->modules[slot].enabled = 1;
                 g_system->modules[slot].last_reading = 0.0;
-                strcpy(g_system->modules[slot].description, desc);
+                COPY_FIELD(g_system->modules[slot].description, desc);
                 
                 /* Defaults first; the ModuleConfigs section overrides them. */
                 switch (type) {
@@ -748,7 +756,7 @@ void load_settings(void) {
                     }
                     break;
                 }
-                if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+                if (sscanf(line, "%49[^=]=%199s", key, value) == 2) {
                     if (strcmp(key, "SampleRateMs") == 0) {
                         g_control_panel.sample_rate_ms = atoi(value);
                     } else if (strcmp(key, "UseCustom") == 0) {
@@ -756,7 +764,7 @@ void load_settings(void) {
                     } else if (strcmp(key, "SelectedRate") == 0) {
                         g_control_panel.selected_rate = atoi(value);
                     } else if (strcmp(key, "CustomRate") == 0) {
-                        strcpy(g_control_panel.custom_rate, value);
+                        COPY_FIELD(g_control_panel.custom_rate, value);
                     } else if (strcmp(key, "MonitorMask") == 0) {
                         g_control_panel.monitor_mask = atoi(value);
                     } else if (strcmp(key, "MonitorAll") == 0) {
@@ -788,14 +796,14 @@ void load_settings(void) {
                     break;
                 }
                 {
-                    int fields = sscanf(line, "Module%d=%d,%d,%[^\n]", &slot, &type, &addr, desc);
+                    int fields = sscanf(line, "Module%d=%d,%d,%49[^\n]", &slot, &type, &addr, desc);
                     if (fields >= 4) {
                     if (slot >= 0 && slot < 10) {
                         g_system->modules[slot].module_type = type;
                         g_system->modules[slot].gpib_address = addr;
                         g_system->modules[slot].enabled = 1;
                         g_system->modules[slot].last_reading = 0.0;
-                        strcpy(g_system->modules[slot].description, desc);
+                        COPY_FIELD(g_system->modules[slot].description, desc);
                         g_system->modules[slot].slot_number = slot;
                         
                         /* Defaults first; [ModuleConfigs] overrides them. */
@@ -842,12 +850,12 @@ void load_settings(void) {
                     line[strcspn(line, "\r\n")] = 0;  /* matched by the [GraphScale] check below */
                     break;
                 }
-                if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+                if (sscanf(line, "%49[^=]=%199s", key, value) == 2) {
                     int slot;
                     if (sscanf(key, "DM5120_%d_LF", &slot) == 1 && slot >= 0 && slot < 10) {
                         g_dm5120_config[slot].lf_termination = atoi(value);
                     } else if (sscanf(key, "DM5120_%d_Function", &slot) == 1 && slot >= 0 && slot < 10) {
-                        strcpy(g_dm5120_config[slot].function, value);
+                        COPY_FIELD(g_dm5120_config[slot].function, value);
                     } else if (sscanf(key, "DM5120_%d_Range", &slot) == 1 && slot >= 0 && slot < 10) {
                         g_dm5120_config[slot].range_mode = atoi(value);
                     } else if (sscanf(key, "DM5120_%d_Filter", &slot) == 1 && slot >= 0 && slot < 10) {
@@ -868,7 +876,7 @@ void load_settings(void) {
         if (strcmp(line, "[GraphScale]") == 0) {
             while (fgets(line, sizeof(line), fp)) {
                 if (line[0] == '[') break;
-                if (sscanf(line, "%[^=]=%s", key, value) == 2) {
+                if (sscanf(line, "%49[^=]=%199s", key, value) == 2) {
                     if (strcmp(key, "MinValue") == 0) {
                         g_graph_scale.min_value = (float)atof(value);
                     } else if (strcmp(key, "MaxValue") == 0) {
@@ -1029,8 +1037,8 @@ int load_dm5120_config(FILE *fp, int slot, char *line, int line_size) {
 
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
-                if (strcmp(key, "function") == 0) strcpy(cfg->function, value);
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
+                if (strcmp(key, "function") == 0) COPY_FIELD(cfg->function, value);
                 else if (strcmp(key, "range_mode") == 0) cfg->range_mode = atoi(value);
                 else if (strcmp(key, "filter_enabled") == 0) cfg->filter_enabled = atoi(value);
                 else if (strcmp(key, "filter_value") == 0) cfg->filter_value = atoi(value);
@@ -1121,7 +1129,7 @@ int load_ps5004_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "voltage") == 0) cfg->voltage = (float)atof(value);
                 else if (strcmp(key, "current_limit") == 0) cfg->current_limit = (float)atof(value);
                 else if (strcmp(key, "output_enabled") == 0) cfg->output_enabled = atoi(value);
@@ -1153,7 +1161,7 @@ int load_ps5010_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "voltage1") == 0) cfg->voltage1 = (float)atof(value);
                 else if (strcmp(key, "current_limit1") == 0) cfg->current_limit1 = (float)atof(value);
                 else if (strcmp(key, "voltage2") == 0) cfg->voltage2 = (float)atof(value);
@@ -1250,7 +1258,7 @@ int load_fg5010_config(FILE *fp, int slot, char *line, int line_size) {
         
         token = strtok(line, "|");
         while (token) {
-            if (sscanf(token, "%[^=]=%s", key, value) == 2) {
+            if (sscanf(token, "%63[^=]=%63s", key, value) == 2) {
                 if (strcmp(key, "frequency") == 0) cfg->frequency = (float)atof(value);
                 else if (strcmp(key, "amplitude") == 0) cfg->amplitude = (float)atof(value);
                 else if (strcmp(key, "offset") == 0) cfg->offset = (float)atof(value);

@@ -161,6 +161,78 @@ hardware.
 - The reading-rate tables use the 50 Hz figures where they are slower, and the 6½-digit
   bus-triggered rate is 0.2/s (was 0.25).
 
+### Fixed — the other instruments, checked against their manuals
+Each driver was checked command by command against its instruction manual (TekWiki:
+DC5009 070-3888-00, DC5010 070-3897-02, DM5010, FG5010, PS5004, PS5010 070-3391-00). All
+six use Tek Codes & Formats; several paths sent SCPI. Every command in each manual is now
+either used by the driver or reachable from its menu, except the PS5004's binary `LLSET`
+and `FVOLTS` (never sent). Outputs change only on an explicit menu action with a Y/N
+prompt. Config structs keep their size and offsets; renamed fields are converted on load,
+so `PROFILES.DAT` keeps its version.
+
+- **All:** Single Measurement sent `INIT` to the counters and meters before reading. On
+  every one of them `INIT` restores the power-on settings, so the setup was wiped (the
+  DM5120 lost what Apply had sent). It also wrote `*OPC?` to the GPIB driver, which is
+  not an instrument. Counters are now armed with `STOP;RES` and read after `RDY 1`, the
+  meters are simply read.
+- **All:** a failed or missing reading was stored as 0 in the data. A slot with no new
+  reading now stores nothing and keeps its last point.
+- **DC5009/DC5010:**
+  - Every reading was labelled and graphed as Hz. The unit now follows `FUNC?` (Hz, s,
+    B/A, counts), with new time and count trace units.
+  - The setup menus could not be reached, and every setter was invalid (channel inside
+    the argument, `X1`/`X10`, `GATE`, `AVG`, `BURST`, `FIL`/`TER` on the DC5009). One
+    table-driven menu (Module Settings 5/6) sends `CHA` then `ATT 1|5`, `COU`, `SLO`,
+    `LEV`, `TER`/`SOUR` and decade `AVE`, with each model's own function list.
+  - The DC5010 comm test sent `GATE 0.1` (error 101) and `RISE A` and passed both. It now
+    sends queries only and checks `ERR?` after each.
+  - `ERR?` and `OVER?` replies were compared without their headers. Overflow now uses
+    `ERR 711/712` with 2^40 (DC5009) or 2^43 (DC5010) counts.
+- **DM5010:**
+  - Readings were requested with `VAL?`/`READ?`, which the meter lacks: every sample was
+    error 101. Readings now use `FUNCT?`, `CALC?` and `SEND`; over-range (±1E+99) shows
+    OVERRANGE instead of going into the data; the unit follows the function.
+  - The comm test and setup menu sent SCPI (`*IDN?`, `CONF:`, `SYST:`...) and printed
+    "Settings applied!" regardless; the menu could not be reached. Both are rewritten
+    in the DM5010's commands; the menu is Module Settings 7 and Apply prints each error.
+  - Read timeouts follow DIGIT, LFR and AVE.
+- **FG5010:**
+  - The comm test sent `*IDN?` and `SYST:ERR?` and passed on any byte, then closed the
+    output relay with whatever offset and mode were programmed. It now uses `ID?`/`ERR?`,
+    asks before the output test, programs 1 kHz 2 V p-p after `INIT`, and always ends
+    with `OUT OFF` confirmed by `OUT?`.
+  - The settings menu edited features the FG5010 lacks and sent nothing. It now holds
+    the real settings (FUNC, FREQ, AMPL, OFFS, SYM, PHAS, NBUR, MODE, SLOPE, COMP, AM, FM,
+    VCF, HOLD, GATE, PLI, USER, DT), checks ranges and conflicts, applies them with an
+    error readout, and adds stored setups and `LLSET?` dumps.
+  - The monitor showed "Not implemented" and logged a flat 0 V trace; it now shows the
+    programmed state and stores no samples.
+- **PS5004:**
+  - `SET?` (about 107 bytes) went into 80-byte buffers; on Driver488 the tail likely
+    became the next reply. Errors were read with RQS ON and never polled.
+  - Single Measurement read without setting `DISPLAY`; the monitor logged the current
+    limit as voltage; current traces were graphed in volts.
+  - The comm test sent `INIT` and 5 V without asking. It now only queries, with an
+    optional Y/N write test. Apply sends `OUTPUT OFF` before a new voltage.
+  - `DT ON` could be set with no way to send GET; the dead LF option is gone.
+- **PS5010:**
+  - Apply sent the CH1 output flag as `FSOUT` (both floating supplies) and CH2 as `LSOUT`
+    (the logic supply), and never sent the logic flag. It now has one floating and one
+    logic flag, sent with the voltages in one message after a Y/N.
+  - The comm test sent `INIT`, set ±10 V with `VTRA`, turned the floating and logic
+    outputs on and left them on. It now only reads.
+  - `REG?` and `ERR?` replies were parsed without their headers, so regulation status
+    never worked and errors always read 0. Voltages were sent with one decimal; current
+    limits ignored the compartment and voltage rules.
+- **Loaders and formatters:** `load_data`, `load_settings` and every `load_*_config`
+  scanned keys, values and descriptions into fixed buffers without widths and copied
+  them with `strcpy` (a description into a 12-byte field). Scans are bounded and copies
+  cut to fit. Readings from a garbled reply are formatted with bounded widths, and the
+  FG5010 binary-block count is checked against the buffer (as a 16-bit int it could go
+  negative).
+- The GPIB terminal's hints listed SCPI commands and the DM5120's `X`; they now list
+  each instrument's own.
+
 ### Build
 - Makefile dependencies list each file's direct includes, including the GRIDGPIB
   objects, and `clean` also removes `.err` and `.map`.

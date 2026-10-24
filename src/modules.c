@@ -347,24 +347,29 @@ int dc50xx_single(int slot, int phase, double *value) {
     return r;
 }
 
-/* Reading with its unit, 19 columns so monitor redraws line up */
+/* Reading with its unit, 19 columns so monitor redraws line up. b holds 32: an
+   implausible reply (e.g. 9.9E+37) goes out in %e, which %f would print 40 wide. */
 void dc50xx_format(char *b, int slot, double v) {
     static const char * __far su[] = { "s ", "ms", "us", "ns" };
     int u = dc_funcs[dc_fn(slot)].u, k = 0;
     double a = fabs(v);
+    if (a >= 1e12) {
+        snprintf(b, 32, "%13.6e      ", v);
+        return;
+    }
     switch (u) {
     case 0:
-        if (a >= 1e6)      sprintf(b, "%13.7f MHz  ", v / 1e6);
-        else if (a >= 1e3) sprintf(b, "%13.6f kHz  ", v / 1e3);
-        else               sprintf(b, "%13.4f Hz   ", v);
+        if (a >= 1e6)      snprintf(b, 32, "%13.7f MHz  ", v / 1e6);
+        else if (a >= 1e3) snprintf(b, 32, "%13.6f kHz  ", v / 1e3);
+        else               snprintf(b, 32, "%13.4f Hz   ", v);
         break;
     case 1:
         while (k < 3 && a != 0.0 && a < 1.0) { a *= 1e3; v *= 1e3; k++; }
-        sprintf(b, "%13.6f %s   ", v, su[k]);
+        snprintf(b, 32, "%13.6f %s   ", v, su[k]);
         break;
-    case 2:  sprintf(b, "%13.7g B/A  ", v); break;
-    case 3:  sprintf(b, "%13.0f cnt  ", v); break;
-    default: sprintf(b, "%13.0f code ", v); break;
+    case 2:  snprintf(b, 32, "%13.7g B/A  ", v); break;
+    case 3:  snprintf(b, 32, "%13.0f cnt  ", v); break;
+    default: snprintf(b, 32, "%13.0f code ", v); break;
     }
 }
 
@@ -1181,10 +1186,13 @@ int fg5010_state_text(int address, char *out) {
     fg5010_word(fg5010_field(fg5010_reply, "FUNC"), func, sizeof(func));
     fg5010_word(fg5010_field(fg5010_reply, "MODE"), mode, sizeof(mode));
     fg5010_word(fg5010_field(fg5010_reply, "OUT"), relay, sizeof(relay));
-    if (f >= 1.0e6)      sprintf(out, "%8.4f MHz", f / 1.0e6);
-    else if (f >= 1.0e3) sprintf(out, "%8.3f kHz", f / 1.0e3);
-    else                 sprintf(out, "%8.3f Hz ", f);
-    out[12] = '\0';     /* a garbled reply must not run past the 60 bytes */
+    /* A garbled reply can hold any float; clamp to well past the FG5010's ranges */
+    if (!(f >= 0.0 && f < 1.0e9)) f = 0.0;
+    if (!(a > -100.0 && a < 100.0)) a = 0.0;
+    if (!(o > -100.0 && o < 100.0)) o = 0.0;
+    if (f >= 1.0e6)      snprintf(out, 60, "%8.4f MHz", f / 1.0e6);
+    else if (f >= 1.0e3) snprintf(out, 60, "%8.3f kHz", f / 1.0e3);
+    else                 snprintf(out, 60, "%8.3f Hz ", f);
     snprintf(out + strlen(out), 60 - strlen(out), " %6.3fVpp %+5.2fV %-3s %-5s OUT %s",
              a, o, func, mode, relay);
     return 1;
@@ -1354,7 +1362,8 @@ static int fg5010_blk_at = -1, fg5010_blk_len, fg5010_blk_llset;
 
 static void fg5010_dump_block(int address, const char *cmd) {
     unsigned char *b = fg5010_blk + 8;
-    int n, i, start, count, sum;
+    int n, i, start, sum;
+    unsigned count;
 #ifdef GRIDGPIB
     unsigned got;
     int endr;
@@ -1383,12 +1392,20 @@ static void fg5010_dump_block(int address, const char *cmd) {
         return;
     }
     /* Count: data bytes + checksum, MSB first; the checksum makes the sum of
-       count, data and checksum bytes 0 modulo 256 */
-    count = (b[start + 1] << 8) | b[start + 2];
+       count, data and checksum bytes 0 modulo 256. Unsigned, since a high byte of
+       0x80+ made the 16-bit int negative; the held block (8 + start + 3 + count)
+       plus its ';' must fit the buffer. */
+    count = ((unsigned)b[start + 1] << 8) | b[start + 2];
+    if ((unsigned long)start + 12 + count > sizeof(fg5010_blk)) {
+        printf("Block count %u is larger than the buffer\n", count);
+        return;
+    }
     sum = b[start + 1] + b[start + 2];
-    for (i = 0; i < count && start + 3 + i < n; i++) sum += b[start + 3 + i];
-    printf("%d data bytes", count - 1);
-    if (i < count) {
+    for (i = 0; (unsigned)i < count && start + 3 + i < n; i++) sum += b[start + 3 + i];
+    printf("%u data bytes", count ? count - 1 : 0);
+    if (count < 1) {
+        printf(": no checksum byte, not held\n");
+    } else if ((unsigned)i < count) {
         printf(", %d received: the read ended early (an LF byte in the data)\n", i);
     } else {
         printf(", checksum %s\n", (sum & 0xFF) == 0 ? "OK" : "BAD");
@@ -5428,11 +5445,10 @@ void single_measurement(void) {
     
     printf("Synchronizing %d modules for simultaneous measurement...\n\n", active_count);
     
-    /* Arm counters and INIT meters one by one before reading */
+    /* Arm the counters before reading anything */
     for (i = 0; i < active_count; i++) {
         int slot = active_modules[i];
-        int addr = g_system->modules[slot].gpib_address;
-        
+
         switch (g_system->modules[slot].module_type) {
             case MOD_DC5009:
             case MOD_DC5010:
@@ -5444,22 +5460,17 @@ void single_measurement(void) {
                 break;
 
             case MOD_DM5120:
-                gpib_write(addr, "INIT");
+                /* No INIT either: it restores the power-on settings (manual p. 3-17);
+                   the READ ADC talk triggers the reading */
                 break;
-                
+
             case MOD_PS5004:
             case MOD_PS5010:
                 /* Power supplies don't need INIT for reading */
                 break;
         }
     }
-    
-    if (active_count > 0) {
-        ieee_write("*OPC?\r\n");
-        delay(100); /* Allow time for all modules to complete */
-        drain_input_buffer();
-    }
-    
+
     printf("Collecting results:\n");
     printf("-------------------\n");
     
@@ -5817,7 +5828,10 @@ void continuous_monitor(void) {
                                 dm5010_format(i, r, value, txt);
                                 lp("%-18s", txt);
                                 /* Over-range or no reply: nothing new, hold the last value */
-                                if (r != DM5010_READ_OK) value = g_system->modules[i].last_reading;
+                                if (r != DM5010_READ_OK) {
+                                    no_reading = 1;
+                                    value = g_system->modules[i].last_reading;
+                                }
                             }
                             break;
                             
@@ -5929,6 +5943,7 @@ void continuous_monitor(void) {
                                     else if (ps_cfg->display_mode == 2) lp("%12.1f mA lim", value * 1000);
                                     else lp("%12.4f V     ", value);
                                 } else {
+                                    no_reading = 1;
                                     value = g_system->modules[i].last_reading;
                                     lp("    No reply       ");
                                 }
@@ -5949,6 +5964,7 @@ void continuous_monitor(void) {
                                     value = neg_stat * 100 + pos_stat * 10 + log_stat;
                                 } else {
                                     lp("No status         ");
+                                    no_reading = 1;
                                     value = g_system->modules[i].last_reading;
                                 }
                             }

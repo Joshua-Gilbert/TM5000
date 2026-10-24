@@ -82,11 +82,13 @@ void send_custom_command(void) {
            g_system->modules[slot].gpib_address);
     printf("Type 'EXIT' to return to main menu\n");
     printf("\nCommon test commands:\n");
-    printf("  DM5120:  voltage?, X, INIT, FUNCT?, RANGE?\n");
-    printf("           FUNCT DCV, RANGE AUTO, SEND, READ?\n");
+    printf("  DM5120:  FUNCT?, RANGE?, ERROR?, FUNCT DCV, RANGE AUTO, SEND\n");
+    printf("  DM5010:  FUNCT?, ERR?, DCV 0, SEND\n");
+    printf("  DC5009/DC5010: FUNC?, ERR?, FREQ A, AVE -1, SEND\n");
     printf("  PS5004:  ID?, SET?, VOLTAGE?, CURRENT?, REGULATION?, ERROR?, HELP?\n");
     printf("           VOLTAGE 5.0, CURRENT 0.1, OUTPUT ON/OFF, DISPLAY CURRENT, SEND\n");
-    printf("  General: *IDN?, *RST, *CLS, ERROR?\n");
+    printf("  PS5010:  REG?, ERR?, VPOS?   FG5010: FREQ?, AMPL?, ERR?\n");
+    printf("  All:     ID?, SET? (Tek codes and formats; *IDN? and other SCPI fail)\n");
     printf("----------------------------------------\n\n");
     
     drain_console_line();
@@ -1093,7 +1095,8 @@ static void ps5010_apply(int slot) {
 
     /* One message: the supply executes its settings as a group, so no half-sent
        pair of V and I can conflict, and a processing error drops them all (p. 3-17) */
-    sprintf(ps5010_cmd, "VPOS %.2f;IPOS %.2f;VNEG %.2f;INEG %.2f;VLOG %.2f;ILOG %.1f;FSOUT %s;LSOUT %s",
+    /* snprintf: a damaged settings file can hold any float */
+    snprintf(ps5010_cmd, sizeof(ps5010_cmd), "VPOS %.2f;IPOS %.2f;VNEG %.2f;INEG %.2f;VLOG %.2f;ILOG %.1f;FSOUT %s;LSOUT %s",
             cfg->voltage1, cfg->current_limit1, cfg->voltage2, cfg->current_limit2,
             cfg->logic_voltage, cfg->logic_current_limit,
             cfg->fsout_enabled ? "ON" : "OFF", cfg->logic_enabled ? "ON" : "OFF");
