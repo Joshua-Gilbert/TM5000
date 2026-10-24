@@ -4428,7 +4428,8 @@ const char *ps5010_error_text(int code) {
     return "unknown code";
 }
 
-/* Print every pending error and event; returns how many were errors (below 400).
+/* Print every pending error and event; returns how many were errors (below 400),
+   or -1 if ERR? got no reply, so callers never take silence for success.
    With RQS ON, ERR? only reports what a serial poll already delivered, so RQS is
    off for the drain and restored after (p. 3-3, 3-22). Needs remote: RQS is a
    setting. Prints, so never from the monitor loop. */
@@ -4438,9 +4439,11 @@ int ps5010_show_errors(int address) {
     int rqs = ps5010_query_on(address, "RQS?");
 
     if (rqs == 1) gpib_write(address, "RQS OFF");
+    else if (rqs < 0) printf("  No reply to RQS?: errors already reported by SRQ may not show\n");
     for (i = 0; i < 12; i++) {
         if (!ps5010_query_value(address, "ERR?", &v)) {
             printf("  No reply to ERR?\n");
+            if (i == 0) errors = -1;
             break;
         }
         code = (int)v;

@@ -987,10 +987,10 @@ static void ps5010_apply(int slot) {
             cfg->fsout_enabled ? "ON" : "OFF", cfg->logic_enabled ? "ON" : "OFF");
     gpib_write(address, ps5010_cmd);
     delay(50);   /* output switching up to 35 ms, current change 20 ms (p. 1-3, 1-4) */
-    errors += ps5010_show_errors(address);
+    if (ps5010_show_errors(address) != 0) errors = 1;   /* -1: no reply */
     if (cfg->srq_enabled) gpib_write(address, "RQS ON");
 
-    printf("%s\n", errors ? "The supply reported errors; R reads back what it holds." : "Settings applied.");
+    printf("%s\n", errors ? "Errors or no reply; R reads back what the supply holds." : "Settings applied.");
     if (cfg->dt_enabled) printf("DT SET: the supply holds them until a GET (Utilities).\n");
     ps5010_show_out(address);
 }
@@ -1033,11 +1033,14 @@ static int ps5010_ll_len = 0, ps5010_ll_addr = -1;
 static int ps5010_ll_take(unsigned char *r, int n) {
     unsigned char *p = memchr(r, '%', n);
     unsigned sum = 0;
-    int i, cnt;
+    int i, cnt, room;
 
-    if (p == NULL || p + 3 > r + n) return 0;
+    if (p == NULL) return 0;
+    /* Compare lengths, not far pointers: a garbage count would wrap the offset */
+    room = n - (int)(p - r) - 3;
+    if (room < 1) return 0;
     cnt = p[1] * 256 + p[2];
-    if (cnt < 1 || p + 3 + cnt > r + n) return 0;
+    if (cnt < 1 || cnt > room) return 0;
     for (i = 1; i < 3 + cnt; i++) sum += p[i];
     if (sum & 0xFF) return 0;
     memmove(r, p, 3 + cnt);
@@ -1136,7 +1139,7 @@ static void ps5010_utilities(int slot) {
                 memcpy(ps5010_cmd + 6, ps5010_ll, ps5010_ll_len);
                 ps5010_cmd[6 + ps5010_ll_len] = '\0';
                 gpib_write(address, ps5010_cmd);
-                delay(50);
+                delay(50);   /* settle, not bus pacing: outputs may switch, up to 35 ms (p. 1-3, 1-4) */
                 if (ps5010_show_errors(address) == 0) printf("Settings restored\n");
                 ps5010_read_back(slot);
                 ps5010_show_out(address);
@@ -1303,7 +1306,7 @@ void configure_ps5010_advanced(int slot) {
             case 'X':
                 gpib_remote(address);
                 gpib_write(address, "OUT OFF");
-                delay(50);
+                delay(50);   /* output on/off about 12 ms (p. 1-3) */
                 cfg->fsout_enabled = 0;
                 cfg->logic_enabled = 0;
                 ps5010_show_errors(address);
