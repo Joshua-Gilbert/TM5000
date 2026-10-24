@@ -280,7 +280,7 @@ static unsigned read_timeout_for(int address)
             g_system->modules[i].gpib_address == address) {
             switch (g_system->modules[i].module_type) {
             case MOD_DC5009:
-            case MOD_DC5010: return 12000u;   /* gate times up to 10 s */
+            case MOD_DC5010: return dc50xx_timeout_ms(i);   /* from AVE and the input rate */
             case MOD_DM5120: return 10000u;   /* AUTOCAL pauses        */
             case MOD_DM5010: return 5000u;
             }

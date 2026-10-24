@@ -122,67 +122,17 @@ void ps5010_set_interrupts(int address, int pri_on, int nri_on, int lri_on);
 void ps5010_set_srq(int address, int on);
 void test_ps5010_comm(int address);
 
-/* DC5009 functions */
+/* DC5009 / DC5010 counters: one driver for both models */
 void init_dc5009_config(int slot);
-void configure_dc5009_advanced(int slot);
-void dc5009_set_function(int address, char *function, char *channel);
-void dc5009_set_coupling(int address, char channel, char *coupling);
-void dc5009_set_impedance(int address, char channel, char *impedance);
-void dc5009_set_attenuation(int address, char channel, char *attenuation);
-void dc5009_set_slope(int address, char channel, char *slope);
-void dc5009_set_level(int address, char channel, float level);
-void dc5009_set_filter(int address, int enabled);
-void dc5009_set_gate_time(int address, float gate_time);
-void dc5009_set_averaging(int address, int count);
-void dc5009_auto_trigger(int address);
-void dc5009_start_measurement(int address);
-void dc5009_stop_measurement(int address);
-double dc5009_read_measurement(int address);
-int dc5009_check_overflow(int address);
-void dc5009_clear_overflow(int address);
-void dc5009_query_function(int address, char *buffer, int size);
-void dc5009_query_id(int address, char *buffer, int size);
-int dc5009_query_error(int address);
-void dc5009_set_preset(int address, int enabled);
-void dc5009_manual_timing(int address);
-void dc5009_set_srq(int address, int enabled);
-unsigned char dc5009_get_status_byte(int address);
-double dc5009_read_extended_range(int address);
-void test_dc5009_comm(int address);
-
-/* DC5010 functions */
 void init_dc5010_config(int slot);
+void configure_dc5009_advanced(int slot);
 void configure_dc5010_advanced(int slot);
-void dc5010_set_function(int address, char *function, char *channel);
-void dc5010_set_coupling(int address, char channel, char *coupling);
-void dc5010_set_impedance(int address, char channel, char *impedance);
-void dc5010_set_attenuation(int address, char channel, char *attenuation);
-void dc5010_set_slope(int address, char channel, char *slope);
-void dc5010_set_level(int address, char channel, float level);
-void dc5010_set_filter(int address, int enabled);
-void dc5010_set_gate_time(int address, float gate_time);
-void dc5010_set_averaging(int address, int count);
-void dc5010_auto_trigger(int address);
-void dc5010_start_measurement(int address);
-void dc5010_stop_measurement(int address);
-double dc5010_read_measurement(int address);
-int dc5010_check_overflow(int address);
-void dc5010_clear_overflow(int address);
-void dc5010_set_burst_mode(int address, int enabled);
-void dc5010_measure_rise_time(int address);
-void dc5010_measure_fall_time(int address);
-void dc5010_query_function(int address, char *buffer, int size);
-void dc5010_query_id(int address, char *buffer, int size);
-int dc5010_query_error(int address);
-void dc5010_set_preset(int address, int enabled);
-void dc5010_manual_timing(int address);
-void dc5010_totalize_sum(int address);
-void dc5010_totalize_diff(int address);
-void dc5010_propagation_delay(int address);
-void dc5010_set_srq(int address, int enabled);
-unsigned char dc5010_get_status_byte(int address);
-double dc5010_read_extended_range(int address);
-void test_dc5010_comm(int address);
+void dc50xx_test(int slot);
+int dc50xx_read(int slot, double *value);       /* 1 reading, 0 none ready, -1 no reply */
+int dc50xx_single(int slot, int phase, double *value);
+void dc50xx_sync_function(int slot);
+void dc50xx_format(char *buf, int slot, double value);   /* buf >= 20 */
+int dc50xx_trace_unit(int slot);
 
 /* FG5010 functions */
 void init_fg5010_config(int slot);

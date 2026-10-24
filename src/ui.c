@@ -1135,6 +1135,8 @@ void module_settings_menu(void) {
         printf("2. PS5004 Advanced Configuration\n\n");
         printf("3. PS5010 Advanced Configuration\n\n");
         printf("4. FG5010 Advanced Configuration\n\n");
+        printf("5. DC5009 Counter Configuration\n\n");
+        printf("6. DC5010 Counter Configuration\n\n");
         printf("0. Return to Module Functions Menu\n");
         
         printf("\nEnter choice: ");
@@ -1299,7 +1301,44 @@ void module_settings_menu(void) {
                     getch();
                 }
                 break;
-                
+
+            case '5':
+            case '6':
+                {
+                    int type = choice == '5' ? MOD_DC5009 : MOD_DC5010;
+                    const char *name = choice == '5' ? "DC5009" : "DC5010";
+
+                    found = 0;
+                    clrscr();
+                    printf("%s Counter Modules:\n", name);
+                    printf("========================\n\n");
+                    for (i = 0; i < 10; i++) {
+                        if (g_system->modules[i].enabled && g_system->modules[i].module_type == type) {
+                            printf("Slot %d: %s (GPIB %d)\n", i, name, g_system->modules[i].gpib_address);
+                            found = 1;
+                        }
+                    }
+                    if (!found) {
+                        printf("No %s modules configured.\n", name);
+                        printf("\nPress any key to continue...");
+                        getch();
+                        break;
+                    }
+                    printf("\nEnter slot number: ");
+                    slot = -1;
+                    scanf("%d", &slot);
+                    if (slot >= 0 && slot < 10 && g_system->modules[slot].enabled &&
+                        g_system->modules[slot].module_type == type) {
+                        if (type == MOD_DC5009) configure_dc5009_advanced(slot);
+                        else configure_dc5010_advanced(slot);
+                    } else {
+                        printf("Invalid slot or not a %s.\n", name);
+                        printf("\nPress any key to continue...");
+                        getch();
+                    }
+                }
+                break;
+
             case '0':
             case 27:  /* ESC */
                 done = 1;
@@ -1824,6 +1863,11 @@ void graph_display(void) {
                     } else {
                         sprintf(readout, "S%d[%d]:%.3fHZ", selected_trace, sample_num, value);
                     }
+                } else if (g_traces[selected_trace].unit_type == UNIT_TIME ||
+                           g_traces[selected_trace].unit_type == UNIT_COUNT) {
+                    /* counter period/interval in seconds, or a count or ratio */
+                    sprintf(readout, "S%d[%d]:%.7G%s", selected_trace, sample_num, value,
+                            g_traces[selected_trace].unit_type == UNIT_TIME ? "S" : "");
                 } else if (g_traces[selected_trace].unit_type == UNIT_DERIVATIVE) {
                     /* V/s */
                     if (fabs(value) < 0.001) {

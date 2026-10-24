@@ -14,1109 +14,816 @@
 static char __far gpib_cmd_buffer[80];
 static char __far gpib_response_buffer[80];
 
-void init_dc5009_config(int slot) {
-    dc5009_config *cfg = &g_dc5009_config[slot];
-    
-    strcpy(cfg->function, "FREQ");
-    strcpy(cfg->channel, "A");
-    cfg->gate_time = 1.0;
-    cfg->averaging = -1;  /* Auto */
-    strcpy(cfg->coupling_a, "DC");
-    strcpy(cfg->coupling_b, "DC");
-    strcpy(cfg->impedance_a, "HI");
-    strcpy(cfg->impedance_b, "HI");
-    strcpy(cfg->attenuation_a, "X1");
-    strcpy(cfg->attenuation_b, "X1");
-    strcpy(cfg->slope_a, "POS");
-    strcpy(cfg->slope_b, "POS");
-    cfg->level_a = 0.0;
-    cfg->level_b = 0.0;
-    cfg->filter_enabled = 0;
-    cfg->auto_trigger = 1;
-    cfg->overflow_enabled = 0;
-    cfg->preset_enabled = 0;
-    cfg->srq_enabled = 0;
-    cfg->overflow_count = 0;
-    cfg->last_measurement = 0.0;
-    cfg->measurement_complete = 0;
-    cfg->lf_termination = 0;  /* Default to CRLF */
+/* ========================================================================== */
+/* DC5009 / DC5010 universal counters                                         */
+/* ========================================================================== */
+/* Tek Codes & Formats. "p. 2-20/2-21" cites the DC5009 manual (070-3888-00)
+ * page, then the DC5010 manual (070-3897-02) page. One driver serves both:
+ * the DC5009 lacks FIL, NULL, TER, RISE, FALL and TOT A+B/A-B, and the DC5010
+ * lacks SOUR and FPTR. */
+
+#define BIOS_TICKS (*((unsigned long far *)0x0040006CL))
+
+static char __far dc_reply[256];        /* SET? runs to about 190 characters */
+
+/* Function commands, p. 2-17/2-18. u: reading unit 0 Hz, 1 s, 2 ratio,
+   3 counts, 4 code. m: 1 = DC5010 only, 2 = not in the function menu. */
+typedef struct { char hdr[5]; char arg[4]; unsigned char u, m; const char *name; } dc_func_t;
+static const dc_func_t __far dc_funcs[] = {
+    { "FREQ", "A",   0, 0, "Frequency A" },
+    { "PER",  "A",   1, 0, "Period A" },
+    { "WID",  "A",   1, 0, "Width A (channel A slope picks the pulse)" },
+    { "RAT",  "B/A", 2, 0, "Ratio B/A" },
+    { "TIME", "AB",  1, 0, "Time interval A to B" },
+    { "TOT",  "A",   3, 0, "Totalize A (START/STOP)" },
+    { "EVE",  "BA",  3, 0, "Events B during A" },
+    { "TMAN", "",    1, 0, "Manual timing, stopwatch (START/STOP)" },
+    { "PROB", "A&B", 4, 0, "Probe compensation (2-digit code)" },
+    { "TOT",  "A+B", 3, 1, "Totalize A+B" },
+    { "TOT",  "A-B", 3, 1, "Totalize A-B" },
+    { "RISE", "A",   1, 1, "Risetime A, 10-90%" },
+    { "FALL", "A",   1, 1, "Falltime A, 90-10%" },
+    { "TEST", "",    4, 2, "Self test" }
+};
+#define DC_NFUNC ((int)(sizeof(dc_funcs) / sizeof(dc_funcs[0])))
+#define DC_TMAN 7
+#define DC_PROB 8
+#define DC_RISE 11
+#define DC_FALL 12
+#define DC_TEST 13
+
+/* Table 2-3 (p. 2-43/2-45) */
+typedef struct { int code; const char *txt; } dc_err_t;
+static const dc_err_t __far dc_errs[] = {
+    { 101, "command header error" },      { 102, "header delimiter error" },
+    { 103, "command argument error" },    { 104, "argument delimiter error" },
+    { 105, "nonnumeric argument" },       { 106, "missing argument" },
+    { 107, "invalid message unit delimiter" },
+    { 201, "not executable in local" },   { 202, "settings lost due to rtl" },
+    { 203, "I/O buffers full, output dumped" },
+    { 205, "argument out of range" },     { 206, "GET ignored (DT OFF)" },
+    { 301, "interrupt fault" },           { 302, "system error" },
+    { 401, "power on" },                  { 402, "operation complete" },
+    { 403, "user request" },
+    { 602, "channel A 50 ohm protect: switched to 1 Mohm" },
+    { 603, "channel B 50 ohm protect: switched to 1 Mohm" },
+    { 604, "no prescaler" },
+    { 711, "channel A overflow" },        { 712, "channel B overflow" }
+};
+static const char * __far dc_dt[] = { "OFF", "TRIG", "GATE" };
+
+static int dc_is5010(int slot) {
+    return g_system->modules[slot].module_type == MOD_DC5010;
 }
 
-void init_dc5010_config(int slot) {
-    dc5010_config *cfg = &g_dc5010_config[slot];
-    
-    strcpy(cfg->function, "FREQ");
-    strcpy(cfg->channel, "A");
-    cfg->gate_time = 1.0;
-    cfg->averaging = -1;  /* Auto */
-    strcpy(cfg->coupling_a, "DC");
-    strcpy(cfg->coupling_b, "DC");
-    strcpy(cfg->impedance_a, "HI");
-    strcpy(cfg->impedance_b, "HI");
-    strcpy(cfg->attenuation_a, "X1");
-    strcpy(cfg->attenuation_b, "X1");
-    strcpy(cfg->slope_a, "POS");
-    strcpy(cfg->slope_b, "POS");
-    cfg->level_a = 0.0;
-    cfg->level_b = 0.0;
-    cfg->filter_enabled = 0;
-    cfg->auto_trigger = 1;
-    cfg->overflow_enabled = 0;
-    cfg->preset_enabled = 0;
-    cfg->srq_enabled = 0;
-    cfg->overflow_count = 0;
-    cfg->last_measurement = 0.0;
-    cfg->measurement_complete = 0;
-    cfg->rise_fall_enabled = 0;
-    cfg->burst_mode = 0;
-    cfg->lf_termination = 0;  /* Default to CRLF */
+static dc5009_config *dc_cfg(int slot) {
+    return dc_is5010(slot) ? &g_dc5010_config[slot] : &g_dc5009_config[slot];
 }
 
-/* DC5009 counter */
-void dc5009_set_function(int address, char *function, char *channel) {
+/* Table entry for the slot's function. Old profiles held names such as
+   "PERIOD" or a cut-off "TOTALIZ": the first three letters decide. */
+static int dc_fn(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    int i;
+    for (i = 0; i < DC_NFUNC; i++)
+        if (strncmp(c->function, dc_funcs[i].hdr, 3) == 0 &&
+            (strcmp(dc_funcs[i].hdr, "TOT") || strcmp(c->channel, dc_funcs[i].arg) == 0))
+            break;
+    if (i == DC_NFUNC) i = strncmp(c->function, "TOT", 3) ? 0 : 5;
+    if ((dc_funcs[i].m & 1) && !dc_is5010(slot)) i = 0;
+    return i;
+}
 
-    if (strcmp(function, "TIME") == 0 && channel && strlen(channel) == 2) {
-        /* TIME AB or TIME BA format */
-        sprintf(gpib_cmd_buffer, "TIME %s", channel);
-    } else if (strcmp(function, "EVENTS") == 0 && channel && strcmp(channel, "BA") == 0) {
-        /* EVENTS B DURING A */
-        strcpy(gpib_cmd_buffer, "EVE BA");
-    } else if (strcmp(function, "TOTALIZE") == 0 && channel) {
-        if (strcmp(channel, "A") == 0 || strcmp(channel, "B") == 0) {
-            sprintf(gpib_cmd_buffer, "TOT %s", channel);
-        } else {
-            /* Standard format for other totalize modes */
-            sprintf(gpib_cmd_buffer, "%s %s", function, channel);
+/* TOT and TMAN run until STOP; RES would zero them */
+static int dc_running_total(int f) {
+    return f == DC_TMAN || strcmp(dc_funcs[f].hdr, "TOT") == 0;
+}
+
+/* AVE as a decade exponent, -1 = auto. 1.E+8 is the DC5009 maximum, 1.E+9
+   the DC5010's (p. 2-20/2-21). Old profiles stored a count. */
+static int dc_avg(dc5009_config *c, int is10) {
+    int n = c->averaging;
+    if (n > 9) n = (int)floor(log10((double)n) + 0.5);
+    if (n > (is10 ? 9 : 8)) n = is10 ? 9 : 8;
+    return n < 0 ? -1 : n;
+}
+
+/* X1 or X5; old profiles said "X1"/"X10", and there is no X10 (p. 2-19/2-20) */
+static int dc_att(const char *s) {
+    return strchr(s, '5') ? 5 : 1;
+}
+
+/* LEV range, p. 2-25/2-27: DC5009 -3.175..3.2 V at X1, -15.875..16 V at X5;
+   DC5010 +/-2 V at X1, +/-10 V at X5 */
+static int dc_lev_ok(int is10, int att, double v) {
+    double hi = is10 ? (att == 5 ? 10.0 : 2.0) : (att == 5 ? 16.0 : 3.2);
+    double lo = is10 ? -hi : (att == 5 ? -15.875 : -3.175);
+    return v >= lo && v <= hi;
+}
+
+/* Is channel ch's level set by AUTO? */
+static int dc_lev_auto(dc5009_config *c, int ch) {
+    return ch ? (c->auto_trigger ^ c->b_level_swap) : c->auto_trigger;
+}
+
+static const char *dc_on(int b) {
+    return b ? "ON" : "OFF";
+}
+
+/* One setting per message: an error drops the rest of its message (p. 2-40) */
+static void dc_sendf(int addr, const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsprintf(gpib_cmd_buffer, fmt, ap);
+    va_end(ap);
+    gpib_write(addr, gpib_cmd_buffer);
+    GPIB_PACE(50);
+}
+
+/* Query into dc_reply, line ends stripped; 0 if nothing came back */
+static int dc_query(int addr, const char *cmd) {
+    int n;
+    dc_reply[0] = '\0';
+    if (gpib_write(addr, (char *)cmd) < 0) return 0;
+    GPIB_PACE(50);
+    n = gpib_read(addr, dc_reply, sizeof(dc_reply));
+    while (n > 0 && (dc_reply[n - 1] == '\r' || dc_reply[n - 1] == '\n')) dc_reply[--n] = '\0';
+    return n > 0;
+}
+
+/* Number after the reply's header ("ERR 205;", "LEVEL -1.025;"); SEND has none */
+static int dc_reply_num(double *v) {
+    char *p = dc_reply, *e;
+    while (*p == ' ') p++;
+    while (isalpha((unsigned char)*p)) p++;
+    *v = strtod(p, &e);
+    return e != p;
+}
+
+/* Group Execute Trigger: Driver488's TRIGGER command, also in gpib_gg */
+static void dc_get(int addr) {
+    char cmd[16];
+    sprintf(cmd, "TRIGGER %2d\r\n", addr);
+    ieee_write(cmd);
+}
+
+static const char *dc_err_text(int code) {
+    int i;
+    for (i = 0; i < (int)(sizeof(dc_errs) / sizeof(dc_errs[0])); i++)
+        if (dc_errs[i].code == code) return dc_errs[i].txt;
+    return "see Table 2-3";
+}
+
+/* Print and clear pending events. With RQS OFF, ERR? returns them one at a
+   time, highest priority first, until 0 (p. 2-43/2-45). */
+static int dc_show_errors(int addr, int quiet) {
+    int i, n = 0;
+    double v;
+    for (i = 0; i < 10; i++) {
+        if (!dc_query(addr, "ERR?") || !dc_reply_num(&v) || v == 0.0) break;
+        if (!quiet) printf("  ERR %d: %s\n", (int)v, dc_err_text((int)v));
+        n++;
+    }
+    return n;
+}
+
+/* The DC5010 power-on settings (DC5010 p. 2-26), with RQS OFF */
+static void dc_defaults(dc5009_config *c) {
+    memset(c, 0, sizeof(*c));
+    strcpy(c->function, "FREQ");
+    strcpy(c->channel, "A");
+    c->averaging = -1;
+    strcpy(c->coupling_a, "DC");
+    strcpy(c->coupling_b, "DC");
+    strcpy(c->impedance_a, "HI");
+    strcpy(c->impedance_b, "HI");
+    strcpy(c->attenuation_a, "1");
+    strcpy(c->attenuation_b, "1");
+    strcpy(c->slope_a, "POS");
+    strcpy(c->slope_b, "POS");
+    c->auto_trigger = 1;
+}
+
+void init_dc5009_config(int slot) { dc_defaults(&g_dc5009_config[slot]); }
+void init_dc5010_config(int slot) { dc_defaults(&g_dc5010_config[slot]); }
+
+/* Expected time for one result, ms. AVE n waits for 10^n events on A; auto
+   averages take about 0.3 s or one event (p. 2-20/2-21, DC5009 p. 1-8,
+   DC5010 Table 1-1). The A rate comes from the last FREQ or PER reading;
+   1 kHz is assumed without one. */
+static unsigned long dc_expect_ms(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    int f = dc_fn(slot), n = dc_avg(c, dc_is5010(slot));
+    double v = c->last_measurement, fa = 0.0, t;
+    if (v > 0.0) fa = f == 0 ? v : f == 1 ? 1.0 / v : 0.0;
+    if (n < 0) {
+        t = 0.3;
+        if (fa > 0.0 && 1.0 / fa > t) t = 1.0 / fa;
+    } else {
+        t = pow(10.0, n) / (fa > 0.0 ? fa : 1e3);
+    }
+    if (f == DC_RISE || f == DC_FALL || f == DC_PROB) t += 2.5;   /* autotrigger, DC5010 p. 2-27 */
+    if (t > 600.0) t = 600.0;
+    return (unsigned long)(t * 1000.0);
+}
+
+/* Per-byte read timeout for gpib_gg: a reply never takes longer than one result */
+unsigned dc50xx_timeout_ms(int slot) {
+    unsigned long t = dc_expect_ms(slot) + 3000UL;
+    return t > 60000UL ? 60000u : (unsigned)t;
+}
+
+/* TOT/TMAN with OVER ON: the count restarts after 2^40 (DC5009) or 2^43
+   (DC5010); TMAN overflows its B counter of 10 ns time-base pulses, TOT its
+   A counter (p. 2-27/2-29). Returns what to add to the reading. */
+static double dc_overflow_ext(int slot, int f) {
+    dc5009_config *c = dc_cfg(slot);
+    int addr = g_system->modules[slot].gpib_address, is10 = dc_is5010(slot), i;
+    int tman = f == DC_TMAN;
+    unsigned char st;
+    double v;
+
+    if (!c->overflow_enabled || !dc_running_total(f)) return 0.0;
+    if (c->srq_enabled) {
+        /* RQS ON: the event is in the status byte, 193 A / 194 B, +16 busy */
+        if (ieee_spoll(addr, &st) == 0 && (st & ~16) == (tman ? 194 : 193)) c->overflow_count++;
+    } else {
+        for (i = 0; i < 4 && dc_query(addr, "ERR?") && dc_reply_num(&v) && v != 0.0; i++)
+            if ((int)v == (tman ? 712 : 711)) c->overflow_count++;
+    }
+    return c->overflow_count * (tman ? (is10 ? 87960.93022208 : 10995.11627776)
+                                     : (is10 ? 8796093022208.0 : 1099511627776.0));
+}
+
+/* One reading without waiting: 1 = new result in *value, 0 = none ready yet,
+   -1 = no reply. SEND is sent only after RDY 1: otherwise it waits for a
+   result, which never comes while a measurement is STOPped (p. 2-30/2-32). */
+int dc50xx_read(int slot, double *value) {
+    int addr = g_system->modules[slot].gpib_address;
+    double v;
+    if (!dc_query(addr, "RDY?") || !dc_reply_num(&v)) return -1;
+    if (v < 1.0) return 0;
+    if (!dc_query(addr, "SEND") || !dc_reply_num(&v)) return -1;
+    v += dc_overflow_ext(slot, dc_fn(slot));
+    dc_cfg(slot)->last_measurement = (float)v;
+    *value = v;
+    return 1;
+}
+
+/* Poll for a result until ms have passed or ESC */
+static int dc_wait(int slot, double *value, unsigned long ms) {
+    unsigned long t0 = BIOS_TICKS, lim = ms * 182UL / 10000UL + 1;
+    int r;
+    for (;;) {
+        r = dc50xx_read(slot, value);
+        if (r) return r;
+        if (BIOS_TICKS - t0 > lim || (kbhit() && getch() == 27)) return 0;
+        delay(50);
+    }
+}
+
+/* Take the counter's own function (FUNC?, p. 2-24/2-25): front-panel changes
+   in local, and the unit the readings carry */
+void dc50xx_sync_function(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    char h[8], a[8];
+    a[0] = '\0';
+    if (!dc_query(g_system->modules[slot].gpib_address, "FUNC?") ||
+        sscanf(dc_reply, " %7[A-Z] %7[^;]", h, a) < 1) return;
+    if (strcmp(c->function, h) || strcmp(c->channel, a)) c->overflow_count = 0;
+    sprintf(c->function, "%.7s", h);
+    sprintf(c->channel, "%.3s", a);
+}
+
+/* Single result for single_measurement. Phase 0 arms every counter first:
+   STOP, then RES (or GET with DT TRIG) makes one result and stops again
+   (DC5009 p. 2-46). Phase 1 waits for it, reads it and restarts free
+   running. TOT and TMAN are only read. */
+int dc50xx_single(int slot, int phase, double *value) {
+    int addr = g_system->modules[slot].gpib_address, f, single, r;
+    if (phase == 0) dc50xx_sync_function(slot);
+    f = dc_fn(slot);
+    single = !dc_running_total(f) && f != DC_PROB && f != DC_TEST;
+    if (phase == 0) {
+        if (single) {
+            dc_sendf(addr, "STOP");
+            if (dc_cfg(slot)->dt_mode == 1) dc_get(addr);
+            else dc_sendf(addr, "RES");
         }
-    } else if (strcmp(function, "RATIO") == 0 && (!channel || strlen(channel) == 0)) {
-        /* Default RATIO B/A */
-        strcpy(gpib_cmd_buffer, "RAT B/A");
-    } else {
-        /* Standard format */
-        sprintf(gpib_cmd_buffer, "%s %s", function, channel);
+        return 0;
     }
-    
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(100);
+    r = dc_wait(slot, value, dc_expect_ms(slot) * 2 + 3000UL);
+    if (single) dc_sendf(addr, "START");
+    return r;
 }
 
-void dc5009_set_coupling(int address, char channel, char *coupling) {
-    
-    sprintf(gpib_cmd_buffer, "COU CHA %c %s", channel, coupling);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
+/* Reading with its unit, 19 columns so monitor redraws line up */
+void dc50xx_format(char *b, int slot, double v) {
+    static const char * __far su[] = { "s ", "ms", "us", "ns" };
+    int u = dc_funcs[dc_fn(slot)].u, k = 0;
+    double a = fabs(v);
+    switch (u) {
+    case 0:
+        if (a >= 1e6)      sprintf(b, "%13.7f MHz  ", v / 1e6);
+        else if (a >= 1e3) sprintf(b, "%13.6f kHz  ", v / 1e3);
+        else               sprintf(b, "%13.4f Hz   ", v);
+        break;
+    case 1:
+        while (k < 3 && a != 0.0 && a < 1.0) { a *= 1e3; v *= 1e3; k++; }
+        sprintf(b, "%13.6f %s   ", v, su[k]);
+        break;
+    case 2:  sprintf(b, "%13.7g B/A  ", v); break;
+    case 3:  sprintf(b, "%13.0f cnt  ", v); break;
+    default: sprintf(b, "%13.0f code ", v); break;
+    }
 }
 
-void dc5009_set_impedance(int address, char channel, char *impedance) {
-    
-    sprintf(gpib_cmd_buffer, "TER CHA %c %s", channel, impedance);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
+int dc50xx_trace_unit(int slot) {
+    int u = dc_funcs[dc_fn(slot)].u;
+    return u == 0 ? UNIT_FREQUENCY : u == 1 ? UNIT_TIME : UNIT_COUNT;
 }
 
-void dc5009_set_attenuation(int address, char channel, char *attenuation) {
-    
-    sprintf(gpib_cmd_buffer, "ATT CHA %c %s", channel, attenuation);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
+/* Trigger levels: DC5009 AUTO (both), FPTR or LEV; DC5010 AUTO A, B or A&B
+   and LEV for the rest. AUTO takes up to 2.5 s (p. 2-19/2-20), during which
+   the counter holds off the bus. */
+static void dc_send_levels(int addr, dc5009_config *c, int is10) {
+    int ch, a0 = dc_lev_auto(c, 0), a1 = dc_lev_auto(c, 1);
+    if (!is10 && c->fptrig) {
+        dc_sendf(addr, "FPTR");
+        return;
+    }
+    if (is10 ? (a0 || a1) : a0) {
+        dc_sendf(addr, !is10 ? "AUTO" : a0 && a1 ? "AUTO A&B" : a0 ? "AUTO A" : "AUTO B");
+        delay(2600);
+        if (!is10) return;
+    }
+    for (ch = 0; ch < 2; ch++) {
+        if (dc_lev_auto(c, ch)) continue;
+        dc_sendf(addr, "CHA %c", 'A' + ch);
+        dc_sendf(addr, "LEV %.3f", ch ? c->level_b : c->level_a);
+    }
 }
 
-void dc5009_set_slope(int address, char channel, char *slope) {
-    
-    sprintf(gpib_cmd_buffer, "SLO CHA %c %s", channel, slope);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
+/* Send the slot's setup, then list what the counter rejected. RQS OFF first
+   so ERR? queues every event (p. 2-43/2-45). */
+static void dc_apply(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    int addr = g_system->modules[slot].gpib_address, is10 = dc_is5010(slot);
+    int f = dc_fn(slot), ch, n;
+    int rf = f == DC_RISE || f == DC_FALL;
+
+    printf("Applying settings...\n");
+    gpib_remote(addr);
+    dc_sendf(addr, "RQS OFF");
+    dc_show_errors(addr, 1);              /* older events: the list below is this Apply's */
+    for (ch = 0; ch < 2; ch++) {
+        /* RISE/FALL copy channel A's input settings to B (DC5010 p. 2-24, 2-33) */
+        if (ch == 1 && rf) break;
+        dc_sendf(addr, "CHA %c", 'A' + ch);
+        dc_sendf(addr, "ATT %d", dc_att(ch ? c->attenuation_b : c->attenuation_a));
+        dc_sendf(addr, "COU %s", ch ? c->coupling_b : c->coupling_a);
+        dc_sendf(addr, "SLO %s", ch ? c->slope_b : c->slope_a);
+        if (is10) dc_sendf(addr, "TER %s", ch ? c->impedance_b : c->impedance_a);
+        else dc_sendf(addr, "SOUR %s", (ch ? c->rear_b : c->rear_a) ? "REAR" : "FRONT");
+    }
+    n = dc_avg(c, is10);
+    if (n <= 0) dc_sendf(addr, n ? "AVE -1" : "AVE 1");
+    else dc_sendf(addr, "AVE 1.E+%d", n);
+    dc_sendf(addr, "PRE %s", dc_on(c->preset_enabled));
+    if (is10) dc_sendf(addr, "FIL %s", dc_on(c->filter_enabled));
+    /* RISE, FALL and PROB set their own levels by autotrigger */
+    if (!rf && f != DC_PROB) dc_send_levels(addr, c, is10);
+    dc_sendf(addr, dc_funcs[f].arg[0] ? "%s %s" : "%s", dc_funcs[f].hdr, dc_funcs[f].arg);
+    if (rf || f == DC_PROB) delay(2600);
+    /* NULL stores the current result; a function command resets it (DC5010 p. 2-28) */
+    if (is10) dc_sendf(addr, "NULL %s", dc_on(c->null_enabled));
+    dc_sendf(addr, "OVER %s", dc_on(c->overflow_enabled));
+    dc_sendf(addr, "OPC %s", dc_on(c->opc_enabled));
+    dc_sendf(addr, "USER %s", dc_on(c->user_enabled));
+    dc_sendf(addr, "DT %s", dc_dt[c->dt_mode]);
+    c->overflow_count = 0;
+    if (dc_show_errors(addr, 0) == 0) printf("Settings applied, no errors.\n");
+    if (c->srq_enabled) dc_sendf(addr, "RQS ON");
 }
 
-void dc5009_set_level(int address, char channel, float level) {
-    
-    sprintf(gpib_cmd_buffer, "LEV CHA %c %.3f", channel, level);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
+/* Take a SET? reply into the slot's config (p. 2-32/2-34). The DC5010 page
+   prints ':' between two fields, so both separators are accepted. */
+static void dc_parse_settings(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    char *t, h[8], a[8];
+    int ch = 0, first = 1, on;
+    double v;
 
-void dc5009_set_filter(int address, int enabled) {
-    gpib_write(address, enabled ? "FIL ON" : "FIL OFF");
-    GPIB_PACE(50);
-}
-
-void dc5009_set_gate_time(int address, float gate_time) {
-    
-    sprintf(gpib_cmd_buffer, "GATE %.3f", gate_time);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void dc5009_set_averaging(int address, int count) {
-    
-    sprintf(gpib_cmd_buffer, "AVG %d", count);
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void dc5009_auto_trigger(int address) {
-    gpib_write(address, "AUTO");
-    GPIB_PACE(100);
-}
-
-void dc5009_start_measurement(int address) {
-    gpib_write(address, "START");
-    GPIB_PACE(50);
-}
-
-void dc5009_stop_measurement(int address) {
-    gpib_write(address, "STOP");
-    GPIB_PACE(50);
-}
-
-double dc5009_read_measurement(int address) {
-    
-    double value = 0.0;
-    
-    gpib_write(address, "SEND");
-    GPIB_PACE(100);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%lf", &value) == 1 || sscanf(gpib_response_buffer, "%le", &value) == 1) {
-            return value;
+    for (t = dc_reply; *t; t++) if (*t == ':') *t = ';';
+    for (t = strtok(dc_reply, ";"); t; t = strtok(NULL, ";")) {
+        a[0] = '\0';
+        if (sscanf(t, " %7[A-Z] %7s", h, a) < 1) continue;
+        if (first) {                      /* <function>; comes first */
+            sprintf(c->function, "%.7s", h);
+            sprintf(c->channel, "%.3s", a);
+            first = 0;
+            continue;
         }
-    }
-    return 0.0;
-}
-
-int dc5009_check_overflow(int address) {
-    
-    
-    gpib_write(address, "OVER?");
-    GPIB_PACE(50);
-    
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        return (strcmp(gpib_response_buffer, "ON") == 0);
-    }
-    return 0;
-}
-
-void dc5009_clear_overflow(int address) {
-    gpib_write(address, "OVER OFF");
-    GPIB_PACE(50);
-}
-
-/* DC5009 Query Commands */
-void dc5009_query_function(int address, char *buffer, int size) {
-    buffer[0] = '\0';
-    gpib_write(address, "FUNC?");
-    GPIB_PACE(50);
-    gpib_read(address, buffer, size);
-}
-
-void dc5009_query_id(int address, char *buffer, int size) {
-    buffer[0] = '\0';
-    gpib_write(address, "ID?");
-    GPIB_PACE(50);
-    gpib_read(address, buffer, size);
-}
-
-int dc5009_query_error(int address) {
-    
-    gpib_write(address, "ERR?");
-    GPIB_PACE(50);
-    gpib_read(address, gpib_response_buffer, 80);
-    return atoi(gpib_response_buffer);
-}
-
-/* DC5009 preset, manual timing, SRQ, status */
-void dc5009_set_preset(int address, int enabled) {
-    gpib_write(address, enabled ? "PRE ON" : "PRE OFF");
-    GPIB_PACE(50);
-}
-
-void dc5009_manual_timing(int address) {
-    gpib_write(address, "TMAN");
-    GPIB_PACE(50);
-}
-
-void dc5009_set_srq(int address, int enabled) {
-    gpib_write(address, enabled ? "RQS ON" : "RQS OFF");
-    GPIB_PACE(50);
-}
-
-unsigned char dc5009_get_status_byte(int address) {
-    unsigned char status;
-    ieee_spoll(address, &status);
-    return status;
-}
-
-/* DC5009 Extended Range Measurement */
-double dc5009_read_extended_range(int address) {
-    
-    float display_value = 0.0;
-    int overflow_count = 0;
-    unsigned char status;
-    double total_result;
-    const double OVERFLOW_MULTIPLIER = 10995.1162778;
-    
-    gpib_write(address, "SEND");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        sscanf(gpib_response_buffer, "%f", &display_value);
-    }
-
-    ieee_spoll(address, &status);
-    if (status & 0x02) {  /* Overflow bit in status byte */
-        /* Counts at most one overflow; a true count needs tracking across reads */
-        overflow_count = 1;
-    }
-
-    /* Per programming guide: display + overflows * 2^40/1e8 */
-    total_result = (double)display_value + (overflow_count * OVERFLOW_MULTIPLIER);
-    
-    return total_result;
-}
-
-/* DC5010: DC5009 command set plus RISE/FALL, TOT A+B/A-B, burst */
-void dc5010_set_function(int address, char *function, char *channel) {
-
-
-    if (strcmp(function, "TIME") == 0 && channel && strlen(channel) == 2) {
-        /* TIME AB or TIME BA format */
-        sprintf(gpib_cmd_buffer, "TIME %s", channel);
-    } else if (strcmp(function, "EVENTS") == 0 && channel && strcmp(channel, "BA") == 0) {
-        /* EVENTS B DURING A */
-        strcpy(gpib_cmd_buffer, "EVE BA");
-    } else if (strcmp(function, "TOTALIZE") == 0 && channel) {
-        if (strcmp(channel, "A") == 0 || strcmp(channel, "B") == 0) {
-            sprintf(gpib_cmd_buffer, "TOT %s", channel);
-        } else if (strcmp(channel, "A+B") == 0) {
-            /* DC5010 specific: Sum totalize */
-            strcpy(gpib_cmd_buffer, "TOT A+B");
-        } else if (strcmp(channel, "A-B") == 0) {
-            /* DC5010 specific: Difference totalize */
-            strcpy(gpib_cmd_buffer, "TOT A-B");
-        } else {
-            /* Standard format for other totalize modes */
-            sprintf(gpib_cmd_buffer, "%s %s", function, channel);
+        on = strcmp(a, "ON") == 0;
+        v = atof(a);
+        if (!strcmp(h, "CHA")) ch = a[0] == 'B';
+        else if (!strcmp(h, "ATT")) strcpy(ch ? c->attenuation_b : c->attenuation_a, v == 5.0 ? "5" : "1");
+        else if (!strcmp(h, "COU")) sprintf(ch ? c->coupling_b : c->coupling_a, "%.2s", a);
+        else if (!strcmp(h, "SLO")) sprintf(ch ? c->slope_b : c->slope_a, "%.3s", a);
+        else if (!strncmp(h, "TER", 3)) sprintf(ch ? c->impedance_b : c->impedance_a, "%.2s", a);
+        else if (!strcmp(h, "SOUR")) {
+            if (ch) c->rear_b = a[0] == 'R'; else c->rear_a = a[0] == 'R';
+        } else if (!strncmp(h, "LEV", 3)) {
+            /* LEV 9999 means front-panel control (DC5009 p. 2-25) */
+            c->fptrig = v == 9999.0;
+            c->auto_trigger = 0;
+            c->b_level_swap = 0;
+            if (v != 9999.0) { if (ch) c->level_b = (float)v; else c->level_a = (float)v; }
         }
-    } else if (strcmp(function, "RATIO") == 0 && (!channel || strlen(channel) == 0)) {
-        /* Default RATIO B/A */
-        strcpy(gpib_cmd_buffer, "RAT B/A");
-    } else if (strcmp(function, "RISE") == 0) {
-        /* Rise time - DC5010 specific */
-        strcpy(gpib_cmd_buffer, "RISE A");
-    } else if (strcmp(function, "FALL") == 0) {
-        /* Fall time - DC5010 specific */
-        strcpy(gpib_cmd_buffer, "FALL A");
-    } else {
-        /* Standard format */
-        sprintf(gpib_cmd_buffer, "%s %s", function, channel);
+        else if (!strcmp(h, "AVE")) c->averaging = v <= 0.0 ? -1 : (int)floor(log10(v) + 0.5);
+        else if (!strcmp(h, "OPC")) c->opc_enabled = on;
+        else if (!strcmp(h, "OVER")) c->overflow_enabled = on;
+        else if (!strcmp(h, "PRE")) c->preset_enabled = on;
+        else if (!strcmp(h, "FIL")) c->filter_enabled = on;
+        else if (!strcmp(h, "NULL")) c->null_enabled = on;
+        else if (!strcmp(h, "USER")) c->user_enabled = on;
+        else if (!strcmp(h, "RQS")) c->srq_enabled = on;
+        else if (!strcmp(h, "DT")) c->dt_mode = a[0] == 'T' ? 1 : a[0] == 'G' ? 2 : 0;
     }
-    
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(100);
 }
 
-void dc5010_set_coupling(int address, char channel, char *coupling) {
-    dc5009_set_coupling(address, channel, coupling);
-}
+/* Communication test: queries only, after RQS OFF (unless the slot wants RQS
+   ON) so ERR? queues events. A step passes only if its reply parses and ERR?
+   then reads 0. */
+void dc50xx_test(int slot) {
+    int addr = g_system->modules[slot].gpib_address, pass = 0, step;
+    static const char * __far q[] = { "ID?", "FUNC?", "AVE?", "SET?" };
+    double v;
 
-void dc5010_set_impedance(int address, char channel, char *impedance) {
-    dc5009_set_impedance(address, channel, impedance);
-}
-
-void dc5010_set_attenuation(int address, char channel, char *attenuation) {
-    dc5009_set_attenuation(address, channel, attenuation);
-}
-
-void dc5010_set_slope(int address, char channel, char *slope) {
-    dc5009_set_slope(address, channel, slope);
-}
-
-void dc5010_set_level(int address, char channel, float level) {
-    dc5009_set_level(address, channel, level);
-}
-
-void dc5010_set_filter(int address, int enabled) {
-    dc5009_set_filter(address, enabled);
-}
-
-void dc5010_set_gate_time(int address, float gate_time) {
-    dc5009_set_gate_time(address, gate_time);
-}
-
-void dc5010_set_averaging(int address, int count) {
-    dc5009_set_averaging(address, count);
-}
-
-void dc5010_auto_trigger(int address) {
-    dc5009_auto_trigger(address);
-}
-
-void dc5010_start_measurement(int address) {
-    dc5009_start_measurement(address);
-}
-
-void dc5010_stop_measurement(int address) {
-    dc5009_stop_measurement(address);
-}
-
-double dc5010_read_measurement(int address) {
-    return dc5009_read_measurement(address);
-}
-
-int dc5010_check_overflow(int address) {
-    return dc5009_check_overflow(address);
-}
-
-void dc5010_clear_overflow(int address) {
-    dc5009_clear_overflow(address);
-}
-
-/* DC5010 specific functions */
-void dc5010_set_burst_mode(int address, int enabled) {
-
-    sprintf(gpib_cmd_buffer, "BURST %s", enabled ? "ON" : "OFF");
-    gpib_write(address, gpib_cmd_buffer);
-    GPIB_PACE(50);
-}
-
-void dc5010_measure_rise_time(int address) {
-    gpib_write(address, "RISE A");
-    GPIB_PACE(100);
-}
-
-void dc5010_measure_fall_time(int address) {
-    gpib_write(address, "FALL A");
-    GPIB_PACE(100);
-}
-
-/* DC5010 Query Commands */
-void dc5010_query_function(int address, char *buffer, int size) {
-    dc5009_query_function(address, buffer, size);
-}
-
-void dc5010_query_id(int address, char *buffer, int size) {
-    dc5009_query_id(address, buffer, size);
-}
-
-int dc5010_query_error(int address) {
-    return dc5009_query_error(address);
-}
-
-/* DC5010 preset, timing, totalize modes, SRQ, status */
-void dc5010_set_preset(int address, int enabled) {
-    dc5009_set_preset(address, enabled);
-}
-
-void dc5010_manual_timing(int address) {
-    dc5009_manual_timing(address);
-}
-
-void dc5010_totalize_sum(int address) {
-    gpib_write(address, "TOT A+B");
-    GPIB_PACE(100);
-}
-
-void dc5010_totalize_diff(int address) {
-    gpib_write(address, "TOT A-B");
-    GPIB_PACE(100);
-}
-
-void dc5010_propagation_delay(int address) {
-    gpib_write(address, "PROB A&B");
-    GPIB_PACE(100);
-}
-
-void dc5010_set_srq(int address, int enabled) {
-    dc5009_set_srq(address, enabled);
-}
-
-unsigned char dc5010_get_status_byte(int address) {
-    return dc5009_get_status_byte(address);
-}
-
-/* DC5010 Extended Range Measurement */
-double dc5010_read_extended_range(int address) {
-    return dc5009_read_extended_range(address);
-}
-
-void test_dc5009_comm(int address) {
-    
-    float value;
-    int test_count = 0;
-    int success_count = 0;
-    
-    printf("\n=== DC5009 Communication Test ===\n");
-    printf("Testing DC5009 Universal Counter at GPIB address %d\n\n", address);
-    
-    printf("1. Testing identification...\n");
-    gpib_write(address, "ID?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
-    } else {
-        printf("   ID query failed!\n");
+    printf("\n=== %s communication test, GPIB %d ===\n", dc_is5010(slot) ? "DC5010" : "DC5009", addr);
+    dc_sendf(addr, "RQS OFF");
+    if (dc_show_errors(addr, 0)) printf("  (events left from before the test)\n");
+    for (step = 0; step < 4; step++) {
+        int ok = dc_query(addr, q[step]);
+        printf("%d. %-6s %.60s\n", step + 1, q[step], ok ? dc_reply : "no reply");
+        if (step == 0 && strstr(dc_reply, "TEK/DC50") == NULL) ok = 0;
+        if (ok && dc_show_errors(addr, 0) == 0) pass++;
     }
-    test_count++;
-    
-    printf("2. Testing initialization...\n");
-    gpib_write(address, "INIT");
-    GPIB_PACE(500);
-    printf("   Initialization command sent\n");
-    success_count++;
-    test_count++;
-    
-    printf("3. Testing function setup...\n");
-    gpib_write(address, "FREQ A");
-    GPIB_PACE(100);
-    gpib_write(address, "FUNC?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
+    printf("5. Reading: ");
+    dc50xx_sync_function(slot);
+    if (dc_wait(slot, &v, dc_expect_ms(slot) + 3000UL) == 1) {
+        char b[32];
+        dc50xx_format(b, slot, v);
+        printf("%s\n", b);
+        pass++;
     } else {
-        printf("   Function query failed!\n");
+        printf("none (no signal, STOPped, or still counting)\n");
     }
-    test_count++;
-    
-    printf("4. Testing auto trigger...\n");
-    gpib_write(address, "AUTO");
-    GPIB_PACE(100);
-    printf("   Auto trigger enabled\n");
-    success_count++;
-    test_count++;
-    
-    printf("5. Testing measurement...\n");
-    gpib_write(address, "START");
-    GPIB_PACE(200);
-    gpib_write(address, "SEND");
-    GPIB_PACE(200);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%e", &value) == 1 || sscanf(gpib_response_buffer, "%f", &value) == 1) {
-            printf("   Measurement: %.6e Hz\n", value);
-            success_count++;
-        } else {
-            printf("   %s\n", gpib_response_buffer);
-        }
-    } else {
-        printf("   Measurement failed!\n");
-    }
-    test_count++;
-    
-    printf("\n=== Test Summary ===\n");
-    printf("Tests passed: %d/%d\n", success_count, test_count);
-    if (success_count == test_count) {
-        printf("DC5009 communication: EXCELLENT\n");
-    } else if (success_count >= test_count * 0.8) {
-        printf("DC5009 communication: GOOD\n");
-    } else if (success_count >= test_count * 0.5) {
-        printf("DC5009 communication: MARGINAL\n");
-    } else {
-        printf("DC5009 communication: POOR - Check connections!\n");
-    }
-    
+    printf("\nPassed %d of 5\n", pass);
+    if (dc_cfg(slot)->srq_enabled) dc_sendf(addr, "RQS ON");
     printf("\nPress any key to continue...");
     getch();
 }
 
-void test_dc5010_comm(int address) {
-    
-    float value;
-    int test_count = 0;
-    int success_count = 0;
-    
-    printf("\n=== DC5010 Communication Test ===\n");
-    printf("Testing DC5010 Universal Counter at GPIB address %d\n\n", address);
-    
-    printf("1. Testing identification...\n");
-    gpib_write(address, "ID?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
-    } else {
-        printf("   ID query failed!\n");
-    }
-    test_count++;
-    
-    printf("2. Testing initialization...\n");
-    gpib_write(address, "INIT");
-    GPIB_PACE(500);
-    printf("   Initialization command sent\n");
-    success_count++;
-    test_count++;
-    
-    printf("3. Testing function setup...\n");
-    gpib_write(address, "FREQ A");
-    GPIB_PACE(100);
-    gpib_write(address, "FUNC?");
-    GPIB_PACE(100);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        printf("   %s\n", gpib_response_buffer);
-        success_count++;
-    } else {
-        printf("   Function query failed!\n");
-    }
-    test_count++;
-    
-    printf("4. Testing high frequency capability...\n");
-    gpib_write(address, "GATE 0.1");  /* Shorter gate for high freq */
-    GPIB_PACE(50);
-    printf("   High frequency mode configured\n");
-    success_count++;
-    test_count++;
-    
-    printf("5. Testing rise time measurement (DC5010 specific)...\n");
-    gpib_write(address, "RISE A");
-    GPIB_PACE(100);
-    printf("   Rise time function configured\n");
-    success_count++;
-    test_count++;
-    
-    printf("6. Testing measurement...\n");
-    gpib_write(address, "FREQ A");  /* Back to frequency */
-    GPIB_PACE(100);
-    gpib_write(address, "START");
-    GPIB_PACE(200);
-    gpib_write(address, "SEND");
-    GPIB_PACE(200);
-    if (gpib_read(address, gpib_response_buffer, sizeof(gpib_response_buffer)) > 0) {
-        if (sscanf(gpib_response_buffer, "%e", &value) == 1 || sscanf(gpib_response_buffer, "%f", &value) == 1) {
-            printf("   Measurement: %.6e Hz\n", value);
-            success_count++;
-        } else {
-            printf("   %s\n", gpib_response_buffer);
-        }
-    } else {
-        printf("   Measurement failed!\n");
-    }
-    test_count++;
-    
-    printf("\n=== Test Summary ===\n");
-    printf("Tests passed: %d/%d\n", success_count, test_count);
-    if (success_count == test_count) {
-        printf("DC5010 communication: EXCELLENT\n");
-    } else if (success_count >= test_count * 0.8) {
-        printf("DC5010 communication: GOOD\n");
-    } else if (success_count >= test_count * 0.5) {
-        printf("DC5010 communication: MARGINAL\n");
-    } else {
-        printf("DC5010 communication: POOR - Check connections!\n");
-    }
-    
-    printf("\nPress any key to continue...");
-    getch();
+/* One keypress out of keys (upper case); -1 for any other key */
+static int dc_pick(const char *prompt, const char *keys) {
+    const char *p;
+    int k;
+    printf("%s", prompt);
+    k = toupper(getch());
+    printf("%c\n", k > ' ' ? k : ' ');
+    p = strchr(keys, k);
+    return p && k ? (int)(p - keys) : -1;
 }
 
-/* Counter configuration menus */
-void configure_dc5009_advanced(int slot) {
-    int choice, done = 0;
-    int address = g_system->modules[slot].gpib_address;
-    dc5009_config *cfg = &g_dc5009_config[slot];
-    char input[50];
-    float temp_float;
-    int temp_int;
-    
+static int dc_ask(const char *prompt, double *v) {
+    char line[24];
+    printf("%s", prompt);
+    return scanf(" %23s", line) == 1 && sscanf(line, "%lf", v) == 1;
+}
+
+/* Prompt for channel ch's trigger level within the model's LEV range */
+static void dc_ask_level(dc5009_config *c, int is10, int ch) {
+    double v;
+    int att = dc_att(ch ? c->attenuation_b : c->attenuation_a);
+    printf("Channel %c level, V (X%d: %s): ", 'A' + ch, att,
+           is10 ? (att == 5 ? "-10 to 10" : "-2 to 2") : (att == 5 ? "-15.875 to 16" : "-3.175 to 3.2"));
+    if (!dc_ask("", &v) || !dc_lev_ok(is10, att, v)) {
+        printf("Out of range, level not changed\n");
+        return;
+    }
+    if (ch) c->level_b = (float)v; else c->level_a = (float)v;
+}
+
+/* AUTO now, then each channel's MAX?, MIN? and the level it set (p. 2-19/2-20, 2-26/2-27) */
+static void dc_autotrig(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    int addr = g_system->modules[slot].gpib_address, ch, i;
+    static const char * __far q[] = { "MAX?", "MIN?", "LEV?" };
+
+    dc_sendf(addr, dc_is5010(slot) ? "AUTO A&B" : "AUTO");
+    printf("Auto trigger (up to 2.5 s)...\n");
+    delay(2600);
+    for (ch = 0; ch < 2; ch++) {
+        dc_sendf(addr, "CHA %c", 'A' + ch);
+        printf("Channel %c:", 'A' + ch);
+        for (i = 0; i < 3; i++) printf("  %s", dc_query(addr, q[i]) ? dc_reply : "-");
+        printf("\n");
+    }
+    c->auto_trigger = 1;
+    c->fptrig = 0;
+    c->b_level_swap = 0;
+    dc_show_errors(addr, 0);
+}
+
+/* Every query in the command list (p. 2-17/2-18, 2-18/2-19) */
+static void dc_show_settings(int slot) {
+    int addr = g_system->modules[slot].gpib_address, is10 = dc_is5010(slot), ch, i;
+    static const char * __far qa[] = { "ID?", "FUNC?", "AVE?", "CHA?", "PRE?", "OPC?", "OVER?",
+                                       "RQS?", "USER?", "DT?", "RDY?", "FIL?", "NULL?" };
+    static const char * __far qc[] = { "ATT?", "COU?", "SLO?", "LEV?", "MAX?", "MIN?", "TER?", "SOUR?" };
+
+    if (dc_query(addr, "SET?")) printf("SET?  %s\n\n", dc_reply);
+    for (i = 0; i < (is10 ? 13 : 11); i++)
+        printf("%-6s %-22.40s%s", qa[i], dc_query(addr, qa[i]) ? dc_reply : "-", i % 2 ? "\n" : "");
+    printf("\n");
+    for (ch = 0; ch < 2; ch++) {
+        dc_sendf(addr, "CHA %c", 'A' + ch);
+        printf("Channel %c:", 'A' + ch);
+        for (i = 0; i < 7; i++) {
+            const char *s = qc[i == 6 && !is10 ? 7 : i];
+            printf(" %s", dc_query(addr, s) ? dc_reply : "-");
+        }
+        printf("\n");
+    }
+    dc_show_errors(addr, 0);
+}
+
+/* ID, self test, error queue, INIT */
+static void dc_utilities(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    int addr = g_system->modules[slot].gpib_address, f, done = 0;
+    double v;
+
     while (!done) {
         clrscr();
-        printf("DC5009 Advanced Configuration - Slot %d\n", slot);
-        printf("=====================================\n\n");
-        
-        printf("Current Configuration:\n");
-        printf("  Function: %s %s\n", cfg->function, cfg->channel);
-        printf("  Gate Time: %.3f seconds\n", cfg->gate_time);
-        printf("  Averaging: %d\n", cfg->averaging);
-        printf("  Channel A: %s coupling, %s impedance, %s attenuation, %s slope\n",
-               cfg->coupling_a, cfg->impedance_a, cfg->attenuation_a, cfg->slope_a);
-        printf("  Channel B: %s coupling, %s impedance, %s attenuation, %s slope\n",
-               cfg->coupling_b, cfg->impedance_b, cfg->attenuation_b, cfg->slope_b);
-        printf("  Trigger Levels: A=%.3fV, B=%.3fV\n", cfg->level_a, cfg->level_b);
-        printf("  Filter: %s\n", cfg->filter_enabled ? "ON" : "OFF");
-        printf("  Auto Trigger: %s\n", cfg->auto_trigger ? "ON" : "OFF");
-        printf("  Overflow: %s\n", cfg->overflow_enabled ? "ON" : "OFF");
-        
-        printf("\nOptions:\n");
-        printf("1. Set Function and Channel\n");
-        printf("2. Configure Gate Time\n");
-        printf("3. Set Averaging\n");
-        printf("4. Configure Channel A\n");
-        printf("5. Configure Channel B\n");
-        printf("6. Set Trigger Levels\n");
-        printf("7. Filter Control\n");
-        printf("8. Auto Trigger\n");
-        printf("9. Overflow Control\n");
-        printf("A. Apply Settings to DC5009\n");
-        printf("B. Test Communication\n");
-        printf("C. Reset to Defaults\n");
-        printf("D. Advanced Features (Query, SRQ, Preset)\n");
-        printf("E. Extended Range Test\n");
-        printf("0. Exit\n\n");
-        
-        printf("Choice: ");
-        choice = toupper(getch());
-        
-        switch(choice) {
-            case '1':
-                printf("\n\nAvailable functions:\n");
-                printf("FREQ, PERIOD, WIDTH, RATIO, TIME, TOTALIZE, EVENTS\n");
-                printf("Special formats:\n");
-                printf("  TIME AB/BA - Time interval measurements\n");
-                printf("  EVENTS BA - Events B during A\n");
-                printf("Enter function: ");
-                scanf("%s", input);
-                strcpy(cfg->function, input);
-                printf("Enter channel (A, B, AB, BA): ");
-                scanf("%s", input);
-                strcpy(cfg->channel, input);
-                break;
-                
-            case '2':
-                printf("\n\nEnter gate time (0.001 to 100 seconds): ");
-                scanf("%f", &temp_float);
-                if (temp_float >= 0.001 && temp_float <= 100.0) {
-                    cfg->gate_time = temp_float;
-                }
-                break;
-                
-            case '3':
-                printf("\n\nEnter averaging (-1=auto, 1=none, >1=count): ");
-                scanf("%d", &temp_int);
-                cfg->averaging = temp_int;
-                break;
-                
-            case '4':
-                printf("\n\nChannel A Configuration:\n");
-                printf("Coupling (AC/DC): ");
-                scanf("%s", cfg->coupling_a);
-                printf("Impedance (HI/LO): ");
-                scanf("%s", cfg->impedance_a);
-                printf("Attenuation (X1/X10): ");
-                scanf("%s", cfg->attenuation_a);
-                printf("Slope (POS/NEG): ");
-                scanf("%s", cfg->slope_a);
-                break;
-                
-            case '5':
-                printf("\n\nChannel B Configuration:\n");
-                printf("Coupling (AC/DC): ");
-                scanf("%s", cfg->coupling_b);
-                printf("Impedance (HI/LO): ");
-                scanf("%s", cfg->impedance_b);
-                printf("Attenuation (X1/X10): ");
-                scanf("%s", cfg->attenuation_b);
-                printf("Slope (POS/NEG): ");
-                scanf("%s", cfg->slope_b);
-                break;
-                
-            case '6':
-                printf("\n\nTrigger Levels:\n");
-                printf("Channel A level (volts): ");
-                scanf("%f", &cfg->level_a);
-                printf("Channel B level (volts): ");
-                scanf("%f", &cfg->level_b);
-                break;
-                
-            case '7':
-                cfg->filter_enabled = !cfg->filter_enabled;
-                printf("\n\nFilter %s\n", cfg->filter_enabled ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case '8':
-                cfg->auto_trigger = !cfg->auto_trigger;
-                printf("\n\nAuto Trigger %s\n", cfg->auto_trigger ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case '9':
-                cfg->overflow_enabled = !cfg->overflow_enabled;
-                printf("\n\nOverflow Detection %s\n", cfg->overflow_enabled ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case 'A':
-                printf("\n\nApplying settings to DC5009...\n");
-                gpib_remote(address);
-                GPIB_PACE(200);
-                
-                dc5009_set_function(address, cfg->function, cfg->channel);
-                dc5009_set_gate_time(address, cfg->gate_time);
-                dc5009_set_averaging(address, cfg->averaging);
-                dc5009_set_coupling(address, 'A', cfg->coupling_a);
-                dc5009_set_coupling(address, 'B', cfg->coupling_b);
-                dc5009_set_impedance(address, 'A', cfg->impedance_a);
-                dc5009_set_impedance(address, 'B', cfg->impedance_b);
-                dc5009_set_attenuation(address, 'A', cfg->attenuation_a);
-                dc5009_set_attenuation(address, 'B', cfg->attenuation_b);
-                dc5009_set_slope(address, 'A', cfg->slope_a);
-                dc5009_set_slope(address, 'B', cfg->slope_b);
-                dc5009_set_level(address, 'A', cfg->level_a);
-                dc5009_set_level(address, 'B', cfg->level_b);
-                dc5009_set_filter(address, cfg->filter_enabled);
-                
-                if (cfg->auto_trigger) {
-                    dc5009_auto_trigger(address);
-                }
-                
-                printf("Settings applied!\n");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'B':
-                test_dc5009_comm(address);
-                break;
-                
-            case 'C':
-                init_dc5009_config(slot);
-                printf("\n\nConfiguration reset to defaults.\n");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'D':
-                printf("\n\nAdvanced Features:\n");
-                printf("1. Query current function\n");
-                printf("2. Query instrument ID\n");
-                printf("3. Query error status\n");
-                printf("4. Toggle preset function\n");
-                printf("5. Toggle SRQ\n");
-                printf("6. Manual timing control\n");
-                printf("Choice (1-6): ");
-                
-                choice = getch();
-                switch(choice) {
-                    case '1': {
-                        char func_buffer[80];
-                        dc5009_query_function(address, func_buffer, sizeof(func_buffer));
-                        printf("   %s\n", func_buffer);
-                        break;
-                    }
-                    case '2': {
-                        char id_buffer[80];
-                        dc5009_query_id(address, id_buffer, sizeof(id_buffer));
-                        printf("   %s\n", id_buffer);
-                        break;
-                    }
-                    case '3': {
-                        int error = dc5009_query_error(address);
-                        printf("\nError status: %d\n", error);
-                        break;
-                    }
-                    case '4':
-                        printf("\nToggling preset function...\n");
-                        dc5009_set_preset(address, 1);
-                        delay(1000);
-                        dc5009_set_preset(address, 0);
-                        break;
-                    case '5':
-                        printf("\nEnabling SRQ...\n");
-                        dc5009_set_srq(address, 1);
-                        break;
-                    case '6':
-                        printf("\nActivating manual timing...\n");
-                        dc5009_manual_timing(address);
-                        break;
-                }
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'E':
-                printf("\n\nTesting Extended Range Measurement:\n");
-                {
-                    double result = dc5009_read_extended_range(address);
-                    unsigned char status = dc5009_get_status_byte(address);
-                    printf("Extended range result: %.6f\n", result);
-                    printf("Status byte: 0x%02X\n", status);
-                }
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case '0':
-                done = 1;
-                break;
+        printf("%s Utilities - GPIB %d\n", dc_is5010(slot) ? "DC5010" : "DC5009", addr);
+        printf("==========================\n\n");
+        printf("1. Identify (ID?)\n");
+        printf("2. Self test (TEST): ROM, I/O and counter tests, 0 = pass\n");
+        printf("3. Read the error/event queue (ERR?)\n");
+        printf("4. INIT - power-on settings\n");
+        printf("5. Clear the overflow count (%ld)\n", c->overflow_count);
+        printf("0. Return\n\nSelect option: ");
+        switch (getch()) {
+        case '1':
+            printf("\n\n%s\n", dc_query(addr, "ID?") ? dc_reply : "No reply");
+            break;
+        case '2':
+            /* the result is output like a reading; a function command ends it (p. 2-34/2-37) */
+            printf("\n\nRunning self test...\n");
+            dc_sendf(addr, "TEST");
+            if (dc_wait(slot, &v, 15000UL) == 1)
+                printf(v == 0.0 ? "Self test passed\n" : "Self test FAILED: code %.0f (Table 2-4)\n", v);
+            else
+                printf("No result\n");
+            f = dc_fn(slot);
+            dc_sendf(addr, dc_funcs[f].arg[0] ? "%s %s" : "%s", dc_funcs[f].hdr, dc_funcs[f].arg);
+            dc_show_errors(addr, 0);
+            break;
+        case '3':
+            printf("\n\n");
+            if (dc_show_errors(addr, 0) == 0) printf("No errors or events\n");
+            break;
+        case '4':
+            printf("\n\nINIT sets the power-on state: %s\n",
+                   dc_is5010(slot) ? "FREQ A, AVE -1, X1, DC, 1 Mohm, AUTO levels (p. 2-26)"
+                                   : "function, averages, inputs from the front panel (p. 2-25)");
+            if (dc_pick("Reset the counter's setup (Y/N)? ", "Y") == 0) {
+                dc_sendf(addr, "INIT");
+                delay(2600);              /* includes an autotrigger, up to 2.5 s */
+                c->overflow_count = 0;
+                printf("Done. D in the setup menu re-applies TM5000's settings.\n");
+            }
+            break;
+        case '5':
+            c->overflow_count = 0;
+            printf("\n\nCleared\n");
+            break;
+        case '0':
+        case 27:
+            done = 1;
+            break;
+        }
+        if (!done) {
+            printf("\nPress any key...");
+            getch();
         }
     }
 }
 
-void configure_dc5010_advanced(int slot) {
-    int choice, done = 0;
-    int address = g_system->modules[slot].gpib_address;
-    dc5010_config *cfg = &g_dc5010_config[slot];
-    char input[50];
-    float temp_float;
-    int temp_int;
-    
-    while (!done) {
+static void dc50xx_menu(int slot) {
+    dc5009_config *c = dc_cfg(slot);
+    int addr = g_system->modules[slot].gpib_address, is10 = dc_is5010(slot);
+    const char *model = is10 ? "DC5010" : "DC5009";
+    int key, ch, f, i, k, wait;
+    double v;
+    char b[32];
+
+    for (;;) {
+        f = dc_fn(slot);
+        k = dc_avg(c, is10);
         clrscr();
-        printf("DC5010 Advanced Configuration - Slot %d\n", slot);
-        printf("=====================================\n\n");
-        
-        printf("Current Configuration:\n");
-        printf("  Function: %s %s\n", cfg->function, cfg->channel);
-        printf("  Gate Time: %.3f seconds\n", cfg->gate_time);
-        printf("  Averaging: %d\n", cfg->averaging);
-        printf("  Channel A: %s coupling, %s impedance, %s attenuation, %s slope\n",
-               cfg->coupling_a, cfg->impedance_a, cfg->attenuation_a, cfg->slope_a);
-        printf("  Channel B: %s coupling, %s impedance, %s attenuation, %s slope\n",
-               cfg->coupling_b, cfg->impedance_b, cfg->attenuation_b, cfg->slope_b);
-        printf("  Trigger Levels: A=%.3fV, B=%.3fV\n", cfg->level_a, cfg->level_b);
-        printf("  Filter: %s\n", cfg->filter_enabled ? "ON" : "OFF");
-        printf("  Auto Trigger: %s\n", cfg->auto_trigger ? "ON" : "OFF");
-        printf("  Overflow: %s\n", cfg->overflow_enabled ? "ON" : "OFF");
-        printf("  Rise/Fall Time: %s\n", cfg->rise_fall_enabled ? "ON" : "OFF");
-        printf("  Burst Mode: %s\n", cfg->burst_mode ? "ON" : "OFF");
-        
-        printf("\nOptions:\n");
-        printf("1. Set Function and Channel\n");
-        printf("2. Configure Gate Time\n");
-        printf("3. Set Averaging\n");
-        printf("4. Configure Channel A\n");
-        printf("5. Configure Channel B\n");
-        printf("6. Set Trigger Levels\n");
-        printf("7. Filter Control\n");
-        printf("8. Auto Trigger\n");
-        printf("9. Overflow Control\n");
-        printf("A. Rise/Fall Time Mode (DC5010 specific)\n");
-        printf("B. Burst Mode (DC5010 specific)\n");
-        printf("C. Apply Settings to DC5010\n");
-        printf("D. Test Communication\n");
-        printf("E. Reset to Defaults\n");
-        printf("F. Advanced Features (Query, SRQ, Preset)\n");
-        printf("G. DC5010 Specific Functions\n");
-        printf("H. Extended Range Test\n");
-        printf("0. Exit\n\n");
-        
-        printf("Choice: ");
-        choice = toupper(getch());
-        
-        switch(choice) {
-            case '1':
-                printf("\n\nAvailable functions:\n");
-                printf("FREQ, PERIOD, WIDTH, RATIO, TIME, TOTALIZE, EVENTS\n");
-                printf("RISE, FALL (DC5010 specific)\n");
-                printf("Special formats:\n");
-                printf("  TIME AB/BA - Time interval measurements\n");
-                printf("  EVENTS BA - Events B during A\n");
-                printf("  TOTALIZE A+B/A-B - DC5010 sum/difference totalize\n");
-                printf("Enter function: ");
-                scanf("%s", input);
-                strcpy(cfg->function, input);
-                printf("Enter channel (A, B, AB, BA, A+B, A-B): ");
-                scanf("%s", input);
-                strcpy(cfg->channel, input);
+        printf("%s Counter - Slot %d, GPIB %d\n", model, slot, addr);
+        printf("================================\n\n");
+        printf("1. Function:  %s (%s %s)\n", dc_funcs[f].name, dc_funcs[f].hdr, dc_funcs[f].arg);
+        if (k < 0) printf("2. Averages:  AUTO, about 0.3 s per result\n");
+        else printf("2. Averages:  1.E+%d (at least %.0f events on A)\n", k, pow(10.0, k));
+        for (ch = 0; ch < 2; ch++) {
+            printf("%d. Channel %c: X%d, %s, %s slope, ", 3 + ch, 'A' + ch,
+                   dc_att(ch ? c->attenuation_b : c->attenuation_a),
+                   ch ? c->coupling_b : c->coupling_a, ch ? c->slope_b : c->slope_a);
+            if (is10) printf("%s\n", (ch ? c->impedance_b : c->impedance_a)[0] == 'L' ? "50 ohm" : "1 Mohm");
+            else printf("%s input\n", (ch ? c->rear_b : c->rear_a) ? "rear interface" : "front");
+        }
+        printf("5. Trigger levels: ");
+        if (!is10 && c->fptrig) printf("front-panel knobs (FPTRIG)\n");
+        else if (!is10 && c->auto_trigger) printf("AUTO, both channels\n");
+        else {
+            for (ch = 0; ch < 2; ch++) {
+                if (dc_lev_auto(c, ch)) printf("%c AUTO   ", 'A' + ch);
+                else printf("%c %.3f V   ", 'A' + ch, ch ? c->level_b : c->level_a);
+            }
+            printf("\n");
+        }
+        printf("6. Prescaler /16: %s", dc_on(c->preset_enabled));
+        if (is10) printf("   7. 20 MHz filter: %s   8. Null: %s", dc_on(c->filter_enabled), dc_on(c->null_enabled));
+        printf("\n9. SRQ: RQS %s, OPC %s, OVER %s, USER %s   A. Device trigger: DT %s\n",
+               dc_on(c->srq_enabled), dc_on(c->opc_enabled), dc_on(c->overflow_enabled),
+               dc_on(c->user_enabled), dc_dt[c->dt_mode]);
+        if (c->overflow_enabled) printf("   Overflows counted: %ld\n", c->overflow_count);
+        printf("\nD. Apply settings to the %s   L. Load settings from it (SET?)\n", model);
+        printf("R. Read one result   S. START   T. STOP   E. RESET   G. Send GET\n");
+        printf("U. Auto trigger now, show MAX/MIN   Q. Show the counter's settings\n");
+        printf("P. Utilities (ID, self test, errors, INIT)   0. Return\n\nSelect option: ");
+        key = toupper(getch());
+        printf("\n\n");
+        wait = 1;
+        switch (key) {
+        case '1':
+            for (i = 0; i < DC_NFUNC; i++)
+                if (!(dc_funcs[i].m & 2) && (is10 || !(dc_funcs[i].m & 1)))
+                    printf("%c. %s\n", i < 10 ? '0' + i : 'A' + i - 10, dc_funcs[i].name);
+            i = dc_pick("Select: ", is10 ? "0123456789ABC" : "012345678");
+            if (i >= 0) {
+                sprintf(c->function, "%s", dc_funcs[i].hdr);
+                sprintf(c->channel, "%s", dc_funcs[i].arg);
+                c->overflow_count = 0;
+            }
+            wait = 0;
+            break;
+        case '2':
+            /* decades only; the counter rounds others and may refuse them (p. 2-20/2-21) */
+            if (!dc_ask(is10 ? "Averages: 0 = AUTO, or 1, 10, 100 ... 1E9: " : "Averages: 0 = AUTO, or 1, 10, 100 ... 1E8: ", &v))
                 break;
-                
-            case '2':
-                printf("\n\nEnter gate time (0.001 to 100 seconds): ");
-                scanf("%f", &temp_float);
-                if (temp_float >= 0.001 && temp_float <= 100.0) {
-                    cfg->gate_time = temp_float;
+            if (v <= 0.0) { c->averaging = -1; wait = 0; break; }
+            k = (int)floor(log10(v) + 0.5);
+            if (fabs(log10(v) - k) > 1e-6 || k < 0 || k > (is10 ? 9 : 8)) {
+                printf("Decades only, 1 to 1E%d\n", is10 ? 9 : 8);
+                break;
+            }
+            c->averaging = k;
+            wait = 0;
+            break;
+        case '3':
+        case '4':
+            ch = key - '3';
+            i = dc_pick("Attenuation (1 = X1, 5 = X5, other = keep): ", "15");
+            if (i >= 0) strcpy(ch ? c->attenuation_b : c->attenuation_a, i ? "5" : "1");
+            i = dc_pick("Coupling (A = AC, D = DC, other = keep): ", "AD");
+            if (i >= 0) strcpy(ch ? c->coupling_b : c->coupling_a, i ? "DC" : "AC");
+            i = dc_pick("Slope (P = POS, N = NEG, other = keep): ", "PN");
+            if (i >= 0) strcpy(ch ? c->slope_b : c->slope_a, i ? "NEG" : "POS");
+            if (is10) {
+                i = dc_pick("Termination (H = 1 Mohm, L = 50 ohm, other = keep): ", "HL");
+                if (i >= 0) strcpy(ch ? c->impedance_b : c->impedance_a, i ? "LO" : "HI");
+                /* 50 ohm protect switches back to HI above 2 V at X1 (DC5010 p. 2-36) */
+                if (i == 1) printf("50 ohm: over 2 V at X1 the counter switches to 1 Mohm (ERR %d)\n", 602 + ch);
+            } else {
+                i = dc_pick("Source (F = front BNC, R = rear interface, other = keep): ", "FR");
+                if (i >= 0) { if (ch) c->rear_b = i; else c->rear_a = i; }
+            }
+            if (!dc_lev_auto(c, ch) && !(!is10 && c->fptrig) &&
+                !dc_lev_ok(is10, dc_att(ch ? c->attenuation_b : c->attenuation_a), ch ? c->level_b : c->level_a))
+                printf("The trigger level is outside this attenuation's range: set it again (5)\n");
+            break;
+        case '5':
+            if (!is10) {
+                i = dc_pick("Levels (A = AUTO, F = front-panel knobs, M = manual): ", "AFM");
+                if (i < 0) break;
+                c->auto_trigger = i == 0;
+                c->fptrig = i == 1;
+                c->b_level_swap = 0;
+                if (i == 2) { dc_ask_level(c, is10, 0); dc_ask_level(c, is10, 1); }
+            } else {
+                int a[2];
+                for (ch = 0; ch < 2; ch++) {
+                    printf("Channel %c ", 'A' + ch);
+                    a[ch] = dc_pick("level (A = AUTO, M = manual, other = keep): ", "AM");
+                    if (a[ch] == 1) dc_ask_level(c, is10, ch);
+                    if (a[ch] < 0) a[ch] = !dc_lev_auto(c, ch);
                 }
-                break;
-                
-            case '3':
-                printf("\n\nEnter averaging (-1=auto, 1=none, >1=count): ");
-                scanf("%d", &temp_int);
-                cfg->averaging = temp_int;
-                break;
-                
-            case '4':
-                printf("\n\nChannel A Configuration:\n");
-                printf("Coupling (AC/DC): ");
-                scanf("%s", cfg->coupling_a);
-                printf("Impedance (HI/LO): ");
-                scanf("%s", cfg->impedance_a);
-                printf("Attenuation (X1/X10): ");
-                scanf("%s", cfg->attenuation_a);
-                printf("Slope (POS/NEG): ");
-                scanf("%s", cfg->slope_a);
-                break;
-                
-            case '5':
-                printf("\n\nChannel B Configuration:\n");
-                printf("Coupling (AC/DC): ");
-                scanf("%s", cfg->coupling_b);
-                printf("Impedance (HI/LO): ");
-                scanf("%s", cfg->impedance_b);
-                printf("Attenuation (X1/X10): ");
-                scanf("%s", cfg->attenuation_b);
-                printf("Slope (POS/NEG): ");
-                scanf("%s", cfg->slope_b);
-                break;
-                
-            case '6':
-                printf("\n\nTrigger Levels:\n");
-                printf("Channel A level (volts): ");
-                scanf("%f", &cfg->level_a);
-                printf("Channel B level (volts): ");
-                scanf("%f", &cfg->level_b);
-                break;
-                
-            case '7':
-                cfg->filter_enabled = !cfg->filter_enabled;
-                printf("\n\nFilter %s\n", cfg->filter_enabled ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case '8':
-                cfg->auto_trigger = !cfg->auto_trigger;
-                printf("\n\nAuto Trigger %s\n", cfg->auto_trigger ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case '9':
-                cfg->overflow_enabled = !cfg->overflow_enabled;
-                printf("\n\nOverflow Detection %s\n", cfg->overflow_enabled ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case 'A':
-                cfg->rise_fall_enabled = !cfg->rise_fall_enabled;
-                printf("\n\nRise/Fall Time Mode %s\n", cfg->rise_fall_enabled ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case 'B':
-                cfg->burst_mode = !cfg->burst_mode;
-                printf("\n\nBurst Mode %s\n", cfg->burst_mode ? "ENABLED" : "DISABLED");
-                getch();
-                break;
-                
-            case 'C':
-                printf("\n\nApplying settings to DC5010...\n");
-                gpib_remote(address);
-                GPIB_PACE(200);
-                
-                dc5010_set_function(address, cfg->function, cfg->channel);
-                dc5010_set_gate_time(address, cfg->gate_time);
-                dc5010_set_averaging(address, cfg->averaging);
-                dc5010_set_coupling(address, 'A', cfg->coupling_a);
-                dc5010_set_coupling(address, 'B', cfg->coupling_b);
-                dc5010_set_impedance(address, 'A', cfg->impedance_a);
-                dc5010_set_impedance(address, 'B', cfg->impedance_b);
-                dc5010_set_attenuation(address, 'A', cfg->attenuation_a);
-                dc5010_set_attenuation(address, 'B', cfg->attenuation_b);
-                dc5010_set_slope(address, 'A', cfg->slope_a);
-                dc5010_set_slope(address, 'B', cfg->slope_b);
-                dc5010_set_level(address, 'A', cfg->level_a);
-                dc5010_set_level(address, 'B', cfg->level_b);
-                dc5010_set_filter(address, cfg->filter_enabled);
-                dc5010_set_burst_mode(address, cfg->burst_mode);
-                
-                if (cfg->auto_trigger) {
-                    dc5010_auto_trigger(address);
-                }
-                
-                printf("Settings applied!\n");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'D':
-                test_dc5010_comm(address);
-                break;
-                
-            case 'E':
-                init_dc5010_config(slot);
-                printf("\n\nConfiguration reset to defaults.\n");
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'F':
-                printf("\n\nAdvanced Features:\n");
-                printf("1. Query current function\n");
-                printf("2. Query instrument ID\n");
-                printf("3. Query error status\n");
-                printf("4. Toggle preset function\n");
-                printf("5. Toggle SRQ\n");
-                printf("6. Manual timing control\n");
-                printf("Choice (1-6): ");
-                
-                choice = getch();
-                switch(choice) {
-                    case '1': {
-                        char func_buffer[80];
-                        dc5010_query_function(address, func_buffer, sizeof(func_buffer));
-                        printf("   %s\n", func_buffer);
-                        break;
-                    }
-                    case '2': {
-                        char id_buffer[80];
-                        dc5010_query_id(address, id_buffer, sizeof(id_buffer));
-                        printf("   %s\n", id_buffer);
-                        break;
-                    }
-                    case '3': {
-                        int error = dc5010_query_error(address);
-                        printf("\nError status: %d\n", error);
-                        break;
-                    }
-                    case '4':
-                        printf("\nToggling preset function...\n");
-                        dc5010_set_preset(address, 1);
-                        delay(1000);
-                        dc5010_set_preset(address, 0);
-                        break;
-                    case '5':
-                        printf("\nEnabling SRQ...\n");
-                        dc5010_set_srq(address, 1);
-                        break;
-                    case '6':
-                        printf("\nActivating manual timing...\n");
-                        dc5010_manual_timing(address);
-                        break;
-                }
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'G':
-                printf("\n\nDC5010 Specific Functions:\n");
-                printf("1. Totalize Sum (A+B)\n");
-                printf("2. Totalize Difference (A-B)\n");
-                printf("3. Propagation Delay\n");
-                printf("Choice (1-3): ");
-                
-                choice = getch();
-                switch(choice) {
-                    case '1':
-                        printf("\nActivating Totalize Sum (A+B)...\n");
-                        dc5010_totalize_sum(address);
-                        break;
-                    case '2':
-                        printf("\nActivating Totalize Difference (A-B)...\n");
-                        dc5010_totalize_diff(address);
-                        break;
-                    case '3':
-                        printf("\nActivating Propagation Delay measurement...\n");
-                        dc5010_propagation_delay(address);
-                        break;
-                }
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case 'H':
-                printf("\n\nTesting Extended Range Measurement:\n");
-                {
-                    double result = dc5010_read_extended_range(address);
-                    unsigned char status = dc5010_get_status_byte(address);
-                    printf("Extended range result: %.6f\n", result);
-                    printf("Status byte: 0x%02X\n", status);
-                }
-                printf("Press any key to continue...");
-                getch();
-                break;
-                
-            case '0':
-                done = 1;
-                break;
+                c->auto_trigger = a[0] == 0;
+                c->b_level_swap = (a[0] == 0) != (a[1] == 0);
+            }
+            wait = 0;
+            break;
+        case '6':
+            c->preset_enabled = !c->preset_enabled;
+            /* x16 for a divide-by-16 prescaler on A; without one ERR 604 (p. 2-28/2-30) */
+            if (c->preset_enabled) printf("Only with a /16 prescaler on channel A (else ERR 604)\n");
+            else wait = 0;
+            break;
+        case '7':
+            if (is10) c->filter_enabled = !c->filter_enabled;
+            wait = 0;
+            break;
+        case '8':
+            if (!is10) { wait = 0; break; }
+            c->null_enabled = !c->null_enabled;
+            if (c->null_enabled) printf("On Apply, NULL ON stores the result at that moment and subtracts it\n");
+            else wait = 0;
+            break;
+        case '9':
+            i = dc_pick("Toggle R = RQS, O = OPC, V = OVER, U = USER: ", "ROVU");
+            if (i == 0) c->srq_enabled = !c->srq_enabled;
+            if (i == 1) c->opc_enabled = !c->opc_enabled;
+            if (i == 2) c->overflow_enabled = !c->overflow_enabled;
+            if (i == 3) c->user_enabled = !c->user_enabled;
+            /* with RQS ON, ERR? only explains the last serial-polled event (p. 2-22/2-23) */
+            if (i == 0 && c->srq_enabled) printf("RQS ON: TM5000 then reads overflow events by serial poll\n");
+            else wait = 0;
+            break;
+        case 'A':
+            c->dt_mode = (c->dt_mode + 1) % 3;
+            wait = 0;
+            break;
+        case 'D':
+            dc_apply(slot);
+            break;
+        case 'L':
+            if (dc_query(addr, "SET?")) {
+                printf("%s\n", dc_reply);
+                dc_parse_settings(slot);
+                printf("\nLoaded. Levels read back as manual values.\n");
+            } else {
+                printf("No reply\n");
+            }
+            break;
+        case 'R':
+            dc50xx_single(slot, 0, &v);
+            i = dc50xx_single(slot, 1, &v);
+            if (i == 1) { dc50xx_format(b, slot, v); printf("Reading: %s\n", b); }
+            else printf(i ? "No reply\n" : "No result (no signal, or TOT/TMAN still counting)\n");
+            break;
+        case 'S':
+        case 'T':
+        case 'E':
+            dc_sendf(addr, key == 'S' ? "START" : key == 'T' ? "STOP" : "RES");
+            if (key == 'E') c->overflow_count = 0;
+            printf("Sent %s\n", key == 'S' ? "START" : key == 'T' ? "STOP" : "RES");
+            dc_show_errors(addr, 0);
+            break;
+        case 'G':
+            dc_get(addr);
+            printf("GET sent (DT %s)\n", dc_dt[c->dt_mode]);
+            dc_show_errors(addr, 0);
+            break;
+        case 'U':
+            dc_autotrig(slot);
+            break;
+        case 'Q':
+            dc_show_settings(slot);
+            break;
+        case 'P':
+            dc_utilities(slot);
+            wait = 0;
+            break;
+        case '0':
+        case 27:
+            return;
+        default:
+            wait = 0;
+        }
+        if (wait) {
+            printf("\nPress any key...");
+            getch();
         }
     }
 }
+
+void configure_dc5009_advanced(int slot) { dc50xx_menu(slot); }
+void configure_dc5010_advanced(int slot) { dc50xx_menu(slot); }
 
 /* ========================================================================== */
 /* FG5010 Function Generator                                                  */
@@ -2028,10 +1735,8 @@ void configure_modules(void) {
                             
                             switch (module_type) {
                                 case MOD_DC5009:
-                                    test_dc5009_comm(address);
-                                    break;
                                 case MOD_DC5010:
-                                    test_dc5010_comm(address);
+                                    dc50xx_test(slot);
                                     break;
                                 case MOD_DM5010:
                                     test_dm5010_comm(address);
@@ -2161,8 +1866,8 @@ void sync_traces_with_modules(void) {
                     switch (g_system->modules[i].module_type) {
                         case MOD_DC5009:
                         case MOD_DC5010:
-                            /* Counter measurements are frequencies */
-                            g_traces[i].unit_type = UNIT_FREQUENCY;
+                            /* Hz, s or a count, by the counter's function */
+                            g_traces[i].unit_type = dc50xx_trace_unit(i);
                             g_traces[i].x_scale = 1.0;  /* Sample-based for counters */
                             g_traces[i].x_offset = 0.0;
                             break;
@@ -4567,7 +4272,7 @@ void single_measurement(void) {
     
     printf("Synchronizing %d modules for simultaneous measurement...\n\n", active_count);
     
-    /* INIT counters and meters one by one before reading */
+    /* Arm counters and INIT meters one by one before reading */
     for (i = 0; i < active_count; i++) {
         int slot = active_modules[i];
         int addr = g_system->modules[slot].gpib_address;
@@ -4575,7 +4280,7 @@ void single_measurement(void) {
         switch (g_system->modules[slot].module_type) {
             case MOD_DC5009:
             case MOD_DC5010:
-                gpib_write(addr, "INIT");
+                dc50xx_single(slot, 0, &value);   /* arm every counter, then read */
                 break;
                 
             case MOD_DM5010:
@@ -4606,15 +4311,17 @@ void single_measurement(void) {
         switch (g_system->modules[slot].module_type) {
             case MOD_DC5009:
             case MOD_DC5010:
-                value = dc5009_read_measurement(g_system->modules[slot].gpib_address);
-                if (value > 1e6) {
-                    printf("%.3f MHz\n", value / 1e6);
-                } else if (value > 1e3) {
-                    printf("%.3f kHz\n", value / 1e3);
-                } else {
-                    printf("%.3f Hz\n", value);
+                {
+                    char cbuf[32];
+                    int r = dc50xx_single(slot, 1, &value);
+                    if (r == 1) {
+                        dc50xx_format(cbuf, slot, value);
+                        printf("%s\n", cbuf);
+                        g_system->modules[slot].last_reading = value;
+                    } else {
+                        printf(r ? "No reply\n" : "No result (no signal, or TOT/TMAN still counting)\n");
+                    }
                 }
-                g_system->modules[slot].last_reading = value;
                 break;
                 
             case MOD_DM5010:
@@ -4918,13 +4625,25 @@ void continuous_monitor(void) {
                 
                 t_mod = *((unsigned long far *)0x0040006CL);
                 if (g_control_panel.running && need_sample && should_monitor) {
+                    int no_reading = 0;          /* slot had no new result: keep the last point */
                     switch(g_system->modules[i].module_type) {
                         case MOD_DC5009:
                         case MOD_DC5010:
-                            value = dc5009_read_measurement(g_system->modules[i].gpib_address);
-                            if (fabs(value) >= 1e6)      lp("%13.7f MHz  ", value / 1e6);
-                            else if (fabs(value) >= 1e3) lp("%13.6f kHz  ", value / 1e3);
-                            else                         lp("%13.4f Hz   ", value);
+                            {
+                                char cbuf[32];
+                                int r;
+                                if (!mon_last[i][0]) dc50xx_sync_function(i);   /* unit of this run */
+                                r = dc50xx_read(i, &value);
+                                if (r == 1) {
+                                    dc50xx_format(cbuf, i, value);
+                                    lp("%s", cbuf);
+                                } else {
+                                    /* no new result yet, or no reply: store nothing */
+                                    no_reading = 1;
+                                    value = g_system->modules[i].last_reading;
+                                    lp("%s", r ? "[no reply]         " : mon_last[i][0] ? mon_last[i] : "[measuring]        ");
+                                }
+                            }
                             break;
                             
                         case MOD_DM5010:
@@ -5070,20 +4789,22 @@ void continuous_monitor(void) {
                     if (g_control_panel.auto_rate && auto_cal < AUTO_CAL_PASSES)
                         mod_ticks[i] += *((unsigned long far *)0x0040006CL) - t_mod;
                     
-                    g_system->modules[i].last_reading = value;
-                    /* Stamp with the measurement clock (run time), then store once */
-                    g_mclock = mclock_base + run_ticks + *((unsigned long far *)0x0040006CL) - run_mark;
-                    g_store_suppress = 0;
-                    g_mclock_valid = 1;
-                    store_module_data(i, value);
-                    g_mclock_valid = 0;
-                    g_store_suppress = 1;
-                    
-                    if (samples_taken == 0 && g_system->data_count < g_system->buffer_size) {
-                        g_system->data_buffer[g_system->data_count] = value;
+                    if (!no_reading) {
+                        g_system->modules[i].last_reading = value;
+                        /* Stamp with the measurement clock (run time), then store once */
+                        g_mclock = mclock_base + run_ticks + *((unsigned long far *)0x0040006CL) - run_mark;
+                        g_store_suppress = 0;
+                        g_mclock_valid = 1;
+                        store_module_data(i, value);
+                        g_mclock_valid = 0;
+                        g_store_suppress = 1;
+
+                        if (samples_taken == 0 && g_system->data_count < g_system->buffer_size) {
+                            g_system->data_buffer[g_system->data_count] = value;
+                        }
+
+                        samples_taken++;
                     }
-                    
-                    samples_taken++;
                     /* Remember this sample's text for the in-between redraws */
                     mon_buf[mon_len] = '\0';
                     strncpy(mon_last[i], mon_buf + mon_pfx, sizeof(mon_last[i]) - 1);
